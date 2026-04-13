@@ -23,11 +23,46 @@ See `CLAUDE.md` for the full protocol and orchestration rules.
 
 ## Install
 
+**One-liner (recommended):**
+
 ```bash
+uvx --from git+https://github.com/vzwjustin/advisor advisor pipeline src/
+```
+
+No clone, no venv, no editable install. [`uv`](https://docs.astral.sh/uv/) fetches the package, runs the `advisor` CLI, and cleans up. Install uv once with `brew install uv` or `curl -LsSf https://astral.sh/uv/install.sh | sh`.
+
+**pip / pipx:**
+
+```bash
+pipx install git+https://github.com/vzwjustin/advisor
+# or
+pip install git+https://github.com/vzwjustin/advisor
+```
+
+**Local dev:**
+
+```bash
+git clone https://github.com/vzwjustin/advisor && cd advisor
 pip install -e .
 ```
 
-Requires Python ≥ 3.10. The package name is `advisor-agent`; the import is `advisor`.
+Requires Python ≥ 3.10. Package name: `advisor-agent`. Import: `advisor`. CLI: `advisor`.
+
+## CLI
+
+Three subcommands — all print to stdout so you can paste into Claude Code:
+
+```bash
+advisor pipeline src/                  # full 4-step pipeline reference
+advisor plan src/                      # rank local files, print dispatch plan
+advisor prompt explore src/            # Step 1 prompt (Haiku explorer)
+advisor prompt rank src/  < inventory  # Step 2 prompt (Opus ranker)
+advisor prompt verify src/ < findings  # Step 4 prompt (Opus verifier)
+```
+
+Flags: `--team`, `--file-types`, `--max-runners`, `--min-priority`, `--context`.
+
+Typical vibe-coder flow: run `advisor pipeline <dir>`, paste it into Claude Code, let it drive the `TeamCreate` / `Agent` / `SendMessage` calls.
 
 ## Python API
 

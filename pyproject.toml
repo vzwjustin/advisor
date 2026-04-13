@@ -9,5 +9,8 @@ description = "Advisor tool pattern — native Claude Code implementation"
 requires-python = ">=3.10"
 dependencies = []
 
+[project.scripts]
+advisor = "advisor.__main__:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["advisor"]
