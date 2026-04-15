@@ -111,7 +111,16 @@ def build_rank_prompt(file_inventory: str, config: TeamConfig) -> str:
         "3. For each dispatched file, one sentence of guidance for the runner: "
         "what to look for specifically\n\n"
         "Be decisive. No hedging.\n\n"
-        "When done, send your complete output to the team lead via "
+        "## While runners work — stay active, do not go idle\n"
+        "After sending the dispatch plan to team-lead, **remain responsive**. "
+        "Runners will SendMessage you mid-flight with a draft finding list. "
+        "Reply within ~2 sentences, using exactly one of:\n"
+        "- **CONFIRM** — proceed to the final report as-is\n"
+        "- **NARROW** — drop specific noisy/low-confidence findings, keep the rest\n"
+        "- **REDIRECT** — one-line steer (e.g., \"focus on the auth path only\")\n"
+        "You may also proactively `SendMessage(to='runner-N', ...)` if you notice a "
+        "runner drifting off-scope. Do not exit until the verification phase.\n\n"
+        "When done with the dispatch plan, send it to the team lead via "
         "SendMessage(to='team-lead')."
     )
 
@@ -135,7 +144,7 @@ def build_rank_agent(
 
 
 def build_runner_prompt(task: FocusTask, advisor_guidance: str = "") -> str:
-    """Sonnet runner prompt — focused on one file."""
+    """Sonnet runner prompt — focused on one file, with mid-flight checkpoint."""
     guidance = (
         f"\n\n## Advisor Guidance\n{advisor_guidance}"
         if advisor_guidance else ""
@@ -147,13 +156,18 @@ def build_runner_prompt(task: FocusTask, advisor_guidance: str = "") -> str:
         f"1. Read the entire file\n"
         f"2. Hypothesize potential issues (bugs, security, logic errors, edge cases)\n"
         f"3. Trace call paths and data flow to confirm or reject each hypothesis\n"
-        f"4. For each confirmed issue, report:\n"
+        f"4. **Checkpoint with the advisor** before writing your final report.\n"
+        f"   Send a short draft via `SendMessage(to='advisor')` listing each\n"
+        f"   candidate finding as `file:line — confidence (HIGH|MED|LOW) — one-line reason`.\n"
+        f"   Wait for the advisor's reply (CONFIRM / NARROW / REDIRECT) and\n"
+        f"   incorporate it before finalizing.\n"
+        f"5. For each confirmed issue, report:\n"
         f"   - **File**: path:line_number\n"
         f"   - **Severity**: CRITICAL / HIGH / MEDIUM / LOW\n"
         f"   - **Description**: what the issue is\n"
         f"   - **Evidence**: the code path or proof\n"
         f"   - **Fix**: suggested remediation\n"
-        f"5. If no issues found, state that explicitly\n\n"
+        f"6. If no issues found, state that explicitly\n\n"
         f"Do NOT review other files. Stay focused on this one.\n\n"
         f"When done, send your complete output to the team lead via "
         f"SendMessage(to='team-lead')."
@@ -258,10 +272,14 @@ Agent(name="explorer", model="sonnet", subagent_type="Explore", team_name="{conf
 Agent(name="advisor", model="opus", subagent_type="deep-reasoning", team_name="{config.team_name}")
 → Advisor outputs priority ranking + dispatch plan with per-file guidance
 
-### Step 3: Analyze (Sonnet × N — parallel, background)
+### Step 3: Analyze (Sonnet × N — parallel, background, with mid-flight checkpoints)
 Agent(name="runner-1", model="sonnet", subagent_type="code-review", team_name="{config.team_name}", run_in_background=true)
 Agent(name="runner-2", ...)
 ...up to {config.max_runners} runners for files P{config.min_priority}+
+
+Each runner sends a draft to the advisor via SendMessage(to="advisor") before
+finalizing. Advisor replies CONFIRM / NARROW / REDIRECT. Advisor stays active
+throughout Step 3 and may proactively SendMessage runners that drift off-scope.
 
 ### Step 4: Verify (Opus — reuse advisor via SendMessage)
 SendMessage(to="advisor", message=<all runner findings>)

@@ -16,7 +16,7 @@ Native Claude Code implementation of the Glasswing analysis team. Coordinates Op
 
 1. **Explore** — Sonnet globs the target dir and produces a `path — summary` inventory.
 2. **Rank** — Opus scores each file P1–P5 and emits a dispatch plan with per-file guidance.
-3. **Analyze** — Sonnet runners dispatch in parallel (`run_in_background=true`), one file each.
+3. **Analyze** — Sonnet runners dispatch in parallel (`run_in_background=true`), one file each. Before finalizing, each runner sends a draft to Opus via `SendMessage(to="advisor")`; Opus replies CONFIRM / NARROW / REDIRECT. The advisor stays active throughout Step 3 and can proactively redirect runners that drift off-scope.
 4. **Verify** — Opus is resumed via `SendMessage` and confirms/rejects each finding, then returns the top actions.
 
 Priority scale: **P5** auth/secrets · **P4** user input/parsing · **P3** handlers/DB/exec · **P2** config/crypto/logging · **P1** utils/tests.

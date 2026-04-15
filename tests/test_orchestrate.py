@@ -77,6 +77,16 @@ class TestBuildRankAgent:
 
         assert "security audit" in spec["prompt"]
 
+    def test_has_midflight_monitor_section(self):
+        config = default_team_config("/src")
+        spec = build_rank_agent("files...", config)
+
+        assert "While runners work" in spec["prompt"]
+        assert "do not go idle" in spec["prompt"].lower()
+        assert "CONFIRM" in spec["prompt"]
+        assert "NARROW" in spec["prompt"]
+        assert "REDIRECT" in spec["prompt"]
+
 
 class TestBuildRunnerAgents:
     def test_creates_one_per_task(self):
@@ -127,6 +137,16 @@ class TestBuildRunnerPrompt:
         prompt = build_runner_prompt(task, "Look for JWT issues")
 
         assert "JWT issues" in prompt
+
+    def test_has_midflight_advisor_checkpoint(self):
+        task = FocusTask("src/auth.py", 5, "review")
+        prompt = build_runner_prompt(task)
+
+        assert "SendMessage(to='advisor')" in prompt
+        assert "Checkpoint with the advisor" in prompt
+        assert "CONFIRM" in prompt
+        assert "NARROW" in prompt
+        assert "REDIRECT" in prompt
 
 
 class TestBuildVerifyMessage:

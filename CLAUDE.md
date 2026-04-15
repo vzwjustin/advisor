@@ -51,10 +51,20 @@ Agent(
 )
 ```
 
-### Step 3: Analyze (Sonnet — parallel)
+### Step 3: Analyze (Sonnet — parallel, with mid-flight Opus review)
 
 Dispatch all runners in a **single message** so they run in parallel.
 Each runner gets one file + the advisor's guidance for that file.
+
+Mid-flight checkpoint loop:
+- Each runner, before writing its final report, sends a draft finding list
+  (file:line + confidence) to the advisor via `SendMessage(to="advisor")`.
+- The advisor replies within two sentences: **CONFIRM** / **NARROW** /
+  **REDIRECT**. The runner incorporates the reply and then writes its
+  final report.
+- The advisor stays active throughout Step 3 — it does **not** go idle
+  after Step 2 — so it can review each runner's work as it lands and
+  course-correct runners that drift off-scope.
 
 ```
 Agent(
