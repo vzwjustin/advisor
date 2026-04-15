@@ -7,8 +7,12 @@ testability; the CLI wrapper handles filesystem IO.
 
 from __future__ import annotations
 
+import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+OPT_OUT_ENV = "ADVISOR_NO_NUDGE"
 
 START_MARKER = "<!-- advisor:nudge:start -->"
 END_MARKER = "<!-- advisor:nudge:end -->"
@@ -80,6 +84,45 @@ def install(path: Path | None = None, body: str = NUDGE_BODY) -> InstallResult:
     if action != "unchanged":
         target.write_text(new_contents)
     return InstallResult(path=target, action=action)
+
+
+def should_auto_nudge(env: dict[str, str] | None = None) -> bool:
+    """Return False if opt-out env var is set, else True."""
+    source = env if env is not None else os.environ
+    value = source.get(OPT_OUT_ENV, "").strip().lower()
+    return value not in {"1", "true", "yes", "on"}
+
+
+def ensure_nudge(
+    path: Path | None = None,
+    env: dict[str, str] | None = None,
+    stream=None,
+) -> InstallResult:
+    """First-run hook: silently install the nudge if absent.
+
+    - Skips entirely if `ADVISOR_NO_NUDGE` is set.
+    - Skips if the sentinel block is already present (returns "unchanged").
+    - On a fresh install, prints a single-line notice to `stream` (default stderr).
+    - Swallows filesystem errors so CLI commands never fail because of the nudge.
+    """
+    target = path or default_claude_md()
+    if not should_auto_nudge(env):
+        return InstallResult(path=target, action="unchanged")
+    try:
+        current = target.read_text() if target.exists() else ""
+        if START_MARKER in current and END_MARKER in current:
+            return InstallResult(path=target, action="unchanged")
+        result = install(path=target)
+        if result.action == "installed":
+            out = stream if stream is not None else sys.stderr
+            print(
+                f"advisor: added nudge to {result.path} (opt out: {OPT_OUT_ENV}=1, "
+                "remove with `advisor uninstall`)",
+                file=out,
+            )
+        return result
+    except OSError:
+        return InstallResult(path=target, action="unchanged")
 
 
 def uninstall(path: Path | None = None) -> InstallResult:

@@ -1,14 +1,18 @@
 """Tests for advisor.install — nudge append/remove helpers."""
 
+import io
 from pathlib import Path
 
 from advisor.install import (
     END_MARKER,
+    OPT_OUT_ENV,
     START_MARKER,
     apply_nudge,
+    ensure_nudge,
     install,
     remove_nudge,
     render_block,
+    should_auto_nudge,
     uninstall,
 )
 
@@ -113,4 +117,53 @@ class TestInstallIO:
         target = tmp_path / "missing.md"
         result = uninstall(path=target)
         assert result.action == "absent"
+        assert not target.exists()
+
+
+class TestShouldAutoNudge:
+    def test_default_is_true(self):
+        assert should_auto_nudge({}) is True
+
+    def test_opt_out_truthy_values(self):
+        for val in ("1", "true", "yes", "on", "TRUE", "Yes"):
+            assert should_auto_nudge({OPT_OUT_ENV: val}) is False, val
+
+    def test_opt_out_falsy_values_still_nudge(self):
+        for val in ("", "0", "false", "no"):
+            assert should_auto_nudge({OPT_OUT_ENV: val}) is True, val
+
+
+class TestEnsureNudge:
+    def test_installs_on_fresh_file(self, tmp_path: Path):
+        target = tmp_path / "CLAUDE.md"
+        stream = io.StringIO()
+        result = ensure_nudge(path=target, env={}, stream=stream)
+        assert result.action == "installed"
+        assert START_MARKER in target.read_text()
+        assert "advisor: added nudge" in stream.getvalue()
+
+    def test_unchanged_when_already_installed(self, tmp_path: Path):
+        target = tmp_path / "CLAUDE.md"
+        install(path=target)
+        stream = io.StringIO()
+        result = ensure_nudge(path=target, env={}, stream=stream)
+        assert result.action == "unchanged"
+        assert stream.getvalue() == ""
+
+    def test_opt_out_skips(self, tmp_path: Path):
+        target = tmp_path / "CLAUDE.md"
+        stream = io.StringIO()
+        result = ensure_nudge(
+            path=target, env={OPT_OUT_ENV: "1"}, stream=stream
+        )
+        assert result.action == "unchanged"
+        assert not target.exists()
+        assert stream.getvalue() == ""
+
+    def test_survives_unwritable_parent(self, tmp_path: Path):
+        # Make a file where a directory would need to be, so mkdir raises.
+        (tmp_path / "blocker").write_text("not a dir")
+        target = tmp_path / "blocker" / "nested" / "CLAUDE.md"
+        result = ensure_nudge(path=target, env={}, stream=io.StringIO())
+        assert result.action == "unchanged"
         assert not target.exists()

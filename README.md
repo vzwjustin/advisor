@@ -48,18 +48,24 @@ pip install -e .
 
 Requires Python ≥ 3.10. Package name: `advisor-agent`. Import: `advisor`. CLI: `advisor`.
 
-### Nudge Claude Code to use advisor (optional)
+### Nudge Claude Code to use advisor (automatic)
 
-Append a sentinel-wrapped block to `~/.claude/CLAUDE.md` so Claude Code reaches for the advisor tool on complex tasks:
+The first time you run **any** `advisor` CLI command, a sentinel-wrapped nudge block is appended to `~/.claude/CLAUDE.md` so Claude Code reaches for the advisor tool on complex tasks. The block is idempotent — reruns never duplicate it, and subsequent runs are silent.
 
 ```bash
-uvx --from git+https://github.com/vzwjustin/advisor advisor install
-# or after pipx install:
-advisor install      # idempotent — safe to run repeatedly
-advisor uninstall    # cleanly removes the block
+# first run installs the nudge, then executes the pipeline command
+uvx --from git+https://github.com/vzwjustin/advisor advisor pipeline src/
 ```
 
-Override the target file with `--path /some/other/CLAUDE.md`. The block is wrapped in `<!-- advisor:nudge:start -->` / `<!-- advisor:nudge:end -->` markers, so reinstalling updates in place instead of duplicating.
+Opt out by setting `ADVISOR_NO_NUDGE=1` in your shell, or manage the block manually:
+
+```bash
+advisor install              # append / update the block (no-op if current)
+advisor uninstall            # cleanly remove the block
+advisor install --path /x    # target a different CLAUDE.md
+```
+
+The block is wrapped in `<!-- advisor:nudge:start -->` / `<!-- advisor:nudge:end -->` markers so reinstalls update in place.
 
 ## CLI
 

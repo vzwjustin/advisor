@@ -20,9 +20,11 @@ from .verify import (
 from .install import (
     InstallResult,
     apply_nudge,
+    ensure_nudge,
     install,
     remove_nudge,
     render_block,
+    should_auto_nudge,
     uninstall,
 )
 from .orchestrate import (
@@ -64,4 +66,6 @@ __all__ = [
     "render_block",
     "install",
     "uninstall",
+    "ensure_nudge",
+    "should_auto_nudge",
 ]
