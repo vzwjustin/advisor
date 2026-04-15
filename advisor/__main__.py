@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 from .focus import create_focus_tasks, format_dispatch_plan
+from .install import install as install_nudge, uninstall as uninstall_nudge
 from .orchestrate import (
     TeamConfig,
     build_explore_prompt,
@@ -91,6 +92,22 @@ def cmd_prompt(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_install(args: argparse.Namespace) -> int:
+    """Append a sentinel-wrapped advisor nudge to ~/.claude/CLAUDE.md."""
+    target = Path(args.path) if args.path else None
+    result = install_nudge(path=target)
+    print(f"{result.action}: {result.path}")
+    return 0
+
+
+def cmd_uninstall(args: argparse.Namespace) -> int:
+    """Remove the advisor nudge block from CLAUDE.md."""
+    target = Path(args.path) if args.path else None
+    result = uninstall_nudge(path=target)
+    print(f"{result.action}: {result.path}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="advisor",
@@ -110,6 +127,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_prompt.add_argument("step", choices=["explore", "rank", "verify"])
     _add_common(p_prompt)
     p_prompt.set_defaults(func=cmd_prompt)
+
+    p_install = sub.add_parser(
+        "install",
+        help="Append an advisor nudge block to ~/.claude/CLAUDE.md (idempotent)",
+    )
+    p_install.add_argument("--path", default="", help="Override target CLAUDE.md path")
+    p_install.set_defaults(func=cmd_install)
+
+    p_uninstall = sub.add_parser(
+        "uninstall",
+        help="Remove the advisor nudge block from CLAUDE.md",
+    )
+    p_uninstall.add_argument("--path", default="", help="Override target CLAUDE.md path")
+    p_uninstall.set_defaults(func=cmd_uninstall)
 
     return parser
 

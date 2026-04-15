@@ -17,6 +17,14 @@ from .verify import (
     build_verify_prompt,
     parse_findings_from_text,
 )
+from .install import (
+    InstallResult,
+    apply_nudge,
+    install,
+    remove_nudge,
+    render_block,
+    uninstall,
+)
 from .orchestrate import (
     TeamConfig,
     default_team_config,
@@ -49,4 +57,11 @@ __all__ = [
     "build_runner_agents",
     "build_verify_message",
     "render_pipeline",
+    # install
+    "InstallResult",
+    "apply_nudge",
+    "remove_nudge",
+    "render_block",
+    "install",
+    "uninstall",
 ]

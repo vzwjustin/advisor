@@ -48,6 +48,19 @@ pip install -e .
 
 Requires Python ≥ 3.10. Package name: `advisor-agent`. Import: `advisor`. CLI: `advisor`.
 
+### Nudge Claude Code to use advisor (optional)
+
+Append a sentinel-wrapped block to `~/.claude/CLAUDE.md` so Claude Code reaches for the advisor tool on complex tasks:
+
+```bash
+uvx --from git+https://github.com/vzwjustin/advisor advisor install
+# or after pipx install:
+advisor install      # idempotent — safe to run repeatedly
+advisor uninstall    # cleanly removes the block
+```
+
+Override the target file with `--path /some/other/CLAUDE.md`. The block is wrapped in `<!-- advisor:nudge:start -->` / `<!-- advisor:nudge:end -->` markers, so reinstalling updates in place instead of duplicating.
+
 ## CLI
 
 Three subcommands — all print to stdout so you can paste into Claude Code:
@@ -58,6 +71,8 @@ advisor plan src/                      # rank local files, print dispatch plan
 advisor prompt explore src/            # Step 1 prompt (Haiku explorer)
 advisor prompt rank src/  < inventory  # Step 2 prompt (Opus ranker)
 advisor prompt verify src/ < findings  # Step 4 prompt (Opus verifier)
+advisor install                        # append nudge to ~/.claude/CLAUDE.md
+advisor uninstall                      # remove the nudge block
 ```
 
 Flags: `--team`, `--file-types`, `--max-runners`, `--min-priority`, `--context`.
@@ -102,6 +117,7 @@ The builder functions return plain dicts — drop each one into a Claude Code `A
 - `advisor/focus.py` — `create_focus_tasks`, `FocusTask`, dispatch plan formatting
 - `advisor/verify.py` — `Finding`, `VerifiedResult`, `parse_findings_from_text`
 - `advisor/orchestrate.py` — team config and prompt/agent-spec builders for all four steps
+- `advisor/install.py` — idempotent CLAUDE.md nudge install/uninstall
 
 ## Orchestration rules
 
