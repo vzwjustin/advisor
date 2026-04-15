@@ -1,18 +1,20 @@
 # advisor
 
-Native Claude Code implementation of the Glasswing three-model analysis team. Coordinates Haiku, Opus, and Sonnet agents through Claude Code's `TeamCreate` / `Agent` / `SendMessage` tools — no external API calls.
+Native Claude Code implementation of the Glasswing analysis team. Coordinates Opus and Sonnet agents through Claude Code's `TeamCreate` / `Agent` / `SendMessage` tools — no external API calls.
 
 ## Team
 
 | Role     | Model  | Agent type       | Job |
 |----------|--------|------------------|-----|
-| Explorer | Haiku  | `Explore`        | Fast file inventory (no analysis) |
+| Explorer | Sonnet | `Explore`        | Fast file inventory (no analysis) |
 | Advisor  | Opus   | `deep-reasoning` | Rank files, plan dispatch, verify findings |
 | Runner   | Sonnet | `code-review`    | Focused single-file analysis, one agent per file, in parallel |
 
+> Haiku was dropped from the original three-model design after empirical testing: Claude Code's built-in `Explore` subagent never honored the `model="haiku"` override. Sonnet now handles exploration and per-file analysis; Opus still ranks and verifies.
+
 ## Pipeline
 
-1. **Explore** — Haiku globs the target dir and produces a `path — summary` inventory.
+1. **Explore** — Sonnet globs the target dir and produces a `path — summary` inventory.
 2. **Rank** — Opus scores each file P1–P5 and emits a dispatch plan with per-file guidance.
 3. **Analyze** — Sonnet runners dispatch in parallel (`run_in_background=true`), one file each.
 4. **Verify** — Opus is resumed via `SendMessage` and confirms/rejects each finding, then returns the top actions.
@@ -128,7 +130,7 @@ The builder functions return plain dicts — drop each one into a Claude Code `A
 ## Orchestration rules
 
 - `TeamCreate` before any agent spawn; `TeamDelete` before creating a new team.
-- Model discipline: Haiku explores, Opus decides, Sonnet executes — no crossover.
+- Model discipline: Opus decides (rank + verify), Sonnet explores and executes — no crossover.
 - Dispatch runners in a **single message** with `run_in_background=true` so they run in parallel.
 - Step 4 **reuses** the advisor via `SendMessage(to="advisor")` — do not spawn a second Opus agent.
 - Every agent prompt must end with `SendMessage(to='team-lead')`, otherwise agents go idle silently.

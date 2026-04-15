@@ -49,7 +49,7 @@ class TestBuildExploreAgent:
         spec = build_explore_agent(config)
 
         assert spec["name"] == "explorer"
-        assert spec["model"] == "haiku"
+        assert spec["model"] == "sonnet"
         assert spec["subagent_type"] == "Explore"
         assert spec["team_name"] == "glasswing"
         assert "/src" in spec["prompt"]
@@ -155,6 +155,6 @@ class TestRenderPipeline:
         assert "Step 3" in output
         assert "Step 4" in output
         assert "glasswing" in output
-        assert "haiku" in output
         assert "opus" in output
         assert "sonnet" in output
+        assert "haiku" not in output

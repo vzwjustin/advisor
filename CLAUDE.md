@@ -6,9 +6,13 @@ Three-model team using Claude Code's TeamCreate/Agent/SendMessage. No external A
 
 | Role | Model | Agent Type | Job |
 |------|-------|------------|-----|
-| **Explorer** | Haiku | `Explore` | Fast file discovery — inventory only, no analysis |
+| **Explorer** | Sonnet | `Explore` | Fast file discovery — inventory only, no analysis |
 | **Advisor** | Opus | `deep-reasoning` | Ranks files, plans dispatch, verifies findings |
 | **Runner** | Sonnet | `code-review` | Focused single-file analysis — one per file, parallel |
+
+> Haiku was dropped after empirical testing: Claude Code's built-in `Explore`
+> subagent never honored the `model="haiku"` override in practice. The flow is
+> otherwise unchanged from the original three-model design.
 
 ## Pipeline
 
@@ -20,7 +24,7 @@ TeamCreate(name="glasswing")
 Agent(
   name="explorer",
   subagent_type="Explore",
-  model="haiku",
+  model="sonnet",
   team_name="glasswing",
   prompt="Explore <target_dir>. Glob for *.py (skip __pycache__, .venv, .git).
          Read first 50 lines per file. Return one line per file:
@@ -86,7 +90,7 @@ SendMessage(
 ## Rules
 
 1. **Teams mandatory** — `TeamCreate` before any agent spawn.
-2. **Model discipline** — Haiku explores, Opus decides, Sonnet executes. No crossover.
+2. **Model discipline** — Opus decides (rank + verify), Sonnet explores and executes. No crossover.
 3. **Parallel runners** — All Sonnet agents dispatched in one message with `run_in_background=true`.
 4. **Advisor reuse** — Step 4 uses `SendMessage(to="advisor")` to resume the Opus agent, not a new spawn.
 5. **Verification is non-optional** — Every pipeline ends with Opus confirming/rejecting findings.

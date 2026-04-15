@@ -1,11 +1,16 @@
 """Orchestrator — Glasswing pipeline via Claude Code native agent teams.
 
 No external API calls. Uses Claude Code's TeamCreate, Agent, and SendMessage
-tools to coordinate a three-model team:
+tools to coordinate a two-model team:
 
-  - Haiku  (explorer) — fast codebase discovery
+  - Sonnet (explorer) — fast codebase discovery
   - Opus   (advisor)  — strategic ranking, dispatch planning, verification
   - Sonnet (runner)   — focused single-file analysis, parallel
+
+(Earlier drafts used Haiku for the explorer; it was dropped after empirical
+testing showed Claude Code's built-in Explore subagent never actually honored
+the Haiku model override. Sonnet runs exploration now — Opus still ranks and
+verifies, Sonnet still runs per-file analysis in parallel.)
 
 The Python functions here generate the prompts and configs. The actual
 orchestration happens in Claude Code by following the CLAUDE.md protocol.
@@ -50,11 +55,11 @@ def default_team_config(
     )
 
 
-# ── Step 1: Explorer (Haiku) ────────────────────────────────────
+# ── Step 1: Explorer (Sonnet) ───────────────────────────────────
 
 
 def build_explore_prompt(config: TeamConfig) -> str:
-    """Haiku explorer prompt — inventory only, no analysis."""
+    """Sonnet explorer prompt — inventory only, no analysis."""
     return (
         f"Explore the codebase at `{config.target_dir}`.\n\n"
         f"1. Glob for `{config.file_types}` files "
@@ -69,12 +74,12 @@ def build_explore_prompt(config: TeamConfig) -> str:
 
 
 def build_explore_agent(config: TeamConfig) -> dict:
-    """Claude Code Agent call spec for the explorer."""
+    """Claude Code Agent call spec for the Sonnet explorer."""
     return {
         "description": "Explore codebase for file inventory",
         "name": "explorer",
         "subagent_type": "Explore",
-        "model": "haiku",
+        "model": "sonnet",
         "team_name": config.team_name,
         "prompt": build_explore_prompt(config),
     }
@@ -245,9 +250,9 @@ def render_pipeline(config: TeamConfig) -> str:
 Target: {config.target_dir} ({config.file_types})
 Max runners: {config.max_runners} | Min priority: P{config.min_priority}
 
-### Step 1: Create team + Explore (Haiku)
+### Step 1: Create team + Explore (Sonnet)
 TeamCreate(name="{config.team_name}")
-Agent(name="explorer", model="haiku", subagent_type="Explore", team_name="{config.team_name}")
+Agent(name="explorer", model="sonnet", subagent_type="Explore", team_name="{config.team_name}")
 
 ### Step 2: Rank (Opus)
 Agent(name="advisor", model="opus", subagent_type="deep-reasoning", team_name="{config.team_name}")
