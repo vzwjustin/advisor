@@ -89,10 +89,12 @@ def create_focus_tasks(
         if rf.priority < min_priority:
             break
 
-        prompt = prompt_template.format(
-            file_path=rf.path,
-            priority=rf.priority,
-            reasons=", ".join(rf.reasons) if rf.reasons else "general review",
+        reasons_str = ", ".join(rf.reasons) if rf.reasons else "general review"
+        prompt = (
+            prompt_template
+            .replace("{file_path}", rf.path)
+            .replace("{priority}", str(rf.priority))
+            .replace("{reasons}", reasons_str)
         )
         tasks.append(FocusTask(
             file_path=rf.path,

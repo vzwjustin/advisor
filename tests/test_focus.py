@@ -62,6 +62,14 @@ class TestCreateFocusTasks:
     def test_empty_input(self):
         assert create_focus_tasks([]) == []
 
+    def test_handles_braces_in_path(self):
+        """Paths containing literal { or } appear verbatim in the prompt."""
+        ranked = [RankedFile(path="weird{name}.py", priority=3, reasons=("util",))]
+        tasks = create_focus_tasks(ranked)
+        assert len(tasks) == 1
+        assert tasks[0].file_path == "weird{name}.py"
+        assert "weird{name}.py" in tasks[0].prompt
+
     def test_immutability(self):
         ranked = [RankedFile(path="src/a.py", priority=5, reasons=("auth",))]
         task = create_focus_tasks(ranked)[0]

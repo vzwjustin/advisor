@@ -3,12 +3,14 @@
 import pytest
 
 from advisor.orchestrate import (
+    build_advisor_prompt,
     default_team_config,
     build_explore_agent,
     build_rank_agent,
     build_runner_agents,
     build_runner_batch_message,
     build_runner_dispatch_messages,
+    build_runner_handoff_message,
     build_runner_pool_agents,
     build_runner_pool_prompt,
     build_verify_message,
@@ -180,6 +182,41 @@ class TestRunnerPool:
         assert "context" in prompt.lower()
         assert "wait" in prompt.lower()
 
+    def test_pool_prompt_requires_heartbeat(self):
+        config = default_team_config("/src")
+        prompt = build_runner_pool_prompt(1, config)
+
+        assert "5 min" in prompt or "5 minutes" in prompt.lower()
+        assert "heartbeat" in prompt.lower()
+
+    def test_pool_prompt_requires_pre_finding_verification(self):
+        config = default_team_config("/src")
+        prompt = build_runner_pool_prompt(1, config)
+
+        assert "grep" in prompt.lower()
+        lowered = prompt.lower()
+        assert "missing" in lowered or "undefined" in lowered
+        assert "pre-finding" in lowered or "unverified" in lowered
+
+    def test_advisor_prompt_has_stall_pivot_clause(self):
+        from advisor.orchestrate import build_advisor_prompt
+        config = default_team_config("/src")
+        prompt = build_advisor_prompt(config)
+
+        lowered = prompt.lower()
+        assert "stall" in lowered
+        assert "pivot" in lowered
+        assert "heartbeat" in lowered
+
+    def test_advisor_prompt_folds_corrections_into_fixes(self):
+        from advisor.orchestrate import build_advisor_prompt
+        config = default_team_config("/src")
+        prompt = build_advisor_prompt(config)
+
+        lowered = prompt.lower()
+        assert "correction" in lowered
+        assert "regression test" in lowered
+
     def test_pool_agents_default_to_max_runners(self):
         config = default_team_config("/src", max_runners=4)
         agents = build_runner_pool_agents(config)
@@ -254,3 +291,81 @@ class TestRenderPipeline:
         assert "opus" in output
         assert "sonnet" in output
         assert "haiku" not in output
+
+
+class TestMaxFixesPerRunner:
+    def test_default_is_five(self):
+        config = default_team_config("/src")
+        assert config.max_fixes_per_runner == 5
+
+    def test_custom_value(self):
+        config = default_team_config("/src", max_fixes_per_runner=8)
+        assert config.max_fixes_per_runner == 8
+
+    def test_advisor_prompt_names_cap(self):
+        config = default_team_config("/src", max_fixes_per_runner=7)
+        prompt = build_advisor_prompt(config)
+        assert "HARD CAP: 7 fixes" in prompt
+        assert "CONTEXT_PRESSURE" in prompt
+
+    def test_runner_prompt_names_cap(self):
+        config = default_team_config("/src", max_fixes_per_runner=3)
+        prompt = build_runner_pool_prompt(1, config)
+        assert "Hard cap: 3 fix assignments" in prompt
+        assert "CONTEXT_PRESSURE" in prompt
+
+
+class TestBuildRunnerHandoffMessage:
+    def test_returns_sendmessage_spec_for_new_runner(self):
+        msg = build_runner_handoff_message(
+            new_runner_id=2,
+            outgoing_runner_id=1,
+            files_touched=["a.py", "b.py"],
+            invariants=["parser must reject X"],
+            remaining_fixes=["fix 6 — c.py", "fix 7 — d.py"],
+        )
+        assert msg["to"] == "runner-2"
+        body = msg["message"]
+        assert "Handoff from runner-1" in body
+        assert "runner-2" in body
+        assert "a.py" in body
+        assert "b.py" in body
+        assert "parser must reject X" in body
+        assert "fix 6 — c.py" in body
+        assert "fix 7 — d.py" in body
+
+    def test_empty_lists_render_placeholders(self):
+        msg = build_runner_handoff_message(
+            new_runner_id=3,
+            outgoing_runner_id=2,
+            files_touched=[],
+            invariants=[],
+            remaining_fixes=[],
+        )
+        body = msg["message"]
+        assert "(none yet)" in body
+        assert "(none)" in body
+        assert "verify pass" in body
+
+    def test_extra_context_included_when_provided(self):
+        msg = build_runner_handoff_message(
+            new_runner_id=2,
+            outgoing_runner_id=1,
+            files_touched=["x.py"],
+            invariants=["y"],
+            remaining_fixes=["z"],
+            extra_context="Watch for circular import in module q.",
+        )
+        assert "Extra context" in msg["message"]
+        assert "circular import" in msg["message"]
+
+    def test_extra_context_omitted_when_empty(self):
+        msg = build_runner_handoff_message(
+            new_runner_id=2,
+            outgoing_runner_id=1,
+            files_touched=["x.py"],
+            invariants=["y"],
+            remaining_fixes=["z"],
+            extra_context="   ",
+        )
+        assert "Extra context" not in msg["message"]

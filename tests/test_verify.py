@@ -103,3 +103,42 @@ class TestParseFindingsFromText:
             assert False, "Should have raised"
         except AttributeError:
             pass
+
+    def test_parse_handles_field_label_in_body(self):
+        """A description containing '**Fix**:' must not corrupt the parse."""
+        text = """### Finding 1
+- **File**: src/db.py:10
+- **Severity**: HIGH
+- **Description**: Use Fix: parameterized queries instead of string concat
+- **Evidence**: f-string in query at line 10
+- **Fix**: Use cursor.execute with placeholders
+"""
+        findings = parse_findings_from_text(text)
+        assert len(findings) == 1
+        f = findings[0]
+        assert f.file_path == "src/db.py:10"
+        assert "Fix: parameterized queries" in f.description
+        assert f.fix == "Use cursor.execute with placeholders"
+
+    def test_parse_flushes_on_finding_header(self):
+        """Two findings with out-of-order fields parse as separate blocks."""
+        text = """### Finding 1
+- **File**: src/auth.py:5
+- **Severity**: CRITICAL
+- **Description**: Hardcoded secret
+- **Evidence**: line 5
+- **Fix**: use env var
+
+### Finding 2
+- **Severity**: LOW
+- **File**: src/util.py:3
+- **Description**: Unused import
+- **Evidence**: line 3
+- **Fix**: remove import
+"""
+        findings = parse_findings_from_text(text)
+        assert len(findings) == 2
+        assert findings[0].file_path == "src/auth.py:5"
+        assert findings[0].severity == "CRITICAL"
+        assert findings[1].file_path == "src/util.py:3"
+        assert findings[1].severity == "LOW"

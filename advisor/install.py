@@ -116,6 +116,9 @@ def _strip_all_blocks(existing: str) -> str:
     left behind by pathological interleaving (START-START-END-END).
     """
     cleaned = existing
+    # rpartition picks the LAST end/start pair on each pass; non-nested
+    # multi-block input (START-END-START-END) requires multiple iterations
+    # because each pass strips one block and leaves the others intact.
     while START_MARKER in cleaned or END_MARKER in cleaned:
         if START_MARKER in cleaned and END_MARKER in cleaned:
             before_end, _, after_end = cleaned.rpartition(END_MARKER)
@@ -145,7 +148,7 @@ def apply_nudge(existing: str, body: str = NUDGE_BODY) -> tuple[str, str]:
         updated = (
             f"{stripped}\n\n{block}".lstrip("\n") if stripped else block
         )
-        if updated == existing:
+        if updated.strip() == existing.strip():
             return existing, "unchanged"
         return updated, "updated"
 
@@ -248,10 +251,11 @@ def ensure_nudge(
         ]
         lines.extend(pieces)
         lines.append("")
-        lines.append(f"  {_style.paint('🚀 Quick start:', 'cyan', 'bold', stream=out)}")
-        lines.append(f"     /advisor <dir>      {_style.dim('Start a code review', stream=out)}")
-        lines.append(f"     advisor status      {_style.dim('Check installation', stream=out)}")
-        lines.append(f"     advisor --help      {_style.dim('See all commands', stream=out)}")
+        rocket = _style.glyph("🚀", ">")
+        lines.append(f"  {_style.paint(f'{rocket} Quick start:', 'cyan', 'bold', stream=out)}")
+        lines.append(_style.cta("/advisor <dir>", "Start a code review", stream=out))
+        lines.append(_style.cta("advisor status", "Check installation", stream=out))
+        lines.append(_style.cta("advisor --help", "See all commands", stream=out))
         lines.append("")
         lines.append(_style.dim(
             f"  opt out: {OPT_OUT_ENV}=1  ·  remove: advisor uninstall",
@@ -355,14 +359,12 @@ def uninstall_skill(path: Path | None = None) -> InstallResult:
     """Remove the advisor SKILL.md and its parent directory if empty.
 
     Leaves ~/.claude/skills itself alone; only touches our own subdirectory.
+    Raises OSError if the file exists but cannot be deleted (e.g. permissions).
     """
     target = path or default_skill_path()
     if not target.exists():
         return InstallResult(path=target, action="absent")
-    try:
-        target.unlink()
-    except OSError:
-        return InstallResult(path=target, action="absent")
+    target.unlink()
     parent = target.parent
     try:
         if parent.name == SKILL_DIR_NAME and not any(parent.iterdir()):

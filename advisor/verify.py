@@ -97,6 +97,18 @@ def parse_findings_from_text(text: str) -> list[Finding]:
     Blocks missing any of the five required fields are dropped rather than
     silently promoted with default values. This prevents the verification
     pipeline from acting on fabricated data when agent output is malformed.
+
+    Block boundaries are detected in two ways (primary first):
+    1. ``### Finding`` header lines — the primary delimiter, matches the
+       format emitted by ``format_findings_block``.
+    2. A second ``file_path`` key — safety-net for output that omits headers.
+
+    Within a block, a key match is only treated as a new field if the key
+    has not already been set in the current block. Otherwise the line is
+    treated as continuation text for the active field. This prevents field
+    labels that appear inside description/evidence/fix bodies (e.g. a
+    description containing "Fix: use parameterized queries") from corrupting
+    the block.
     """
     findings: list[Finding] = []
     current: dict[str, str] = {}
@@ -116,15 +128,34 @@ def parse_findings_from_text(text: str) -> list[Finding]:
 
     for line in text.split("\n"):
         stripped = line.strip()
+
+        # Primary block delimiter: ### Finding headers from format_findings_block.
+        if stripped.startswith("### Finding"):
+            if current:
+                _flush()
+                current = {}
+            active_key = None
+            continue
+
         matched = _match_key(stripped)
 
         if matched is not None:
             key, value = matched
-            if key == "file_path" and current:
+            if key not in current:
+                # New field for this block — record it.
+                current[key] = value
+                active_key = key
+            elif key == "file_path":
+                # Safety-net: second file_path signals a new block in
+                # header-less output. Flush and start fresh.
                 _flush()
-                current = {}
-            current[key] = value
-            active_key = key
+                current = {key: value}
+                active_key = key
+            else:
+                # Key already set — this label text appeared inside a body
+                # value. Treat as continuation of the active field.
+                if active_key:
+                    current[active_key] = current[active_key] + " " + stripped
         elif active_key and stripped and not stripped.startswith("#"):
             current[active_key] = current.get(active_key, "") + " " + stripped
 

@@ -1,7 +1,10 @@
 """Tests for advisor.install — nudge append/remove helpers."""
 
 import io
+import sys
 from pathlib import Path
+
+import pytest
 
 from advisor.install import (
     END_MARKER,
@@ -48,6 +51,16 @@ class TestApplyNudge:
         assert action == "updated"
         assert "new body" in twice
         assert "old body" not in twice
+
+    def test_unchanged_when_only_trailing_whitespace_differs(self):
+        """Whitespace-only differences must not trigger a spurious 'updated'."""
+        canonical, _ = apply_nudge("# CLAUDE.md\n")
+        # Add extra trailing newlines — same nudge body, different whitespace.
+        with_extra_whitespace = canonical + "\n\n\n"
+        result, action = apply_nudge(with_extra_whitespace)
+        assert action == "unchanged"
+        # Original bytes preserved — no normalization written back.
+        assert result == with_extra_whitespace
 
     def test_no_mutation_of_input(self):
         existing = "# CLAUDE.md\n"
@@ -241,6 +254,21 @@ class TestInstallSkill:
         assert result.action == "removed"
         assert not target.exists()
         assert skill_dir.exists()  # kept because user_added.md is still there
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="chmod not meaningful on Windows")
+    def test_uninstall_raises_oserror_on_permission_failure(self, tmp_path: Path):
+        """OSError propagates when the file exists but cannot be deleted."""
+        import os
+        skill_dir = tmp_path / "skills" / "advisor"
+        target = skill_dir / "SKILL.md"
+        install_skill(path=target)
+        # Remove write permission from parent dir so unlink() fails.
+        skill_dir.chmod(0o500)
+        try:
+            with pytest.raises(OSError):
+                uninstall_skill(path=target)
+        finally:
+            skill_dir.chmod(0o700)  # restore so tmp_path cleanup works
 
 
 class TestStatus:

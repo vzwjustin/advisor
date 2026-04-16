@@ -157,10 +157,9 @@ def cmd_plan(args: argparse.Namespace) -> int:
         min_priority=args.min_priority,
     )
     if not tasks:
-        glyph = _style.glyph("🔍", "[-]")
         print(_style.warning_box(f"No files at priority P{args.min_priority}+ in {target}"))
-        print(f"  {_style.paint('💡 Tip:', 'cyan', 'bold')} Try {_style.paint('--min-priority 1', 'yellow')} to include all files")
-        print(f"  {_style.paint('   or:', 'dim')}  Adjust {_style.paint('--file-types', 'yellow')} to match your file extensions")
+        print(_style.tip("Try --min-priority 1 to include all files"))
+        print(_style.tip("Or adjust --file-types to match your file extensions"))
         return 0
 
     if args.batch_size and args.batch_size > 1:
@@ -181,6 +180,14 @@ def cmd_prompt(args: argparse.Namespace) -> int:
         print(build_runner_pool_prompt(runner_id, config))
     elif args.step == "verify":
         findings = sys.stdin.read() if not sys.stdin.isatty() else "<paste findings here>"
+        if not findings.strip():
+            print(
+                _style.warning_box(
+                    "--step verify received no findings on stdin; output will be a template",
+                    stream=sys.stderr,
+                ),
+                file=sys.stderr,
+            )
         print(build_verify_dispatch_prompt(
             findings,
             file_count=args.file_count or args.max_runners,

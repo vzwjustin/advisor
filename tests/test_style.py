@@ -80,6 +80,16 @@ def test_err_emits_red_bold_ansi_by_default():
     assert "\033[1m" in out
 
 
+def test_err_stream_param_does_not_alter_output():
+    """stream param on err() must not change the returned string."""
+    assert _style.err("x", stream=io.StringIO()) == _style.err("x")
+
+
+def test_ok_stream_param_does_not_alter_output():
+    """stream param on ok() must not change the returned string."""
+    assert _style.ok("x", stream=io.StringIO()) == _style.ok("x")
+
+
 def test_colorize_markdown_styles_priority_badges():
     out = _style.colorize_markdown("**P3** something")
     assert "\033[" in out
@@ -104,6 +114,86 @@ def test_colorize_markdown_no_op_under_term_dumb(monkeypatch):
     monkeypatch.setenv("TERM", "dumb")
     src = "## Header"
     assert _style.colorize_markdown(src) == src
+
+
+def test_tip_emits_lightbulb_and_dim_body_by_default():
+    out = _style.tip("use --foo")
+    assert "💡" in out
+    assert "use --foo" in out
+    assert "\033[2m" in out  # body is dim
+
+
+def test_tip_ascii_fallback_under_no_color(monkeypatch):
+    monkeypatch.setenv("NO_COLOR", "1")
+    out = _style.tip("use --foo")
+    assert "💡" not in out
+    assert "tip:" in out
+    assert "use --foo" in out
+    assert "\033[" not in out  # no ANSI
+
+
+def test_cta_emits_bold_action_and_dim_description_by_default():
+    out = _style.cta("/advisor <dir>", "Start a code review")
+    assert "/advisor <dir>" in out
+    assert "Start a code review" in out
+    assert "→" in out
+    assert "\033[1m" in out  # action is bold
+    assert "\033[2m" in out  # description is dim
+
+
+def test_cta_without_description_renders_action_only():
+    out = _style.cta("/advisor <dir>")
+    assert "/advisor <dir>" in out
+    assert "→" in out
+
+
+def test_cta_ascii_fallback_under_no_color(monkeypatch):
+    monkeypatch.setenv("NO_COLOR", "1")
+    out = _style.cta("/advisor <dir>", "Start a code review")
+    assert "→" not in out
+    assert ">" in out
+    assert "/advisor <dir>" in out
+    assert "Start a code review" in out
+    assert "\033[" not in out
+
+
+def test_codes_covers_every_color_used_in_package():
+    """Regression guard: every color literal passed to paint() in the package
+    must exist in _CODES, or paint() silently no-ops and the UI loses color.
+
+    This catches the class of silent bug where a helper asks for `"blue"` or
+    any other name that never made it into the palette dict.
+    """
+    import re
+    from pathlib import Path
+
+    pkg_root = Path(_style.__file__).parent
+    # Colors passed as the 2nd+ positional arg to paint(...) — e.g.
+    # `paint(x, "cyan", "bold")`. Restrict the first arg to characters that
+    # cannot contain a nested call, so `paint(glyph("x", "y"), "cyan")`
+    # doesn't misattribute "y" as a color.
+    pat = re.compile(r"""paint\(\s*[^(),]+?,\s*['"]([a-z]+)['"]""")
+    used: set[str] = set()
+    for py in pkg_root.glob("*.py"):
+        for color in pat.findall(py.read_text(encoding="utf-8")):
+            used.add(color)
+
+    # These are the non-color style modifiers, also valid in _CODES.
+    modifiers = {"bold", "dim"}
+    colors_actually_used = used - modifiers
+
+    missing = colors_actually_used - set(_style._CODES)
+    assert not missing, f"colors used by callers but missing from _CODES: {missing}"
+
+
+def test_codes_contains_every_color_modifier_referenced_by_style_helpers():
+    """Regression guard: the named helpers err/ok/dim/box family all resolve
+    to keys that exist in _CODES. A missing key causes silent no-op styling.
+    """
+    required = {"red", "green", "yellow", "blue", "cyan", "magenta", "bold", "dim"}
+    assert required <= set(_style._CODES), (
+        f"_CODES missing required keys: {required - set(_style._CODES)}"
+    )
 
 
 def test_priority_styles_all_bold_for_contrast_ladder():

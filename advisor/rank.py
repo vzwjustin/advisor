@@ -13,6 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+# Bytes scanned per file for keyword matching — covers typical import block + first function/class.
 CONTENT_SCAN_LIMIT = 2000
 
 # Priority 5 = most likely to have issues, 1 = least.

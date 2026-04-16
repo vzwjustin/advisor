@@ -40,6 +40,7 @@ class TeamConfig:
     context: str
     advisor_model: str
     runner_model: str
+    max_fixes_per_runner: int = 5
 
 
 def default_team_config(
@@ -51,8 +52,14 @@ def default_team_config(
     context: str = "",
     advisor_model: str = "opus",
     runner_model: str = "sonnet",
+    max_fixes_per_runner: int = 5,
 ) -> TeamConfig:
-    """Create a default team configuration."""
+    """Create a default team configuration.
+
+    ``max_fixes_per_runner`` caps sequential fix assignments per runner
+    conversation before the advisor rotates to a fresh runner. Prevents
+    context-pressure stalls on long fix waves.
+    """
     return TeamConfig(
         team_name=team_name,
         target_dir=target_dir,
@@ -62,6 +69,7 @@ def default_team_config(
         context=context,
         advisor_model=advisor_model,
         runner_model=runner_model,
+        max_fixes_per_runner=max_fixes_per_runner,
     )
 
 
@@ -103,6 +111,7 @@ def build_explore_agent(config: TeamConfig) -> dict:
         DeprecationWarning,
         stacklevel=2,
     )
+    # Suppress the inner-call DeprecationWarning; the outer caller already received its own.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
         prompt = build_explore_prompt(config)
@@ -261,6 +270,18 @@ def build_advisor_prompt(config: TeamConfig) -> str:
         "Runners implement the change and report back with the diff. "
         "Review each diff — confirm it matches the intent or send a "
         "REDIRECT if they drifted.\n\n"
+        f"**Rotate runners on long fix waves — HARD CAP: "
+        f"{config.max_fixes_per_runner} fixes per runner.** "
+        "A Sonnet runner's context degrades after ~5 sequential fix "
+        "round-trips — they stop acknowledging messages and stall. "
+        f"Track a fix-count per runner. The instant a runner hits "
+        f"{config.max_fixes_per_runner} completed fixes, OR pings "
+        "`CONTEXT_PRESSURE`, stop queueing to it. Ask the team-lead to "
+        "spawn a fresh `runner-N+1` with a handoff brief covering: files "
+        "touched so far (with one-line invariants each), the remaining "
+        "fix list, and any cross-file context the outgoing runner built "
+        "up. Then send the saturated runner `shutdown_request`. Rotation "
+        "is cheaper than pivoting mid-stall.\n\n"
         "## Step 6 — Verify and report\n"
         "When all assignments are complete, read the cited file:line for "
         "anything you're not certain about. For review tasks, CONFIRM "
@@ -306,6 +327,25 @@ def build_advisor_prompt(config: TeamConfig) -> str:
         "  way, runner-2 reviewing `session.py` needs to know.\n\n"
         "Treat the runners like engineers on a live pair-programming call, "
         "not like batch jobs. Stay hot until the final report is sent.\n\n"
+        "# Stall detection and pivot\n\n"
+        "Runners are expected to heartbeat at least every ~5 min. If a "
+        "runner goes silent for longer than that OR fails to acknowledge "
+        "a correction you sent, treat it as a stall. Do not grind. Your "
+        "move is: (a) send one direct probe (`ack the last message or I "
+        "pivot`), then (b) if no response, do the work yourself from "
+        "primary-source evidence — your Read/Glob/Grep is enough — apply "
+        "the fix, and (c) send the stalled runner a shutdown_request. "
+        "Note the pivot explicitly in the final report. The runner pool "
+        "is a scaling lever, not a hard dependency — Opus ships the work "
+        "either way.\n\n"
+        "# Corrections become fixes, not just guidance\n\n"
+        "When you issue a CORRECTION to a runner (e.g. 'X is not missing, "
+        "it's at file:line'), the *concern* behind the bad claim is often "
+        "legitimate — it points at an invariant no test pins. Queue a "
+        "fix-wave item alongside the correction: typically a regression "
+        "test that would have failed under the runner's wrong mental "
+        "model. List these in the final report next to the primary fixes. "
+        "Do not burn corrections on verify-only steering.\n\n"
         "When each step's output is ready, SendMessage it to the team-lead. "
         "Do not go idle without sending."
     )
@@ -381,6 +421,7 @@ def build_rank_agent(file_inventory: str, config: TeamConfig) -> dict:
         DeprecationWarning,
         stacklevel=2,
     )
+    # Suppress the inner-call DeprecationWarning; the outer caller already received its own.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
         prompt = build_rank_prompt(file_inventory, config)
@@ -397,10 +438,11 @@ def build_rank_agent(file_inventory: str, config: TeamConfig) -> dict:
 # ── Step 2: Runners (Sonnet — parallel, batched) ────────────────
 
 
-def _format_batch_files(batch: FocusBatch, guidance: dict[str, str]) -> str:
+def _format_batch_files(batch: FocusBatch, guidance: dict[str, str] | None = None) -> str:
+    g_map = guidance or {}
     lines: list[str] = []
     for t in batch.tasks:
-        g = guidance.get(t.file_path, "").strip()
+        g = g_map.get(t.file_path, "").strip()
         suffix = f" — {g}" if g else ""
         lines.append(f"- `{t.file_path}` (P{t.priority}){suffix}")
     return "\n".join(lines)
@@ -423,9 +465,7 @@ def build_runner_prompt(
     (legacy — auto-wrapped into a single-file batch).
     """
     batch = _coerce_batch(target)
-    guidance_dict = guidance or {}
-
-    files_block = _format_batch_files(batch, guidance_dict)
+    files_block = _format_batch_files(batch, guidance)
     return (
         "You are a focused analysis agent. Review ONLY these files:\n\n"
         f"{files_block}\n\n"
@@ -476,10 +516,13 @@ def build_runner_pool_prompt(runner_id: int, config: TeamConfig) -> str:
         "  other files. If you need to know what they've seen (did runner-2 "
         "  find auth uses JWT or sessions?), ask the advisor — they have "
         "  the whole picture and will answer or route your question.\n"
-        "- **Send progress pings.** Short status updates as you work: "
-        "  `'finished reading auth.py, now tracing session handling'`. The "
-        "  advisor uses these to catch drift early and to pre-answer the "
-        "  question you haven't asked yet.\n"
+        "- **Send progress pings — at least every 5 minutes.** Short status "
+        "  updates as you work: `'finished reading auth.py, now tracing "
+        "  session handling'`. Heartbeat is mandatory: if you have done more "
+        "  than ~5 min of work since your last message, ping the advisor "
+        "  before you do the next tool call — even if the ping is just "
+        "  `'still reading file X, no findings yet'`. Silence longer than "
+        "  that is treated as a stall and the advisor may pivot without you.\n"
         "- **Expect interruptions.** The advisor may SendMessage you "
         "  mid-work with context from another runner, or a redirect because "
         "  a finding elsewhere changed your scope. Read their messages "
@@ -548,6 +591,16 @@ def build_runner_pool_prompt(runner_id: int, config: TeamConfig) -> str:
         "Do not shut down. The advisor may queue more work to you — your "
         "accumulated context is exactly why they are routing it to you. "
         "Only exit on an explicit shutdown_request.\n\n"
+        "## Flag context pressure before you stall\n"
+        f"Hard cap: {config.max_fixes_per_runner} fix assignments per "
+        "runner. Track your own fix count. As you approach the cap — or "
+        "if you notice your replies getting slower, your recall of earlier "
+        "files getting hazy, or you're unsure about a file you reviewed "
+        "earlier in the session — proactively ping the advisor: "
+        "`SendMessage(to='advisor', message='CONTEXT_PRESSURE — N fixes "
+        "deep, recommend rotation')`. The advisor will spawn a fresh "
+        "runner and hand off. Flagging early is cheaper than stalling "
+        "silently mid-fix.\n\n"
         "# Rules\n\n"
         "- Talk to the advisor constantly. Silence looks like drift.\n"
         "- Work only on what the advisor hands you. Notice but do not "
@@ -556,6 +609,13 @@ def build_runner_pool_prompt(runner_id: int, config: TeamConfig) -> str:
         "- No hedging. If you're not sure, mark it MED or LOW and say why.\n"
         "- Primary sources beat confidence. If the code says X and you "
         "  wrote Y, the code is right.\n"
+        "- **Pre-finding verification is mandatory.** Before you report "
+        "  anything of the form `X is missing from Y` or `Z is undefined` "
+        "  or `no caller exists for W`, you MUST grep for the name in the "
+        "  relevant file and include the grep command + result (or the "
+        "  explicit `file:line` + surrounding snippet) as the evidence "
+        "  line. An unverified absence-claim is a bug in your report, not "
+        "  a finding. If grep contradicts your mental model, the grep wins.\n"
         "- When unsure, ask. Always ask."
     )
 
@@ -594,8 +654,7 @@ def build_runner_batch_message(
     The advisor should call `SendMessage(to='runner-<N>', message=<this>)`
     for each batch in its dispatch plan.
     """
-    guidance_dict = guidance or {}
-    files_block = _format_batch_files(batch, guidance_dict)
+    files_block = _format_batch_files(batch, guidance)
     return (
         f"## New batch assignment (batch {batch.batch_id}, "
         f"complexity: {batch.complexity})\n\n"
@@ -668,8 +727,6 @@ def build_runner_agents(
     Returns:
         A new list of Agent call specs, one per runner.
     """
-    guidance_dict = guidance or {}
-
     batches: list[FocusBatch] = []
     for i, item in enumerate(items, 1):
         if isinstance(item, FocusBatch):
@@ -693,7 +750,7 @@ def build_runner_agents(
             "model": config.runner_model,
             "team_name": config.team_name,
             "run_in_background": True,
-            "prompt": build_runner_prompt(batch, guidance=guidance_dict),
+            "prompt": build_runner_prompt(batch, guidance=guidance),
         })
     return agents
 
@@ -748,6 +805,46 @@ def build_verify_message(
         "to": "advisor",
         "message": build_verify_dispatch_prompt(all_findings, file_count, runner_count),
     }
+
+
+def build_runner_handoff_message(
+    new_runner_id: int,
+    outgoing_runner_id: int,
+    files_touched: list[str],
+    invariants: list[str],
+    remaining_fixes: list[str],
+    extra_context: str = "",
+) -> dict:
+    """SendMessage spec handing the fix wave off from a saturated runner to a fresh one.
+
+    Used when a runner hits ``max_fixes_per_runner`` or pings
+    ``CONTEXT_PRESSURE``. The brief gives the incoming runner the minimum
+    context it needs without replaying the full conversation.
+    """
+    files_block = (
+        "\n".join(f"- {p}" for p in files_touched) if files_touched else "- (none yet)"
+    )
+    invariants_block = (
+        "\n".join(f"- {inv}" for inv in invariants) if invariants else "- (none)"
+    )
+    remaining_block = (
+        "\n".join(f"- {fx}" for fx in remaining_fixes)
+        if remaining_fixes
+        else "- (none — you're taking the verify pass)"
+    )
+    extra = f"\n\n## Extra context\n{extra_context.strip()}\n" if extra_context.strip() else ""
+    body = (
+        f"## Handoff from runner-{outgoing_runner_id}\n\n"
+        f"You are runner-{new_runner_id}. runner-{outgoing_runner_id} is "
+        "saturating context and is being rotated out. You are picking up "
+        "mid-fix-wave. No need to re-read the full conversation.\n\n"
+        f"## Files already touched\n{files_block}\n\n"
+        f"## Invariants to preserve\n{invariants_block}\n\n"
+        f"## Remaining fixes queued for you\n{remaining_block}"
+        f"{extra}\n\n"
+        "Acknowledge and wait for the first fix assignment."
+    )
+    return {"to": f"runner-{new_runner_id}", "message": body}
 
 
 # ── Full Pipeline Reference ─────────────────────────────────────

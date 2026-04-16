@@ -1,6 +1,6 @@
 """Tiny terminal-styling helpers — ANSI on by default.
 
-Colors are emitted unconditionally so subprocess contexts (Claude Code's
+Colors are emitted by default so subprocess contexts (Claude Code's
 Bash tool, IDEs, captured output) get the same styled view as a direct
 terminal session. Opt out with ``NO_COLOR=1`` (https://no-color.org) or
 ``TERM=dumb``; under either, every helper returns the input string
@@ -55,12 +55,12 @@ def glyph(fancy: str, plain: str, stream: IO[str] | None = None) -> str:
     return fancy if supports_color(stream) else plain
 
 
-def err(text: str) -> str:
-    return paint(text, "red", "bold", stream=sys.stderr)
+def err(text: str, stream: IO[str] | None = None) -> str:
+    return paint(text, "red", "bold", stream=stream if stream is not None else sys.stderr)
 
 
-def ok(text: str) -> str:
-    return paint(text, "green", stream=sys.stdout)
+def ok(text: str, stream: IO[str] | None = None) -> str:
+    return paint(text, "green", stream=stream if stream is not None else sys.stdout)
 
 
 def dim(text: str, stream: IO[str] | None = None) -> str:
@@ -113,6 +113,27 @@ def warning_box(text: str, stream: IO[str] | None = None) -> str:
     if not supports_color(stream):
         return f"{mark} {text}"
     return f"{paint(mark, 'yellow', 'bold')} {paint(text, 'yellow')}"
+
+
+def tip(text: str, stream: IO[str] | None = None) -> str:
+    """Inline hint line — dim body with a bold cyan lightbulb lead."""
+    mark = glyph("💡", "tip:")
+    if not supports_color(stream):
+        return f"  {mark} {text}"
+    return f"  {paint(mark, 'cyan', 'bold', stream=stream)} {dim(text, stream=stream)}"
+
+
+def cta(action: str, description: str = "", stream: IO[str] | None = None) -> str:
+    """Call-to-action row — bold primary `action` plus optional dim description."""
+    bullet = glyph("→", ">")
+    if not supports_color(stream):
+        sep = "  " if description else ""
+        return f"  {bullet} {action}{sep}{description}"
+    lead = paint(bullet, "cyan", "bold", stream=stream)
+    act = paint(action, "bold", stream=stream)
+    if not description:
+        return f"  {lead} {act}"
+    return f"  {lead} {act}  {dim(description, stream=stream)}"
 
 
 # Priority badge colors — high-contrast on both light and dark terminals.
