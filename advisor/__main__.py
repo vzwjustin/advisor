@@ -8,14 +8,14 @@ from __future__ import annotations
 
 import argparse
 import sys
-from importlib.metadata import version as pkg_version
+from importlib.metadata import PackageNotFoundError, version as pkg_version
 from pathlib import Path
 
 
 def _get_version() -> str:
     try:
         return pkg_version("advisor-agent")
-    except Exception:
+    except PackageNotFoundError:
         return "dev"
 
 from . import _style
@@ -39,7 +39,6 @@ from .install import (
 from .orchestrate import (
     TeamConfig,
     build_advisor_prompt,
-    build_rank_prompt,
     build_runner_pool_prompt,
     build_verify_dispatch_prompt,
     default_team_config,
@@ -99,17 +98,22 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
         default=5,
         help="Advisory runner count. Opus may exceed this for large codebases.",
     )
-    parser.add_argument("--min-priority", type=int, default=3, help="Minimum priority tier (1=utilities, 5=auth/secrets, default: 3)")
+    parser.add_argument(
+        "--min-priority",
+        type=int,
+        default=3,
+        help="Minimum priority tier (1=utilities, 5=auth/secrets, default: %(default)s)",
+    )
     parser.add_argument("--context", default="", help="Extra goal context")
     parser.add_argument(
         "--advisor-model",
         default="opus",
-        help="Model for the advisor agent (default: opus)",
+        help="Model for the advisor agent (default: %(default)s)",
     )
     parser.add_argument(
         "--runner-model",
         default="sonnet",
-        help="Model for the runner pool agents (default: sonnet)",
+        help="Model for the runner pool agents (default: %(default)s)",
     )
 
 
@@ -153,8 +157,9 @@ def cmd_plan(args: argparse.Namespace) -> int:
         min_priority=args.min_priority,
     )
     if not tasks:
-        print(f"No files at priority P{args.min_priority}+ in {target}.")
-        print(_style.dim("  hint: try --min-priority 1 to include all files."))
+        glyph = _style.glyph("·", "-")
+        print(_style.dim(f"{glyph} No files at priority P{args.min_priority}+ in {target}."))
+        print(f"  {_style.paint('hint:', 'cyan', 'bold')} try --min-priority 1 to include all files.")
         return 0
 
     if args.batch_size and args.batch_size > 1:
@@ -173,9 +178,6 @@ def cmd_prompt(args: argparse.Namespace) -> int:
     elif args.step == "runner":
         runner_id = getattr(args, "runner_id", 1) or 1
         print(build_runner_pool_prompt(runner_id, config))
-    elif args.step == "rank":
-        inventory = sys.stdin.read() if not sys.stdin.isatty() else "<paste inventory here>"
-        print(build_rank_prompt(inventory, config))
     elif args.step == "verify":
         findings = sys.stdin.read() if not sys.stdin.isatty() else "<paste findings here>"
         print(build_verify_dispatch_prompt(
@@ -245,7 +247,7 @@ def cmd_install(args: argparse.Namespace) -> int:
     try:
         nudge_result = install_nudge(path=nudge_target)
     except (OSError, UnicodeDecodeError) as exc:
-        print(f"{_style.err('error')} (nudge): {exc}", file=sys.stderr)
+        print(f"{_style.err('error:')} nudge: {exc}", file=sys.stderr)
         return 1
     print(_fmt_action("nudge", nudge_result.action, nudge_result.path))
 
@@ -255,7 +257,7 @@ def cmd_install(args: argparse.Namespace) -> int:
         try:
             skill_result = install_skill(path=skill_target)
         except (OSError, UnicodeDecodeError) as exc:
-            print(f"{_style.err('error')} (skill): {exc}", file=sys.stderr)
+            print(f"{_style.err('error:')} skill: {exc}", file=sys.stderr)
             return 1
         skill_action = skill_result.action
         print(_fmt_action("skill", skill_result.action, skill_result.path))
@@ -276,7 +278,7 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     try:
         nudge_result = uninstall_nudge(path=nudge_target)
     except (OSError, UnicodeDecodeError) as exc:
-        print(f"{_style.err('error')} (nudge): {exc}", file=sys.stderr)
+        print(f"{_style.err('error:')} nudge: {exc}", file=sys.stderr)
         return 1
     print(_fmt_action("nudge", nudge_result.action, nudge_result.path))
 
@@ -286,7 +288,7 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
         try:
             skill_result = uninstall_skill(path=skill_target)
         except (OSError, UnicodeDecodeError) as exc:
-            print(f"{_style.err('error')} (skill): {exc}", file=sys.stderr)
+            print(f"{_style.err('error:')} skill: {exc}", file=sys.stderr)
             return 1
         skill_action = skill_result.action
         print(_fmt_action("skill", skill_result.action, skill_result.path))
@@ -332,7 +334,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_plan.set_defaults(func=cmd_plan)
 
     p_prompt = sub.add_parser("prompt", help="Print a step prompt for pasting into Claude Code")
-    p_prompt.add_argument("step", choices=["advisor", "runner", "rank", "verify"])
+    p_prompt.add_argument("step", choices=["advisor", "runner", "verify"])
     p_prompt.add_argument("--runner-id", type=int, default=1, help="Runner ID for the runner step")
     _add_common(p_prompt)
     p_prompt.add_argument(

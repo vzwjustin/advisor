@@ -103,13 +103,16 @@ def build_explore_agent(config: TeamConfig) -> dict:
         DeprecationWarning,
         stacklevel=2,
     )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        prompt = build_explore_prompt(config)
     return {
         "description": "Explore codebase for file inventory",
         "name": "explorer",
         "subagent_type": "Explore",
         "model": config.runner_model,
         "team_name": config.team_name,
-        "prompt": build_explore_prompt(config),
+        "prompt": prompt,
     }
 
 
@@ -378,13 +381,16 @@ def build_rank_agent(file_inventory: str, config: TeamConfig) -> dict:
         DeprecationWarning,
         stacklevel=2,
     )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        prompt = build_rank_prompt(file_inventory, config)
     return {
         "description": "Rank files and plan dispatch",
         "name": "advisor",
         "subagent_type": "deep-reasoning",
         "model": config.advisor_model,
         "team_name": config.team_name,
-        "prompt": build_rank_prompt(file_inventory, config),
+        "prompt": prompt,
     }
 
 
@@ -444,8 +450,8 @@ def build_runner_prompt(
         "6. If a file is clean, say so explicitly for that file\n\n"
         "Do NOT review other files. Do NOT review files outside this batch. "
         "If you hit a cross-reference, note it but stay scoped.\n\n"
-        "When done, send your complete output to the team lead via "
-        "SendMessage(to='team-lead')."
+        "When done, send your complete output to the advisor via "
+        "SendMessage(to='advisor')."
     )
 
 
@@ -604,8 +610,8 @@ def build_runner_batch_message(
         "5. Wait for CONFIRM / NARROW / REDIRECT and incorporate\n"
         "6. For each confirmed issue, report File/Severity/Description/"
         "Evidence/Fix\n"
-        "7. Send your complete output to the team lead via "
-        "`SendMessage(to='team-lead')`\n"
+        "7. Send your complete output to the advisor via "
+        "`SendMessage(to='advisor')`\n"
         "8. Then wait for your next batch\n\n"
         "Do NOT review files outside this batch."
     )
@@ -613,14 +619,29 @@ def build_runner_batch_message(
 
 def build_runner_dispatch_messages(
     batches: list[FocusBatch],
+    pool_size: int,
     guidance: dict[str, str] | None = None,
 ) -> list[dict]:
     """SendMessage specs to hand each batch to its pool runner.
+
+    Args:
+        batches: Batches to dispatch; each batch's `batch_id` determines runner routing.
+        pool_size: Number of runners in the pool. Raises `ValueError` if any
+            `batch_id` exceeds this — that dispatch would silently target a
+            never-spawned runner.
+        guidance: Optional dict mapping file_path -> one-line guidance.
 
     Returns a list of dicts shaped like
     `{"to": "runner-N", "message": <batch assignment text>}` — pass each one
     to `SendMessage` to route work to the existing runner pool.
     """
+    if batches:
+        max_batch_id = max(b.batch_id for b in batches)
+        if max_batch_id > pool_size:
+            raise ValueError(
+                f"batch_id {max_batch_id} exceeds pool_size {pool_size}: "
+                f"dispatch would route to a never-spawned runner"
+            )
     return [
         {
             "to": f"runner-{batch.batch_id}",
@@ -739,6 +760,12 @@ Target: {config.target_dir} ({config.file_types})
 Models: advisor={config.advisor_model}, runners={config.runner_model}
 Suggested runners: ~{config.max_runners} | Min priority: P{config.min_priority}
 
+> **TL;DR** — Spawn the advisor (Opus) first; it sizes the runner pool from
+> its own Glob+Grep pass. Spawn that many runners (Sonnet). Advisor dispatches
+> explore (and optionally fix) batches over a live SendMessage dialogue,
+> verifying each output as it lands. End by shutting down each teammate
+> individually, then `TeamDelete()`.
+
 ### Step 1: Create team
 TeamCreate(name="{config.team_name}")
 
@@ -767,8 +794,24 @@ Runners are long-lived — reused across assignments for context accumulation.
 Live two-way dialogue with the advisor throughout. Runners work ONLY on
 what the advisor hands them.
 
-### Step 4: Explore wave → reason → fix wave (optional) → verify
+### Step 4: Run the explore → reason → fix loop
 Advisor dispatches explore assignments, verifies each runner's output as it
 lands (not in bulk), reasons over aggregated findings, optionally dispatches
-fix assignments, then sends final report to team-lead.
+fix assignments, then sends the final structured report to team-lead.
+
+### Step 5: Final report
+Advisor's final message to team-lead is a structured summary:
+- Top-N actions (highest impact first)
+- Findings list with status (CONFIRMED / REJECTED / FIXED)
+- Test results (if a fix wave ran)
+- Follow-ups
+
+### Step 6: Shutdown + clean up
+Shut down each teammate individually (broadcast `"*"` with structured
+messages fails), then delete the team:
+
+  SendMessage(to="advisor",  message={{ "type": "shutdown_request" }})
+  SendMessage(to="runner-1", message={{ "type": "shutdown_request" }})
+  ...
+  TeamDelete()
 """

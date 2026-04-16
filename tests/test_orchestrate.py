@@ -1,5 +1,7 @@
 """Tests for advisor.orchestrate module."""
 
+import pytest
+
 from advisor.orchestrate import (
     default_team_config,
     build_explore_agent,
@@ -221,11 +223,22 @@ class TestRunnerPool:
                 complexity="low",
             ),
         ]
-        specs = build_runner_dispatch_messages(batches)
+        specs = build_runner_dispatch_messages(batches, pool_size=len(batches))
 
         assert [s["to"] for s in specs] == ["runner-1", "runner-2"]
         assert "a.py" in specs[0]["message"]
         assert "b.py" in specs[1]["message"]
+
+    def test_dispatch_messages_raises_when_batch_id_exceeds_pool_size(self):
+        batches = [
+            FocusBatch(
+                batch_id=3,
+                tasks=(FocusTask("c.py", 2, "..."),),
+                complexity="low",
+            ),
+        ]
+        with pytest.raises(ValueError, match="batch_id 3 exceeds pool_size 2"):
+            build_runner_dispatch_messages(batches, pool_size=2)
 
 
 class TestRenderPipeline:

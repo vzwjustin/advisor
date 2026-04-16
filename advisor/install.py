@@ -143,7 +143,9 @@ def install(path: Path | None = None, body: str = NUDGE_BODY) -> InstallResult:
     current = target.read_text(encoding="utf-8") if target.exists() else ""
     new_contents, action = apply_nudge(current, body)
     if action != "unchanged":
-        target.write_text(new_contents, encoding="utf-8")
+        tmp = target.with_suffix(target.suffix + ".tmp")
+        tmp.write_text(new_contents, encoding="utf-8")
+        os.replace(tmp, target)
     return InstallResult(path=target, action=action)
 
 
@@ -183,25 +185,25 @@ def ensure_nudge(
     skill_result_action = "unchanged"
     skill_target = skill_path or default_skill_path()
 
+    out = stream if stream is not None else sys.stderr
+    from . import _style
+
     try:
         current = target.read_text(encoding="utf-8") if target.exists() else ""
         if START_MARKER not in current or END_MARKER not in current:
             nudge_result = install(path=target)
-    except (OSError, UnicodeDecodeError):
-        # Nudge install failed; still try the skill install below.
-        pass
+    except (OSError, UnicodeDecodeError) as exc:
+        print(_style.dim(f"  warn: nudge: {exc}", stream=out), file=out)
 
     try:
         if not skill_target.exists() or skill_target.read_text(encoding="utf-8") != SKILL_MD:
             skill_res = install_skill(path=skill_target)
             skill_result_action = skill_res.action
-    except (OSError, UnicodeDecodeError):
+    except (OSError, UnicodeDecodeError) as exc:
+        print(_style.dim(f"  warn: skill: {exc}", stream=out), file=out)
         skill_result_action = "unchanged"
 
     if nudge_result.action == "installed" or skill_result_action in ("installed", "updated"):
-        from . import _style
-
-        out = stream if stream is not None else sys.stderr
         check = _style.glyph("✓", "+", stream=out)
         check = _style.paint(check, "green", stream=out)
 
@@ -214,6 +216,7 @@ def ensure_nudge(
         lines = ["", f"{check} advisor: first-run setup complete."]
         for piece in pieces:
             lines.append(f"  {piece}")
+        lines.append(f"  {_style.paint('run:', 'cyan', 'bold', stream=out)} /advisor <dir>")
         lines.append(_style.dim(
             f"  opt out: {OPT_OUT_ENV}=1  ·  remove: advisor uninstall",
             stream=out,
@@ -230,7 +233,9 @@ def uninstall(path: Path | None = None) -> InstallResult:
     current = target.read_text(encoding="utf-8")
     new_contents, action = remove_nudge(current)
     if action == "removed":
-        target.write_text(new_contents, encoding="utf-8")
+        tmp = target.with_suffix(target.suffix + ".tmp")
+        tmp.write_text(new_contents, encoding="utf-8")
+        os.replace(tmp, target)
     return InstallResult(path=target, action=action)
 
 
@@ -264,10 +269,14 @@ def install_skill(
             current = ""
         if current == body:
             return InstallResult(path=target, action="unchanged")
-        target.write_text(body, encoding="utf-8")
+        tmp = target.with_suffix(target.suffix + ".tmp")
+        tmp.write_text(body, encoding="utf-8")
+        os.replace(tmp, target)
         return InstallResult(path=target, action="updated")
 
-    target.write_text(body, encoding="utf-8")
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_text(body, encoding="utf-8")
+    os.replace(tmp, target)
     return InstallResult(path=target, action="installed")
 
 

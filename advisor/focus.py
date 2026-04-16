@@ -131,6 +131,9 @@ def create_focus_batches(
 
 def format_dispatch_plan(tasks: list[FocusTask]) -> str:
     """Format tasks into a readable dispatch plan."""
+    if not tasks:
+        return "## Dispatch Plan\nNo files matched — nothing to dispatch.\n"
+
     lines = [
         "## Dispatch Plan",
         f"Dispatching {len(tasks)} focused agents in parallel:",
@@ -144,6 +147,9 @@ def format_dispatch_plan(tasks: list[FocusTask]) -> str:
 
 def format_batch_plan(batches: list[FocusBatch]) -> str:
     """Format batches into a readable dispatch plan."""
+    if not batches:
+        return "## Batch Dispatch Plan\nNo files matched — nothing to dispatch.\n"
+
     total_files = sum(len(b.tasks) for b in batches)
     lines = [
         "## Batch Dispatch Plan",
@@ -156,6 +162,6 @@ def format_batch_plan(batches: list[FocusBatch]) -> str:
             f"top P{b.top_priority}) — {len(b.tasks)} file(s):"
         )
         for t in b.tasks:
-            lines.append(f"  - P{t.priority} `{t.file_path}`")
+            lines.append(f"  - **P{t.priority}** `{t.file_path}`")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"

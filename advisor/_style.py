@@ -1,8 +1,10 @@
-"""Tiny terminal-styling helpers — ANSI only when stdout is a TTY.
+"""Tiny terminal-styling helpers — ANSI on by default.
 
-Respects ``NO_COLOR`` (https://no-color.org). When colors are off, every
-helper returns the input string unchanged so output stays byte-identical
-for pipes, tests, and dumb terminals.
+Colors are emitted unconditionally so subprocess contexts (Claude Code's
+Bash tool, IDEs, captured output) get the same styled view as a direct
+terminal session. Opt out with ``NO_COLOR=1`` (https://no-color.org) or
+``TERM=dumb``; under either, every helper returns the input string
+unchanged for byte-identical pipe output.
 """
 
 from __future__ import annotations
@@ -26,10 +28,19 @@ _CODES = {
 
 
 def supports_color(stream: IO[str] | None = None) -> bool:
+    """Return True when ANSI styling should be emitted.
+
+    The ``stream`` argument is reserved — it's threaded through by every
+    helper so a future per-stream policy (e.g. respect a NO_COLOR env-var
+    set on a captured `io.StringIO`) can be added without touching call
+    sites. Today only process-wide env vars are consulted.
+    """
+    del stream  # reserved for per-stream policy
     if "NO_COLOR" in os.environ:
         return False
-    s = stream if stream is not None else sys.stdout
-    return bool(getattr(s, "isatty", lambda: False)())
+    if os.environ.get("TERM") == "dumb":
+        return False
+    return True
 
 
 def paint(text: str, *styles: str, stream: IO[str] | None = None) -> str:
@@ -61,7 +72,7 @@ _PRIORITY_STYLES: dict[str, tuple[str, ...]] = {
     "5": ("red", "bold"),
     "4": ("magenta", "bold"),
     "3": ("yellow", "bold"),
-    "2": ("cyan",),
+    "2": ("cyan", "bold"),
     "1": ("dim",),
 }
 
@@ -74,11 +85,11 @@ _BACKTICK_RE = re.compile(r"`([^`\n]+)`")
 
 
 def colorize_markdown(text: str, stream: IO[str] | None = None) -> str:
-    """Colorize markdown headers, priority badges, and `paths` for TTY.
+    """Colorize markdown headers, priority badges, and `paths`.
 
-    Returns the input unchanged when stdout is not a TTY or NO_COLOR is set.
+    Returns the input unchanged when ``NO_COLOR`` is set or ``TERM=dumb``.
     Markdown markers (``**``, ``##``, backticks) are preserved so the output
-    still works as a paste-into-Claude artifact when colors happen to be on.
+    still works as a paste-into-Claude artifact even with colors on.
     """
     if not supports_color(stream):
         return text
