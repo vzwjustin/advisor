@@ -33,13 +33,38 @@ origin: custom
 
 # Advisor — Opus-led review-and-fix pipeline
 
-**On activation, output exactly `**Advisor**` on its own line, then
-immediately start calling tools. The user WANTS to see the orchestration
-(TeamCreate, Agent spawns, SendMessage calls) — that's the interesting
-part. What they do NOT want is verbose prompt text dumps. Do NOT print
-or echo the advisor prompt body, the runner prompt body, or protocol
-explanations as text output. Build prompts silently via inline Python
-and pass them directly to Agent calls.**
+**ACTIVATION SEQUENCE — follow in STRICT ORDER, no deviations:**
+
+**Step 1 (text only):** Write `**Advisor mode**`
+
+**Step 2 (BEFORE any Bash):** Call `TeamDelete()` — clears existing team
+
+**Step 3 (BEFORE any Bash):** Call `TeamCreate(name="review")` — creates team
+
+**Step 4 (only AFTER steps 2+3 complete):** Build prompt silently. Prefer the
+in-conversation **Python tool** (see the concrete example below). If you
+must fall back to Bash, write to a per-invocation tmp file — never a
+predictable path like `/tmp/adv.txt` (world-readable on shared hosts, leaks
+the `context` string across local accounts):
+
+```bash
+ADV_PROMPT=$(mktemp -t advisor-prompt)
+ADV_PROMPT="$ADV_PROMPT" python3 -c "import os; from advisor import default_team_config, build_advisor_prompt; open(os.environ['ADV_PROMPT'],'w').write(build_advisor_prompt(default_team_config('TARGET', context='CONTEXT')))" 2>/dev/null
+```
+
+**Step 5:** Spawn Agent with the prompt you just built (read from
+`$ADV_PROMPT` if you used the Bash fallback, or pass the Python-tool
+result directly).
+
+**RULE: NO Bash before TeamDelete and TeamCreate. ZERO exceptions.**
+The user must see TeamDelete and TeamCreate FIRST before any Bash runs.
+Bash is for prompt-building ONLY and happens AFTER the team exists.
+
+**Keep ALL output minimal:**
+- NO file listings, NO ls, NO cat
+- NO verbose Python in output
+- NO long explanations
+- ONLY: TeamDelete → TeamCreate → (quiet bash) → Agent spawns
 
 A one-command entry point for a multi-agent review (and optional fix loop)
 driven entirely by Opus with Sonnet runners as its hands. Runs through
@@ -48,11 +73,39 @@ Claude Code's native team tools — no external API calls.
 Target directory: if the user did not specify one, default to the current
 working directory.
 
-**IMPORTANT: Build the advisor and runner prompts by importing from the
-`advisor` Python package directly (inline Python via Bash), but do NOT
-print or echo the prompt text to the user. Capture it into a variable
-and pass it to the Agent call. The user is a vibe coder — they want
-results, not protocol internals.**
+**IMPORTANT: Build prompts using the Python tool (NOT Bash python -c).**
+
+**Correct API signature:**
+```python
+default_team_config(
+    target_dir: str,           # required - the directory to review
+    team_name: str = "review",
+    file_types: str = "*.py",
+    max_runners: int = 5,
+    min_priority: int = 3,
+    context: str = "",          # ← user's request goes HERE (not 'user_request')
+    advisor_model: str = "opus",
+    runner_model: str = "sonnet",
+)
+```
+
+**Concrete example (use this pattern verbatim):**
+```python
+from advisor import default_team_config, build_advisor_prompt
+config = default_team_config(
+    target_dir="/Users/.../project",
+    context="Audit codebase for UI enhancements"  # user's request as context
+)
+prompt = build_advisor_prompt(config)
+# Now pass `prompt` to Agent() — DO NOT print
+```
+
+**NEVER do these (they dump verbose text to user output):**
+- ❌ `advisor prompt advisor ./src` (CLI dumps prompt text)
+- ❌ `Bash(python3 -c "...")` (shows code in output)
+- ❌ Use kwarg `user_request` (it doesn't exist — use `context`)
+
+User sees only: `**Advisor mode**` → `[TeamCreate]` → `[Agent...]`
 
 ## Architecture
 
@@ -84,11 +137,19 @@ writing.
 
 ## Protocol
 
-### 0. Clean slate
+### 0. Clean slate (ALWAYS do this first)
+
+**Check for existing team and delete if present:**
 
 ```
-TeamDelete()   # only if a previous team exists
+⏺ ListTeamInfo
+  ⎿ (check if team "review" exists)
+
+If team exists → TeamDelete() first
+If error "Already leading team" → TeamDelete() then retry
 ```
+
+**Never skip this step** — the error "Already leading team" means you forgot to delete first.
 
 ### 1. Create the team (no runners yet)
 
@@ -108,8 +169,8 @@ Agent({
 })
 ```
 
-Use `advisor prompt advisor <target>` to get the exact prompt body. The
-advisor prompt encodes the full six-step flow:
+Build the prompt silently via inline Python (see IMPORTANT section above).
+The advisor prompt encodes the full six-step flow:
 
 1. **Glob + Grep directly** — Opus builds the structural map itself.
 2. **Rank and size the pool** — Opus scores P1–P5 from the Glob+Grep map

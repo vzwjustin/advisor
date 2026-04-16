@@ -3,6 +3,16 @@
 A final agent reviews all findings from focused agents,
 confirms whether each is real and interesting, and filters out noise. This
 prevents false positives from wasting human attention.
+
+Relationship with `orchestrate.build_verify_message`:
+    This module (``build_verify_prompt`` + ``Finding`` + ``parse_findings_from_text``)
+    is the **structured-findings path**: callers collect ``Finding`` objects,
+    format them into a fenced block, and ask an agent to CONFIRM/REJECT each.
+    ``orchestrate.build_verify_message`` is a **different, complementary**
+    helper — a short SendMessage used to resume the live advisor mid-pipeline
+    with an already-assembled findings string. Both are public API and
+    intentionally separate: one is for offline/batch verification, the other
+    for the in-team advisor loop. Don't wire them together blindly.
 """
 
 from __future__ import annotations
@@ -10,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Finding:
     """A single finding from a focused agent."""
     file_path: str

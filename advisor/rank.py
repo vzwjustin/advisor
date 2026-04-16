@@ -7,6 +7,7 @@ Work top-down so agents spend time where it matters most.
 
 from __future__ import annotations
 
+import fnmatch
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -53,13 +54,70 @@ SKIP_EXTENSIONS = frozenset({
     ".jpg", ".jpeg", ".gif", ".ico", ".woff", ".woff2", ".ttf",
 })
 
+ADVISORIGNORE_FILENAME = ".advisorignore"
 
-@dataclass(frozen=True)
+
+@dataclass(frozen=True, slots=True)
 class RankedFile:
     """A file with its computed priority score."""
     path: str
     priority: int
     reasons: tuple[str, ...]
+
+
+def load_advisorignore(base_dir: str | Path) -> list[str]:
+    """Load ignore patterns from .advisorignore file if it exists.
+
+    Args:
+        base_dir: Directory to look for .advisorignore file.
+
+    Returns:
+        List of glob patterns from the file, empty list if file doesn't exist.
+        Comments (lines starting with #) and blank lines are ignored.
+    """
+    path = Path(base_dir) / ADVISORIGNORE_FILENAME
+    if not path.exists():
+        return []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return []
+    patterns = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            patterns.append(stripped)
+    return patterns
+
+
+def _matches_any_pattern(file_path: str, patterns: list[str]) -> bool:
+    """Check if a file path matches any glob pattern.
+
+    Supports both glob-style wildcards (*, ?, **) and directory-specific
+    patterns (patterns ending with / match directories).
+    """
+    if not patterns:
+        return False
+    path = Path(file_path)
+    # Check against full path and individual path parts
+    path_str = str(path)
+    name = path.name
+    for pattern in patterns:
+        # Pattern ending with / matches directories only
+        if pattern.endswith("/"):
+            dir_pattern = pattern.rstrip("/")
+            if any(fnmatch.fnmatch(part, dir_pattern) for part in path.parts):
+                return True
+        # Match against filename only
+        elif fnmatch.fnmatch(name, pattern):
+            return True
+        # Match against full path
+        elif fnmatch.fnmatch(path_str, pattern):
+            return True
+        # Match against any path component (e.g., 'tests/' matches 'src/tests/file.py')
+        elif any(fnmatch.fnmatch(part, pattern.rstrip("/")) for part in path.parts):
+            return True
+    return False
 
 
 # Pre-compiled word-boundary regexes per priority tier.
@@ -100,19 +158,26 @@ def _score_file(path: str, content: str) -> tuple[int, tuple[str, ...]]:
     return best_priority, winning_reasons
 
 
-def rank_files(file_paths: list[str], read_fn: Callable[[str], str] | None = None) -> list[RankedFile]:
+def rank_files(
+    file_paths: list[str],
+    read_fn: Callable[[str], str] | None = None,
+    ignore_patterns: list[str] | None = None,
+) -> list[RankedFile]:
     """Rank files by vulnerability likelihood, highest priority first.
 
     Args:
         file_paths: List of file paths to rank.
         read_fn: Optional callable(path) -> str that returns file content.
                  If None, ranks by filename alone.
+        ignore_patterns: Optional list of glob patterns to skip. Use
+                        load_advisorignore() to get patterns from file.
 
     Returns:
         A new list of RankedFile sorted by priority descending, then by path
         ascending for deterministic tie-breaking across platforms.
     """
     ranked: list[RankedFile] = []
+    patterns = ignore_patterns or []
 
     for fp in file_paths:
         p = Path(fp)
@@ -120,6 +185,8 @@ def rank_files(file_paths: list[str], read_fn: Callable[[str], str] | None = Non
         if any(part in SKIP_DIRS for part in p.parts):
             continue
         if p.suffix in SKIP_EXTENSIONS:
+            continue
+        if _matches_any_pattern(fp, patterns):
             continue
 
         content = ""

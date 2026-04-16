@@ -9,10 +9,36 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 from .skill_asset import SKILL_MD
+
+
+def _atomic_write_text(target: Path, text: str) -> None:
+    """Atomically write `text` to `target` via a unique tmp file in the same dir.
+
+    Uses a randomized tmp name (not a predictable `.tmp` suffix) to avoid
+    symlink-follow TOCTOU on shared hosts, and cleans up the tmp file if
+    the write or replace fails partway through.
+    """
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{target.name}.",
+        suffix=".tmp",
+        dir=str(target.parent),
+    )
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, target)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 OPT_OUT_ENV = "ADVISOR_NO_NUDGE"
 
@@ -41,10 +67,16 @@ ask questions when stuck, send progress pings, and receive real-time
 answers; Opus watches each runner and verifies their output the moment it
 lands. Runners work ONLY on what Opus hands them.
 
+**Startup rule (ADHD-friendly output):** When `/advisor` is invoked, the
+FIRST tools called must be `TeamDelete` then `TeamCreate` — native Claude
+Code tools that show as clean orchestration, not Bash. Only AFTER the team
+exists should any Bash run (for silent prompt-building only, output
+redirected to /tmp). User sees: `**Advisor mode**` → TeamDelete →
+TeamCreate → (silent bash) → Agent spawns. NO Bash before TeamCreate.
+
 - Slash command: `/advisor [optional target dir]`
 - Package: https://github.com/vzwjustin/advisor
 - Install: `uvx advisor install` (this block + skill) · `pipx install advisor`
-- `advisor prompt advisor <dir>` — print the exact Opus prompt body
 - `advisor pipeline <dir>` — print the full pipeline reference
 """
 
@@ -143,9 +175,7 @@ def install(path: Path | None = None, body: str = NUDGE_BODY) -> InstallResult:
     current = target.read_text(encoding="utf-8") if target.exists() else ""
     new_contents, action = apply_nudge(current, body)
     if action != "unchanged":
-        tmp = target.with_suffix(target.suffix + ".tmp")
-        tmp.write_text(new_contents, encoding="utf-8")
-        os.replace(tmp, target)
+        _atomic_write_text(target, new_contents)
     return InstallResult(path=target, action=action)
 
 
@@ -204,19 +234,25 @@ def ensure_nudge(
         skill_result_action = "unchanged"
 
     if nudge_result.action == "installed" or skill_result_action in ("installed", "updated"):
-        check = _style.glyph("✓", "+", stream=out)
-        check = _style.paint(check, "green", stream=out)
-
         pieces: list[str] = []
         if nudge_result.action == "installed":
-            pieces.append(f"nudge → {nudge_result.path}")
+            pieces.append(f"  nudge     → {nudge_result.path}")
         if skill_result_action in ("installed", "updated"):
-            pieces.append(f"/advisor skill → {skill_target}")
+            pieces.append(f"  skill     → {skill_target}")
 
-        lines = ["", f"{check} advisor: first-run setup complete."]
-        for piece in pieces:
-            lines.append(f"  {piece}")
-        lines.append(f"  {_style.paint('run:', 'cyan', 'bold', stream=out)} /advisor <dir>")
+        lines = [
+            "",
+            _style.banner("advisor first-run setup", width=35),
+            "",
+            _style.success_box("Setup complete!", stream=out),
+        ]
+        lines.extend(pieces)
+        lines.append("")
+        lines.append(f"  {_style.paint('🚀 Quick start:', 'cyan', 'bold', stream=out)}")
+        lines.append(f"     /advisor <dir>      {_style.dim('Start a code review', stream=out)}")
+        lines.append(f"     advisor status      {_style.dim('Check installation', stream=out)}")
+        lines.append(f"     advisor --help      {_style.dim('See all commands', stream=out)}")
+        lines.append("")
         lines.append(_style.dim(
             f"  opt out: {OPT_OUT_ENV}=1  ·  remove: advisor uninstall",
             stream=out,
@@ -233,9 +269,7 @@ def uninstall(path: Path | None = None) -> InstallResult:
     current = target.read_text(encoding="utf-8")
     new_contents, action = remove_nudge(current)
     if action == "removed":
-        tmp = target.with_suffix(target.suffix + ".tmp")
-        tmp.write_text(new_contents, encoding="utf-8")
-        os.replace(tmp, target)
+        _atomic_write_text(target, new_contents)
     return InstallResult(path=target, action=action)
 
 
@@ -269,14 +303,10 @@ def install_skill(
             current = ""
         if current == body:
             return InstallResult(path=target, action="unchanged")
-        tmp = target.with_suffix(target.suffix + ".tmp")
-        tmp.write_text(body, encoding="utf-8")
-        os.replace(tmp, target)
+        _atomic_write_text(target, body)
         return InstallResult(path=target, action="updated")
 
-    tmp = target.with_suffix(target.suffix + ".tmp")
-    tmp.write_text(body, encoding="utf-8")
-    os.replace(tmp, target)
+    _atomic_write_text(target, body)
     return InstallResult(path=target, action="installed")
 
 

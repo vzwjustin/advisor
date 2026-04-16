@@ -9,7 +9,7 @@ Core building blocks:
   verify — Verification pass to filter noise from findings
 """
 
-from .rank import RankedFile, rank_files, rank_to_prompt
+from .rank import RankedFile, load_advisorignore, rank_files, rank_to_prompt
 from .focus import (
     FocusBatch,
     FocusTask,
@@ -56,6 +56,7 @@ from .orchestrate import (
 __all__ = [
     # rank
     "RankedFile",
+    "load_advisorignore",
     "rank_files",
     "rank_to_prompt",
     # focus

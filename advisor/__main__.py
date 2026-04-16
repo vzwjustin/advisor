@@ -157,9 +157,10 @@ def cmd_plan(args: argparse.Namespace) -> int:
         min_priority=args.min_priority,
     )
     if not tasks:
-        glyph = _style.glyph("·", "-")
-        print(_style.dim(f"{glyph} No files at priority P{args.min_priority}+ in {target}."))
-        print(f"  {_style.paint('hint:', 'cyan', 'bold')} try --min-priority 1 to include all files.")
+        glyph = _style.glyph("🔍", "[-]")
+        print(_style.warning_box(f"No files at priority P{args.min_priority}+ in {target}"))
+        print(f"  {_style.paint('💡 Tip:', 'cyan', 'bold')} Try {_style.paint('--min-priority 1', 'yellow')} to include all files")
+        print(f"  {_style.paint('   or:', 'dim')}  Adjust {_style.paint('--file-types', 'yellow')} to match your file extensions")
         return 0
 
     if args.batch_size and args.batch_size > 1:
@@ -211,8 +212,8 @@ def _component_line(c: ComponentStatus) -> str:
 
 
 def _format_status(s: Status, version: str) -> str:
-    header = _style.paint(f"advisor {version}", "bold")
-    lines = [header, _component_line(s.nudge), _component_line(s.skill)]
+    header = _style.banner(f"advisor {version}", width=40)
+    lines = [header, "", _component_line(s.nudge), _component_line(s.skill)]
     if s.opt_out:
         warn = _style.paint(_style.glyph("⚠", "!"), "yellow")
         lines.append(f"  {warn} auto-install disabled ({OPT_OUT_ENV} set)")

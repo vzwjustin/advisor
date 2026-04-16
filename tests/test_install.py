@@ -148,9 +148,10 @@ class TestEnsureNudge:
         assert skill.exists()
         assert skill.read_text(encoding="utf-8") == SKILL_MD
         notice = stream.getvalue()
-        assert "advisor: first-run setup" in notice
+        assert "advisor first-run setup" in notice
         assert "nudge" in notice
-        assert "/advisor skill" in notice
+        assert "skill" in notice
+        assert "Setup complete!" in notice
 
     def test_unchanged_when_already_installed(self, tmp_path: Path):
         target = tmp_path / "CLAUDE.md"

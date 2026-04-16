@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from .rank import RankedFile
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class FocusTask:
     """A single-file task with advisor guidance attached."""
     file_path: str
@@ -21,7 +21,7 @@ class FocusTask:
     prompt: str
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class FocusBatch:
     """A bundle of files for a single runner.
 

@@ -67,6 +67,54 @@ def dim(text: str, stream: IO[str] | None = None) -> str:
     return paint(text, "dim", stream=stream)
 
 
+def spinner_frame(i: int) -> str:
+    """Return a spinner character for the given frame index.
+
+    ADHD-friendly progress indicator. Use in a loop to show activity.
+    Example: for i in range(100): print(f"\\r{spinner_frame(i)} Working...", end="")
+    """
+    frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    return paint(frames[i % len(frames)], "cyan", "bold")
+
+
+def banner(text: str, width: int = 50, stream: IO[str] | None = None) -> str:
+    """Create a visual banner with box-drawing characters.
+
+    Helps with visual scanning and adds clear hierarchy to CLI output.
+    """
+    if not supports_color(stream):
+        return f"== {text} =="
+    line = "━" * width
+    centered = text.center(width - 4)
+    return f"{paint('┏', 'cyan')}{paint(line, 'cyan')}{paint('┓', 'cyan')}\n" \
+           f"{paint('┃', 'cyan')}  {paint(centered, 'bold')}  {paint('┃', 'cyan')}\n" \
+           f"{paint('┗', 'cyan')}{paint(line, 'cyan')}{paint('┛', 'cyan')}"
+
+
+def success_box(text: str, stream: IO[str] | None = None) -> str:
+    """Draw a green success box with checkmark."""
+    mark = glyph("✓", "[OK]")
+    if not supports_color(stream):
+        return f"{mark} {text}"
+    return f"{paint(mark, 'green', 'bold')} {paint(text, 'green')}"
+
+
+def info_box(text: str, stream: IO[str] | None = None) -> str:
+    """Draw a blue info box with info symbol."""
+    mark = glyph("ℹ", "[i]")
+    if not supports_color(stream):
+        return f"{mark} {text}"
+    return f"{paint(mark, 'blue', 'bold')} {paint(text, 'blue')}"
+
+
+def warning_box(text: str, stream: IO[str] | None = None) -> str:
+    """Draw a yellow warning box with warning symbol."""
+    mark = glyph("⚠", "[!]")
+    if not supports_color(stream):
+        return f"{mark} {text}"
+    return f"{paint(mark, 'yellow', 'bold')} {paint(text, 'yellow')}"
+
+
 # Priority badge colors — high-contrast on both light and dark terminals.
 _PRIORITY_STYLES: dict[str, tuple[str, ...]] = {
     "5": ("red", "bold"),
