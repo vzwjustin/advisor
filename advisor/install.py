@@ -182,16 +182,25 @@ def ensure_nudge(
         skill_result_action = "unchanged"
 
     if nudge_result.action == "installed" or skill_result_action in ("installed", "updated"):
+        from . import _style
+
         out = stream if stream is not None else sys.stderr
+        check = _style.glyph("✓", "+", stream=out)
+        check = _style.paint(check, "green", stream=out)
+
         pieces: list[str] = []
         if nudge_result.action == "installed":
             pieces.append(f"nudge → {nudge_result.path}")
         if skill_result_action in ("installed", "updated"):
             pieces.append(f"/advisor skill → {skill_target}")
-        lines = ["advisor: first-run setup complete."]
+
+        lines = ["", f"{check} advisor: first-run setup complete."]
         for piece in pieces:
             lines.append(f"  {piece}")
-        lines.append(f"Opt out: {OPT_OUT_ENV}=1  |  Remove: `advisor uninstall`")
+        lines.append(_style.dim(
+            f"  opt out: {OPT_OUT_ENV}=1  ·  remove: advisor uninstall",
+            stream=out,
+        ))
         print("\n".join(lines), file=out)
 
     return nudge_result

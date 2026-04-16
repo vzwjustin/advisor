@@ -18,6 +18,7 @@ def _get_version() -> str:
     except Exception:
         return "dev"
 
+from . import _style
 from .focus import (
     create_focus_batches,
     create_focus_tasks,
@@ -43,19 +44,26 @@ from .orchestrate import (
 from .rank import rank_files
 
 
-_ACTION_SYMBOLS: dict[str, tuple[str, str]] = {
-    "installed": ("+", "installed"),
-    "updated": ("~", "updated"),
-    "unchanged": ("-", "unchanged"),
-    "removed": ("x", "removed"),
-    "absent": ("-", "not found"),
-    "skipped": ("-", "skipped"),
+# (action_label, fancy_glyph, ascii_glyph, color)
+_ACTION_DISPLAY: dict[str, tuple[str, str, str, str | None]] = {
+    "installed": ("installed", "✓", "+", "green"),
+    "updated":   ("updated",   "↻", "~", "cyan"),
+    "unchanged": ("unchanged", "·", "-", "dim"),
+    "removed":   ("removed",   "✗", "x", "yellow"),
+    "absent":    ("not found", "·", "-", "dim"),
+    "skipped":   ("skipped",   "·", "-", "dim"),
 }
 
 
 def _fmt_action(component: str, action: str, path: object) -> str:
-    symbol, label = _ACTION_SYMBOLS.get(action, ("?", action))
-    return f"[{symbol}] {component} {label}: {path}"
+    label, fancy, plain, color = _ACTION_DISPLAY.get(
+        action, (action, "?", "?", None)
+    )
+    mark = _style.glyph(fancy, plain)
+    if color:
+        mark = _style.paint(mark, color)
+    # Pad component (max len in current set: "skill" = 5 → use 6)
+    return f"{mark} {component:<6} {label:<10} {path}"
 
 
 def _config_from_args(args: argparse.Namespace) -> TeamConfig:
@@ -120,12 +128,12 @@ def cmd_plan(args: argparse.Namespace) -> int:
     """Rank local files and print a batch dispatch plan — no agents spawned."""
     target = Path(args.target)
     if not target.exists():
-        print(f"error: target not found: {target}", file=sys.stderr)
+        print(f"{_style.err('error:')} target not found: {target}", file=sys.stderr)
         return 2
 
-    paths, err = _safe_rglob(target, args.file_types)
-    if err is not None:
-        print(f"error: {err}", file=sys.stderr)
+    paths, glob_err = _safe_rglob(target, args.file_types)
+    if glob_err is not None:
+        print(f"{_style.err('error:')} {glob_err}", file=sys.stderr)
         return 2
 
     ranked = rank_files(paths or [], read_fn=_read_head)
@@ -135,7 +143,8 @@ def cmd_plan(args: argparse.Namespace) -> int:
         min_priority=args.min_priority,
     )
     if not tasks:
-        print(f"No files at priority P{args.min_priority}+ in {target}. Try --min-priority 1 to include all files.")
+        print(f"No files at priority P{args.min_priority}+ in {target}.")
+        print(_style.dim("  hint: try --min-priority 1 to include all files."))
         return 0
 
     if args.batch_size and args.batch_size > 1:
@@ -183,7 +192,7 @@ def cmd_install(args: argparse.Namespace) -> int:
     try:
         nudge_result = install_nudge(path=nudge_target)
     except (OSError, UnicodeDecodeError) as exc:
-        print(f"error (nudge): {exc}", file=sys.stderr)
+        print(f"{_style.err('error')} (nudge): {exc}", file=sys.stderr)
         return 1
     print(_fmt_action("nudge", nudge_result.action, nudge_result.path))
 
@@ -193,7 +202,7 @@ def cmd_install(args: argparse.Namespace) -> int:
         try:
             skill_result = install_skill(path=skill_target)
         except (OSError, UnicodeDecodeError) as exc:
-            print(f"error (skill): {exc}", file=sys.stderr)
+            print(f"{_style.err('error')} (skill): {exc}", file=sys.stderr)
             return 1
         skill_action = skill_result.action
         print(_fmt_action("skill", skill_result.action, skill_result.path))
@@ -214,7 +223,7 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     try:
         nudge_result = uninstall_nudge(path=nudge_target)
     except (OSError, UnicodeDecodeError) as exc:
-        print(f"error (nudge): {exc}", file=sys.stderr)
+        print(f"{_style.err('error')} (nudge): {exc}", file=sys.stderr)
         return 1
     print(_fmt_action("nudge", nudge_result.action, nudge_result.path))
 
@@ -224,7 +233,7 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
         try:
             skill_result = uninstall_skill(path=skill_target)
         except (OSError, UnicodeDecodeError) as exc:
-            print(f"error (skill): {exc}", file=sys.stderr)
+            print(f"{_style.err('error')} (skill): {exc}", file=sys.stderr)
             return 1
         skill_action = skill_result.action
         print(_fmt_action("skill", skill_result.action, skill_result.path))
@@ -339,7 +348,15 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command not in _NUDGE_SKIP_COMMANDS:
         ensure_nudge()
-    return args.func(args)
+    try:
+        return args.func(args)
+    except BrokenPipeError:
+        # Downstream pipe closed (e.g. `| head`); exit quietly.
+        try:
+            sys.stdout.close()
+        except Exception:
+            pass
+        return 0
 
 
 if __name__ == "__main__":
