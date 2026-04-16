@@ -23,51 +23,47 @@ Priority scale: **P5** auth/secrets · **P4** user input/parsing · **P3** handl
 
 See `CLAUDE.md` for the full protocol and orchestration rules.
 
-## Install
-
-**One-liner (recommended):**
-
-```bash
-uvx --from git+https://github.com/vzwjustin/advisor advisor pipeline src/
-```
-
-No clone, no venv, no editable install. [`uv`](https://docs.astral.sh/uv/) fetches the package, runs the `advisor` CLI, and cleans up. Install uv once with `brew install uv` or `curl -LsSf https://astral.sh/uv/install.sh | sh`.
-
-**pip / pipx:**
+## Install (30 seconds)
 
 ```bash
 pipx install git+https://github.com/vzwjustin/advisor
-# or
-pip install git+https://github.com/vzwjustin/advisor
+advisor status
 ```
 
-**Local dev:**
+That's it. The first run wires up `~/.claude/CLAUDE.md` and the `/advisor` slash command automatically. `advisor status` confirms what landed where.
+
+<details>
+<summary>Other install methods</summary>
 
 ```bash
-git clone https://github.com/vzwjustin/advisor && cd advisor
-pip install -e .
+# Zero-install one-shot (uv)
+uvx --from git+https://github.com/vzwjustin/advisor advisor pipeline src/
+
+# Plain pip
+pip install git+https://github.com/vzwjustin/advisor
+
+# Local dev
+git clone https://github.com/vzwjustin/advisor && cd advisor && pip install -e .
 ```
 
 Requires Python ≥ 3.10. Package name: `advisor-agent`. Import: `advisor`. CLI: `advisor`.
 
-### Nudge Claude Code to use advisor (automatic)
+</details>
 
-The first time you run **any** `advisor` CLI command, a sentinel-wrapped nudge block is appended to `~/.claude/CLAUDE.md` so Claude Code reaches for the advisor tool on complex tasks. The block is idempotent — reruns never duplicate it, and subsequent runs are silent.
-
-```bash
-# first run installs the nudge, then executes the pipeline command
-uvx --from git+https://github.com/vzwjustin/advisor advisor pipeline src/
-```
-
-Opt out by setting `ADVISOR_NO_NUDGE=1` in your shell, or manage the block manually:
+<details>
+<summary>Manage the nudge / skill manually</summary>
 
 ```bash
-advisor install              # append / update the block (no-op if current)
-advisor uninstall            # cleanly remove the block
+advisor status               # health check (alias: advisor doctor)
+advisor install              # append / update the nudge + skill (idempotent)
+advisor install --check      # dry-run: print status, exit 3 if anything missing
+advisor uninstall            # cleanly remove the nudge + skill
 advisor install --path /x    # target a different CLAUDE.md
 ```
 
-The block is wrapped in `<!-- advisor:nudge:start -->` / `<!-- advisor:nudge:end -->` markers so reinstalls update in place.
+Opt out of auto-install with `ADVISOR_NO_NUDGE=1`. The CLAUDE.md block is wrapped in `<!-- advisor:nudge:start -->` / `<!-- advisor:nudge:end -->` markers so reinstalls update in place.
+
+</details>
 
 ## CLI
 
@@ -79,8 +75,9 @@ advisor plan src/                      # rank local files, print dispatch plan
 advisor prompt explore src/            # Step 1 prompt (Haiku explorer)
 advisor prompt rank src/  < inventory  # Step 2 prompt (Opus ranker)
 advisor prompt verify src/ < findings  # Step 4 prompt (Opus verifier)
-advisor install                        # append nudge to ~/.claude/CLAUDE.md
-advisor uninstall                      # remove the nudge block
+advisor status                         # health check (alias: doctor)
+advisor install                        # install nudge + /advisor skill
+advisor uninstall                      # remove nudge + /advisor skill
 ```
 
 Flags: `--team`, `--file-types`, `--max-runners`, `--min-priority`, `--context`.

@@ -26,9 +26,13 @@ from .focus import (
     format_dispatch_plan,
 )
 from .install import (
+    ComponentStatus,
+    OPT_OUT_ENV,
+    Status,
     ensure_nudge,
     install as install_nudge,
     install_skill,
+    status as get_status,
     uninstall as uninstall_nudge,
     uninstall_skill,
 )
@@ -190,10 +194,53 @@ _STRICT_NOOP_EXIT = 3
 _NOOP_ACTIONS = frozenset({"unchanged", "absent"})
 
 
+def _component_line(c: ComponentStatus) -> str:
+    if c.present and c.current:
+        mark = _style.paint(_style.glyph("✓", "+"), "green")
+        state = _style.paint("installed", "green")
+    elif c.present and not c.current:
+        mark = _style.paint(_style.glyph("↻", "~"), "yellow")
+        state = _style.paint("outdated", "yellow")
+    else:
+        mark = _style.paint(_style.glyph("✗", "x"), "red")
+        state = _style.paint("missing", "red")
+    name_col = _style.paint(f"{c.name:<6}", "cyan", "bold")
+    return f"  {mark} {name_col} {state:<10} {_style.dim(str(c.path))}"
+
+
+def _format_status(s: Status, version: str) -> str:
+    header = _style.paint(f"advisor {version}", "bold")
+    lines = [header, _component_line(s.nudge), _component_line(s.skill)]
+    if s.opt_out:
+        warn = _style.paint(_style.glyph("⚠", "!"), "yellow")
+        lines.append(f"  {warn} auto-install disabled ({OPT_OUT_ENV} set)")
+    if not (s.nudge.present and s.skill.present):
+        lines.append(_style.dim("  fix: advisor install"))
+    elif not (s.nudge.current and s.skill.current):
+        lines.append(_style.dim("  fix: advisor install   (refresh outdated bits)"))
+    return "\n".join(lines)
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    """Print a colored health summary of the local advisor install."""
+    nudge_target = Path(args.path) if args.path else None
+    skill_target = Path(args.skill_path) if args.skill_path else None
+    s = get_status(nudge_path=nudge_target, skill_path=skill_target)
+    print(_format_status(s, _get_version()))
+    return 0
+
+
 def cmd_install(args: argparse.Namespace) -> int:
     """Install the /advisor skill AND append the CLAUDE.md nudge."""
     nudge_target = Path(args.path) if args.path else None
     skill_target = Path(args.skill_path) if args.skill_path else None
+
+    if args.check:
+        s = get_status(nudge_path=nudge_target, skill_path=skill_target)
+        print(_format_status(s, _get_version()))
+        # Exit non-zero if anything is missing or outdated, so scripts can branch.
+        ok = s.nudge.present and s.nudge.current and s.skill.present and s.skill.current
+        return 0 if ok else _STRICT_NOOP_EXIT
 
     try:
         nudge_result = install_nudge(path=nudge_target)
@@ -319,7 +366,26 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=f"Exit {_STRICT_NOOP_EXIT} on no-op (unchanged) so scripts can distinguish",
     )
+    p_install.add_argument(
+        "--check",
+        action="store_true",
+        help=(
+            f"Dry-run — print status and exit {_STRICT_NOOP_EXIT} if anything "
+            "is missing or outdated. Writes nothing."
+        ),
+    )
     p_install.set_defaults(func=cmd_install)
+
+    p_status = sub.add_parser(
+        "status",
+        aliases=["doctor"],
+        help="Print a health summary of the advisor install (writes nothing)",
+    )
+    p_status.add_argument("--path", default="", help="Override target CLAUDE.md path")
+    p_status.add_argument(
+        "--skill-path", default="", help="Override target SKILL.md path",
+    )
+    p_status.set_defaults(func=cmd_status)
 
     p_uninstall = sub.add_parser(
         "uninstall",
@@ -346,7 +412,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-_NUDGE_SKIP_COMMANDS = {"install", "uninstall"}
+_NUDGE_SKIP_COMMANDS = {"install", "uninstall", "status", "doctor"}
 
 
 def main(argv: list[str] | None = None) -> int:

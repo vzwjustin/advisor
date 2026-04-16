@@ -14,6 +14,7 @@ from advisor.install import (
     remove_nudge,
     render_block,
     should_auto_nudge,
+    status,
     uninstall,
     uninstall_skill,
 )
@@ -239,3 +240,52 @@ class TestInstallSkill:
         assert result.action == "removed"
         assert not target.exists()
         assert skill_dir.exists()  # kept because user_added.md is still there
+
+
+class TestStatus:
+    def test_missing_when_nothing_installed(self, tmp_path: Path):
+        nudge = tmp_path / "CLAUDE.md"
+        skill = tmp_path / "skills" / "advisor" / "SKILL.md"
+        s = status(nudge_path=nudge, skill_path=skill, env={})
+        assert s.nudge.present is False
+        assert s.nudge.current is False
+        assert s.skill.present is False
+        assert s.opt_out is False
+
+    def test_present_and_current_after_install(self, tmp_path: Path):
+        nudge = tmp_path / "CLAUDE.md"
+        skill = tmp_path / "skills" / "advisor" / "SKILL.md"
+        install(path=nudge)
+        install_skill(path=skill)
+        s = status(nudge_path=nudge, skill_path=skill, env={})
+        assert s.nudge.present and s.nudge.current
+        assert s.skill.present and s.skill.current
+
+    def test_outdated_skill_detected(self, tmp_path: Path):
+        skill = tmp_path / "skills" / "advisor" / "SKILL.md"
+        install_skill(path=skill, body="old body, not the bundled SKILL.md")
+        s = status(nudge_path=tmp_path / "CLAUDE.md", skill_path=skill, env={})
+        assert s.skill.present is True
+        assert s.skill.current is False
+
+    def test_outdated_nudge_detected(self, tmp_path: Path):
+        nudge = tmp_path / "CLAUDE.md"
+        install(path=nudge, body="legacy nudge body that no longer matches")
+        s = status(nudge_path=nudge, skill_path=tmp_path / "missing", env={})
+        assert s.nudge.present is True
+        assert s.nudge.current is False
+
+    def test_opt_out_reflected(self, tmp_path: Path):
+        s = status(
+            nudge_path=tmp_path / "CLAUDE.md",
+            skill_path=tmp_path / "skill",
+            env={OPT_OUT_ENV: "1"},
+        )
+        assert s.opt_out is True
+
+    def test_writes_nothing(self, tmp_path: Path):
+        nudge = tmp_path / "CLAUDE.md"
+        skill = tmp_path / "skills" / "advisor" / "SKILL.md"
+        status(nudge_path=nudge, skill_path=skill, env={})
+        assert not nudge.exists()
+        assert not skill.exists()
