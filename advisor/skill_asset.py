@@ -11,26 +11,27 @@ from __future__ import annotations
 SKILL_MD = '''---
 name: advisor
 description: >-
-  Glasswing review-and-fix pipeline — Opus wakes up first, does Glob+Grep
-  structural discovery itself (it's cheap and the map belongs in Opus's
-  large context window), ranks P1–P5, tells the team-lead how many Sonnet
-  runners to spawn, then dispatches explore and (optionally) fix assignments
-  to the pool. Opus and runners stay in live two-way conversation throughout
-  — runners ask questions and send progress pings, Opus answers in real time
-  and verifies each runner's output the moment it lands.
+  Opus-led code review-and-fix pipeline. The advisor (Opus) wakes up first,
+  does Glob+Grep structural discovery itself, ranks files P1–P5, decides how
+  many Sonnet runners the work warrants, and writes a **unique, tailored
+  prompt for every single runner** based on what it just learned about each
+  file. Runners are not handed a generic prompt — each gets a domain-specific
+  briefing built by the advisor. Opus and runners stay in live two-way
+  conversation throughout: runners ask questions and send progress pings,
+  Opus answers in real time and verifies each runner's output the moment it
+  lands.
 
-  TRIGGER when: the user invokes /advisor, says "run the advisor", "advisor
-  mode", "glasswing review", or when Claude judges that a task benefits from
-  strategic code review across multiple files (3+ files, security audit,
-  root-cause hunt, architectural review, concurrency bugs, or fix-and-review
-  work).
+  TRIGGER when: the user invokes /advisor, says "run the advisor", or
+  "advisor mode", or when Claude judges that a task benefits from strategic
+  code review across multiple files (3+ files, security audit, root-cause
+  hunt, architectural review, concurrency bugs, or fix-and-review work).
 
   DO NOT TRIGGER when: the task is a single trivial edit, a typo fix, a one
   file look-up, or the user explicitly wants something else.
 origin: custom
 ---
 
-# Advisor — Glasswing review-and-fix pipeline
+# Advisor — Opus-led review-and-fix pipeline
 
 **On activation, output exactly `**Advisor**` on its own line, then
 immediately start calling tools. The user WANTS to see the orchestration
@@ -92,7 +93,7 @@ TeamDelete()   # only if a previous team exists
 ### 1. Create the team (no runners yet)
 
 ```
-TeamCreate({ team_name: "glasswing", description: "Glasswing review of <target>" })
+TeamCreate({ team_name: "review", description: "Code review of <target>" })
 ```
 
 ### 2. Spawn the Opus advisor FIRST
@@ -102,7 +103,7 @@ Agent({
   name: "advisor",
   subagent_type: "deep-reasoning",
   model: "opus",
-  team_name: "glasswing",
+  team_name: "review",
   prompt: <build_advisor_prompt(config)>
 })
 ```
@@ -128,32 +129,39 @@ advisor prompt encodes the full six-step flow:
 6. **Verify and report** — Opus sends the final structured report to
    team-lead.
 
-### 3. Spawn the runner pool when Opus tells you to
+### 3. Spawn the runner pool with the advisor's per-runner prompts
 
 Wait for Opus's first SendMessage to team-lead. It will open with
-`## Pool size: N — <rationale>`. Spawn exactly N runners in a single
-message so they come up in parallel:
+`## Pool size: N — <rationale>` followed by a **Dispatch Plan** that
+includes a complete, file-aware prompt for every runner — Opus tailors
+each one to the specific files in that runner's batch using context
+from its Glob+Grep pass.
+
+**Use Opus's per-runner prompts verbatim.** Do not substitute a generic
+`build_runner_pool_prompt(...)` — the whole point of having Opus go
+first is that each runner gets a powerful, domain-specific briefing
+written by the strategist who just read the structural map. A runner
+reviewing auth code gets a different prompt than one reviewing CLI
+utilities.
+
+Spawn exactly N runners in a single message so they come up in parallel:
 
 ```
 Agent({
   name: "runner-1",
   subagent_type: "code-review",
   model: "sonnet",
-  team_name: "glasswing",
+  team_name: "review",
   run_in_background: true,
-  prompt: <build_runner_pool_prompt(1, config)>
+  prompt: <verbatim text from Opus's "### runner-1 / #### Prompt" block>
 })
 Agent({ name: "runner-2", ... })   # only if Opus asked for more than 1
 ...
 ```
 
-Use `advisor prompt advisor <target>` if you need to inspect the runner
-pool prompt by pulling it via the Python package. Essential content:
-"You are runner-N. The advisor runs the review; you are their hands.
-Live two-way dialogue — ask questions when stuck, send progress pings.
-Work ONLY on what the advisor hands you. Two assignment types: explore
-(read + find) and fix (edit + submit diff). Reports go to the advisor,
-not team-lead. Stay alive between assignments — you accumulate context."
+The generic `build_runner_pool_prompt` in the Python API is a fallback
+for cases when you're spawning runners without the advisor — the live
+pipeline never uses it.
 
 After spawning the pool, tell Opus they're up:
 

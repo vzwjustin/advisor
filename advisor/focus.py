@@ -1,6 +1,6 @@
 """File-level focus dispatcher — one batch of files per runner.
 
-Glasswing technique #1: split review work across parallel agents. The advisor
+Split review work across parallel agents. The advisor
 (Opus) decides batch sizes dynamically — a single runner can handle one hot
 file or dozens of low-risk utilities, depending on complexity. Batching is
 driven by the advisor, not hard-coded caps.

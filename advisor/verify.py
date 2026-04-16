@@ -1,6 +1,6 @@
 """Verification pass — filters agent findings for real, significant issues.
 
-Glasswing technique #3: a final agent reviews all findings from focused agents,
+A final agent reviews all findings from focused agents,
 confirms whether each is real and interesting, and filters out noise. This
 prevents false positives from wasting human attention.
 """

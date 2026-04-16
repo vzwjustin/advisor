@@ -22,7 +22,7 @@ END_MARKER = "<!-- advisor:nudge:end -->"
 SKILL_DIR_NAME = "advisor"
 SKILL_FILE_NAME = "SKILL.md"
 
-NUDGE_BODY = """## Advisor Tool (Glasswing review-and-fix pipeline)
+NUDGE_BODY = """## Advisor Tool (review-and-fix pipeline)
 
 For strategic multi-file work — reviews, audits, root-cause hunts,
 concurrency bugs, architectural decisions, or coordinated fix loops across

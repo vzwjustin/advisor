@@ -23,7 +23,7 @@ class TestDefaultTeamConfig:
         config = default_team_config("/src")
 
         assert config.target_dir == "/src"
-        assert config.team_name == "glasswing"
+        assert config.team_name == "review"
         assert config.max_runners == 5
         assert config.min_priority == 3
 
@@ -57,7 +57,7 @@ class TestBuildExploreAgent:
         assert spec["name"] == "explorer"
         assert spec["model"] == "sonnet"
         assert spec["subagent_type"] == "Explore"
-        assert spec["team_name"] == "glasswing"
+        assert spec["team_name"] == "review"
         assert "/src" in spec["prompt"]
 
     def test_custom_file_types(self):
@@ -250,7 +250,7 @@ class TestRenderPipeline:
         assert "Step 2" in output
         assert "Step 3" in output
         assert "Step 4" in output
-        assert "glasswing" in output
+        assert "review" in output
         assert "opus" in output
         assert "sonnet" in output
         assert "haiku" not in output

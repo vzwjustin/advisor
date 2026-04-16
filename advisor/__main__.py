@@ -90,7 +90,7 @@ def _config_from_args(args: argparse.Namespace) -> TeamConfig:
 
 def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("target", help="Target directory to analyze")
-    parser.add_argument("--team", default="glasswing", help="Team name")
+    parser.add_argument("--team", default="review", help="Team name")
     parser.add_argument("--file-types", default="*.py", help="Glob pattern")
     parser.add_argument(
         "--max-runners",
@@ -304,7 +304,7 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="advisor",
-        description="Glasswing agent-team pipeline helpers for Claude Code.",
+        description="Advisor agent-team pipeline helpers for Claude Code.",
     )
     parser.add_argument(
         "--version",

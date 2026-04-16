@@ -1,4 +1,4 @@
-"""Orchestrator — Glasswing pipeline via Claude Code native agent teams.
+"""Orchestrator — advisor review-and-fix pipeline via Claude Code native agent teams.
 
 No external API calls. Uses Claude Code's TeamCreate, Agent, and SendMessage
 tools to coordinate a two-model team:
@@ -31,7 +31,7 @@ from .focus import FocusBatch, FocusTask
 
 @dataclass(frozen=True)
 class TeamConfig:
-    """Configuration for the Glasswing team."""
+    """Configuration for the advisor review team."""
     team_name: str
     target_dir: str
     file_types: str
@@ -44,7 +44,7 @@ class TeamConfig:
 
 def default_team_config(
     target_dir: str,
-    team_name: str = "glasswing",
+    team_name: str = "review",
     file_types: str = "*.py",
     max_runners: int = 5,
     min_priority: int = 3,
@@ -128,7 +128,7 @@ def build_advisor_prompt(config: TeamConfig) -> str:
         else ""
     )
     return (
-        "You are the advisor — a senior staff engineer running a Glasswing "
+        "You are the advisor — a senior staff engineer running a "
         "review-and-fix loop. You are the strategist. The Sonnet runners are "
         "your hands: they read files, they write fixes, you think.\n\n"
         f"Target: `{config.target_dir}` ({config.file_types}){goal}\n\n"
@@ -203,7 +203,7 @@ def build_advisor_prompt(config: TeamConfig) -> str:
         "runner to receive when it spawns. You build their prompts — the "
         "team-lead passes them through verbatim. Each runner prompt should "
         "include:\n"
-        "- Their identity (runner-N on team glasswing)\n"
+        "- Their identity (runner-N on team review)\n"
         "- Their role: they are your hands, you are their strategist\n"
         "- Live dialogue rules: talk to you constantly, ask when stuck, "
         "send progress pings, expect interrupts from you\n"
@@ -337,7 +337,7 @@ def build_rank_prompt(file_inventory: str, config: TeamConfig) -> str:
     )
     ctx = f"\n\n## Goal\n{config.context}" if config.context else ""
     return (
-        "You are the strategic advisor for a Glasswing analysis pipeline.\n\n"
+        "You are the strategic advisor for a code review pipeline.\n\n"
         "## Task\n"
         "Review this file inventory and rank each file by priority.\n\n"
         "## Priority Scale\n"
@@ -755,7 +755,7 @@ def build_verify_message(
 
 def render_pipeline(config: TeamConfig) -> str:
     """Render the full pipeline as Claude Code tool calls for reference."""
-    return f"""## Glasswing Pipeline — {config.team_name}
+    return f"""## Advisor Review Pipeline — {config.team_name}
 Target: {config.target_dir} ({config.file_types})
 Models: advisor={config.advisor_model}, runners={config.runner_model}
 Suggested runners: ~{config.max_runners} | Min priority: P{config.min_priority}

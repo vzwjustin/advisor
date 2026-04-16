@@ -3,10 +3,10 @@
 This project uses Claude Code's Agent tool to replicate the Anthropic API
 advisor pattern. See CLAUDE.md for the workflow protocol.
 
-Glasswing-inspired techniques:
-  rank  — Priority-rank files by vulnerability likelihood (technique #2)
-  focus — Batched file review for diverse, parallel analysis (technique #1)
-  verify — Verification pass to filter noise from findings (technique #3)
+Core building blocks:
+  rank   — Priority-rank files by likelihood of containing issues
+  focus  — Batched file review for parallel analysis
+  verify — Verification pass to filter noise from findings
 """
 
 from .rank import RankedFile, rank_files, rank_to_prompt

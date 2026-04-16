@@ -1,6 +1,6 @@
 """Priority ranker — scores files by likelihood of containing issues.
 
-Glasswing technique #2: rank targets before diving in.
+Rank targets before diving in.
 Files handling user input, auth, external data, or crypto get highest priority.
 Work top-down so agents spend time where it matters most.
 """
