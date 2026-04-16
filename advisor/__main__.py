@@ -62,8 +62,14 @@ def _fmt_action(component: str, action: str, path: object) -> str:
     mark = _style.glyph(fancy, plain)
     if color:
         mark = _style.paint(mark, color)
-    # Pad component (max len in current set: "skill" = 5 → use 6)
-    return f"{mark} {component:<6} {label:<10} {path}"
+    # Pad before coloring so columns line up regardless of ANSI width.
+    component_col = f"{component:<6}"
+    label_col = f"{label:<10}"
+    component_col = _style.paint(component_col, "cyan", "bold")
+    if color:
+        label_col = _style.paint(label_col, color)
+    path_str = _style.dim(str(path))
+    return f"{mark} {component_col} {label_col} {path_str}"
 
 
 def _config_from_args(args: argparse.Namespace) -> TeamConfig:
@@ -105,7 +111,7 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
 
 def cmd_pipeline(args: argparse.Namespace) -> int:
     """Print the full pipeline reference for the given target."""
-    print(render_pipeline(_config_from_args(args)))
+    print(_style.colorize_markdown(render_pipeline(_config_from_args(args))))
     return 0
 
 
@@ -149,9 +155,9 @@ def cmd_plan(args: argparse.Namespace) -> int:
 
     if args.batch_size and args.batch_size > 1:
         batches = create_focus_batches(tasks, files_per_batch=args.batch_size)
-        print(format_batch_plan(batches))
+        print(_style.colorize_markdown(format_batch_plan(batches)))
     else:
-        print(format_dispatch_plan(tasks))
+        print(_style.colorize_markdown(format_dispatch_plan(tasks)))
     return 0
 
 
