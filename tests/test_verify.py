@@ -71,16 +71,30 @@ class TestParseFindingsFromText:
         text = "No issues found in this file."
         assert parse_findings_from_text(text) == []
 
-    def test_tolerates_missing_fields(self):
+    def test_drops_blocks_missing_required_fields(self):
+        # Incomplete blocks are dropped entirely rather than silently
+        # promoted with default values — we do not fabricate Findings.
         text = """
 - **File**: src/app.py:5
 - **Severity**: MEDIUM
 """
         findings = parse_findings_from_text(text)
+        assert findings == []
 
+    def test_keeps_only_complete_blocks(self):
+        text = """
+- **File**: src/good.py:1
+- **Severity**: HIGH
+- **Description**: real issue
+- **Evidence**: line 1
+- **Fix**: patch it
+
+- **File**: src/bad.py:2
+- **Severity**: LOW
+"""
+        findings = parse_findings_from_text(text)
         assert len(findings) == 1
-        assert findings[0].description == ""
-        assert findings[0].fix == ""
+        assert findings[0].file_path == "src/good.py:1"
 
     def test_immutability(self):
         f = Finding("a.py", "HIGH", "d", "e", "f")

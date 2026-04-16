@@ -5,11 +5,15 @@ from advisor.orchestrate import (
     build_explore_agent,
     build_rank_agent,
     build_runner_agents,
+    build_runner_batch_message,
+    build_runner_dispatch_messages,
+    build_runner_pool_agents,
+    build_runner_pool_prompt,
     build_verify_message,
     render_pipeline,
     build_runner_prompt,
 )
-from advisor.focus import FocusTask
+from advisor.focus import FocusBatch, FocusTask
 
 
 class TestDefaultTeamConfig:
@@ -119,7 +123,7 @@ class TestBuildRunnerAgents:
         config = default_team_config("/src")
         tasks = [FocusTask("src/auth.py", 5, "review")]
         guidance = {"src/auth.py": "Check for hardcoded tokens"}
-        agents = build_runner_agents(tasks, config, advisor_guidance=guidance)
+        agents = build_runner_agents(tasks, config, guidance=guidance)
 
         assert "hardcoded tokens" in agents[0]["prompt"].lower()
 
@@ -134,7 +138,7 @@ class TestBuildRunnerPrompt:
 
     def test_includes_guidance_when_provided(self):
         task = FocusTask("src/auth.py", 5, "review")
-        prompt = build_runner_prompt(task, "Look for JWT issues")
+        prompt = build_runner_prompt(task, guidance={"src/auth.py": "Look for JWT issues"})
 
         assert "JWT issues" in prompt
 
@@ -163,6 +167,65 @@ class TestBuildVerifyMessage:
 
         assert "3" in msg["message"]
         assert "5" in msg["message"]
+
+
+class TestRunnerPool:
+    def test_pool_prompt_mentions_context_reuse(self):
+        config = default_team_config("/src")
+        prompt = build_runner_pool_prompt(1, config)
+
+        assert "runner-1" in prompt
+        assert "context" in prompt.lower()
+        assert "wait" in prompt.lower()
+
+    def test_pool_agents_default_to_max_runners(self):
+        config = default_team_config("/src", max_runners=4)
+        agents = build_runner_pool_agents(config)
+
+        assert len(agents) == 4
+        assert [a["name"] for a in agents] == [
+            "runner-1", "runner-2", "runner-3", "runner-4",
+        ]
+        assert all(a["run_in_background"] is True for a in agents)
+        assert all(a["model"] == "sonnet" for a in agents)
+
+    def test_pool_agents_explicit_size(self):
+        config = default_team_config("/src", max_runners=10)
+        agents = build_runner_pool_agents(config, pool_size=2)
+        assert len(agents) == 2
+
+    def test_batch_message_contains_files_and_guidance(self):
+        batch = FocusBatch(
+            batch_id=3,
+            tasks=(FocusTask("src/auth.py", 5, "..."),),
+            complexity="high",
+        )
+        msg = build_runner_batch_message(
+            batch, guidance={"src/auth.py": "Check JWT handling"}
+        )
+        assert "batch 3" in msg
+        assert "complexity: high" in msg
+        assert "src/auth.py" in msg
+        assert "JWT handling" in msg
+
+    def test_dispatch_messages_route_by_batch_id(self):
+        batches = [
+            FocusBatch(
+                batch_id=1,
+                tasks=(FocusTask("a.py", 5, "..."),),
+                complexity="low",
+            ),
+            FocusBatch(
+                batch_id=2,
+                tasks=(FocusTask("b.py", 3, "..."),),
+                complexity="low",
+            ),
+        ]
+        specs = build_runner_dispatch_messages(batches)
+
+        assert [s["to"] for s in specs] == ["runner-1", "runner-2"]
+        assert "a.py" in specs[0]["message"]
+        assert "b.py" in specs[1]["message"]
 
 
 class TestRenderPipeline:

@@ -1,41 +1,30 @@
 # Advisor — Glasswing Agent Team (Claude Code Native)
 
-Three-model team using Claude Code's TeamCreate/Agent/SendMessage. No external API calls.
+Two-model team using Claude Code's TeamCreate/Agent/SendMessage. No external API calls.
+Models configurable via `TeamConfig(advisor_model=, runner_model=)` — defaults: opus/sonnet.
 
 ## Team Roles
 
-| Role | Model | Agent Type | Job |
-|------|-------|------------|-----|
-| **Explorer** | Sonnet | `Explore` | Fast file discovery — inventory only, no analysis |
-| **Advisor** | Opus | `deep-reasoning` | Ranks files, plans dispatch, verifies findings |
-| **Runner** | Sonnet | `code-review` | Focused single-file analysis — one per file, parallel |
-
-> Haiku was dropped after empirical testing: Claude Code's built-in `Explore`
-> subagent never honored the `model="haiku"` override in practice. The flow is
-> otherwise unchanged from the original three-model design.
+| Role | Default Model | Agent Type | Job |
+|------|---------------|------------|-----|
+| **Advisor** | Opus | `deep-reasoning` | Glob+Grep discovery, ranks P1–P5, sizes runner pool, dispatches explore + fix waves, live dialogue with runners, verifies each output as it lands |
+| **Runner** | Sonnet | `code-review` | Reads files, finds issues, implements fixes. Works ONLY on what the advisor hands it. In constant two-way conversation with the advisor. |
 
 ## Pipeline
 
-### Step 1: Create Team + Explore
+### Step 1: Create Team
 
 ```
+TeamDelete()  # clean slate
 TeamCreate(name="glasswing")
-
-Agent(
-  name="explorer",
-  subagent_type="Explore",
-  model="sonnet",
-  team_name="glasswing",
-  prompt="Explore <target_dir>. Glob for *.py (skip __pycache__, .venv, .git).
-         Read first 50 lines per file. Return one line per file:
-         `<path>` — <summary>. Inventory only, no opinions.
-         When done, send your complete output to the team lead via SendMessage(to='team-lead')."
-)
 ```
 
-### Step 2: Rank + Plan (Opus)
+### Step 2: Spawn Opus advisor FIRST (no runners yet)
 
-Feed explorer output to the advisor. Advisor ranks and produces a dispatch plan.
+Opus does Glob+Grep structural discovery itself — cheap for its large
+context window and the map is its to keep. It ranks files P1–P5 and
+decides how many runners to spawn based on the codebase size (no
+hardcoded default). It opens its report with `## Pool size: N — <rationale>`.
 
 ```
 Agent(
@@ -43,87 +32,90 @@ Agent(
   subagent_type="deep-reasoning",
   model="opus",
   team_name="glasswing",
-  prompt="Rank these files P5 (auth/secrets) to P1 (utils/tests).
-         <explorer output>
-         Output: P<n> `path` — reason.
-         Then ## Dispatch Plan: top 5 files at P3+, with one-line guidance each.
-         When done, send your complete output to the team lead via SendMessage(to='team-lead')."
+  prompt=<build_advisor_prompt(config)>
 )
 ```
 
-### Step 3: Analyze (Sonnet — parallel, with mid-flight Opus review)
+The advisor prompt encodes interleaved thinking (reason between every
+tool call, contemplate before committing, pivot when evidence reframes
+the problem) and the full review-and-fix loop.
 
-Dispatch all runners in a **single message** so they run in parallel.
-Each runner gets one file + the advisor's guidance for that file.
+### Step 3: Spawn runner pool (when advisor reports pool size)
 
-Mid-flight checkpoint loop:
-- Each runner, before writing its final report, sends a draft finding list
-  (file:line + confidence) to the advisor via `SendMessage(to="advisor")`.
-- The advisor replies within two sentences: **CONFIRM** / **NARROW** /
-  **REDIRECT**. The runner incorporates the reply and then writes its
-  final report.
-- The advisor stays active throughout Step 3 — it does **not** go idle
-  after Step 2 — so it can review each runner's work as it lands and
-  course-correct runners that drift off-scope.
+Wait for Opus's `## Pool size: N`. Spawn exactly N runners. Runners
+are long-lived — reused across assignments for context accumulation.
 
 ```
 Agent(
-  name="runner-1", subagent_type="code-review", model="sonnet",
-  team_name="glasswing", run_in_background=true,
-  prompt="Review ONLY `<file>` (P<n>). <advisor guidance>.
-         Report: File:line, Severity, Description, Evidence, Fix.
-         If clean, say so. Do NOT review other files.
-         When done, send your complete output to the team lead via SendMessage(to='team-lead')."
+  name="runner-1",
+  subagent_type="code-review",
+  model="sonnet",
+  team_name="glasswing",
+  run_in_background=true,
+  prompt=<build_runner_pool_prompt(1, config)>
 )
-Agent(
-  name="runner-2", ...same pattern...
-)
-# ...one per file from dispatch plan
 ```
 
-### Step 4: Verify (Opus — reuse advisor)
+After spawning, tell Opus: `"Pool of N runners is up."`
 
-Collect all runner outputs, send back to advisor for final review.
+### Step 4: Live dialogue — explore wave
+
+Opus dispatches explore assignments to runners via `SendMessage(to='runner-N')`.
+Runners read files end-to-end and report findings back to the advisor
+(not team-lead). Throughout:
+
+- Runners ask questions when stuck, send progress pings
+- Opus answers in real time, shares context between runners
+- Opus verifies each runner's output the moment it lands (CONFIRM / NARROW / REDIRECT)
+- Opus proactively redirects runners that drift off-scope
+
+### Step 5: Fix wave (if user asked for enhancements/fixes)
+
+Opus reasons over all findings, builds a fix plan, then dispatches fix
+assignments to the same runner pool. Runners implement changes, submit
+diffs to Opus for review before finalizing.
+
+### Step 6: Final report + shutdown
+
+Opus sends the final structured report to team-lead. Shut down individually:
 
 ```
-SendMessage(
-  to="advisor",
-  message="Verify findings from N runners across M files:
-          <all runner outputs>
-          Each finding: CONFIRMED or REJECTED + reason.
-          ## Summary: X confirmed, Y rejected.
-          ## Top 3 Actions: most critical fixes.
-          When done, send your complete output to the team lead via SendMessage(to='team-lead')."
-)
+SendMessage({ to: "advisor",  message: { type: "shutdown_request" } })
+SendMessage({ to: "runner-1", message: { type: "shutdown_request" } })
+TeamDelete()
 ```
 
 ## Rules
 
-1. **Teams mandatory** — `TeamCreate` before any agent spawn.
-2. **Model discipline** — Opus decides (rank + verify), Sonnet explores and executes. No crossover.
-3. **Parallel runners** — All Sonnet agents dispatched in one message with `run_in_background=true`.
-4. **Advisor reuse** — Step 4 uses `SendMessage(to="advisor")` to resume the Opus agent, not a new spawn.
-5. **Verification is non-optional** — Every pipeline ends with Opus confirming/rejecting findings.
-6. **No external API calls** — Everything runs through Claude Code's native Agent/SendMessage tools.
-7. **Every prompt must end with SendMessage-back** — Agents (especially Opus) go idle silently without this. Always append: `"When done, send your complete output to the team lead via SendMessage(to='team-lead')."` Learned from live testing where Opus advisor completed work but never reported back.
-8. **Shutdown individually, not broadcast** — `SendMessage(to="*")` with structured messages (like `shutdown_request`) fails. Send shutdown to each teammate by name in separate calls.
-9. **TeamDelete before TeamCreate** — A leader can only manage one team at a time. Always `TeamDelete` the old team before creating a new one. Make this the first step of every pipeline run.
+1. **TeamDelete before TeamCreate** — one team at a time.
+2. **Opus goes first** — no runners before Opus's first pass.
+3. **No hardcoded pool size** — Opus decides every time.
+4. **Runners work ONLY on what Opus hands them.**
+5. **Live dialogue, not checkpoints** — runners talk to Opus constantly.
+6. **Runner reports go to the advisor** — Opus verifies and relays.
+7. **Every prompt ends with SendMessage-back.**
+8. **Shutdown individually, not broadcast.**
+9. **Fence untrusted data** in Opus prompts (code blocks).
 
 ## Python API
 
 ```python
 from advisor import (
-    default_team_config,    # Create TeamConfig
-    build_explore_agent,    # Step 1: Haiku agent spec
-    build_rank_agent,       # Step 2: Opus agent spec
-    build_runner_agents,    # Step 3: Sonnet agent specs (parallel)
-    build_verify_message,   # Step 4: SendMessage to advisor
-    rank_files,             # Rank files by keyword signals
-    create_focus_tasks,     # Generate one task per file
-    parse_findings_from_text, # Parse runner output into Findings
-    render_pipeline,        # Print full pipeline reference
+    default_team_config,       # TeamConfig with advisor_model/runner_model
+    build_advisor_agent,       # Opus agent spec
+    build_advisor_prompt,      # Opus prompt (interleaved thinking + full loop)
+    build_runner_pool_agents,  # Sonnet pool agent specs
+    build_runner_pool_prompt,  # Runner prompt (live dialogue + explore/fix)
+    build_runner_dispatch_messages,  # SendMessage specs per batch
+    build_verify_message,      # SendMessage to resume advisor for verification
+    render_pipeline,           # Print pipeline reference
 )
 ```
+
+## Activation
+
+Invoke via `/advisor` slash command. Full protocol details in
+`~/.claude/skills/advisor/PROTOCOL.md`.
 
 ## General Rules
 

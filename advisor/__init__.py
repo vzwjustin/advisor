@@ -5,15 +5,21 @@ advisor pattern. See CLAUDE.md for the workflow protocol.
 
 Glasswing-inspired techniques:
   rank  — Priority-rank files by vulnerability likelihood (technique #2)
-  focus — One agent per file for diverse, parallel analysis (technique #1)
+  focus — Batched file review for diverse, parallel analysis (technique #1)
   verify — Verification pass to filter noise from findings (technique #3)
 """
 
 from .rank import RankedFile, rank_files, rank_to_prompt
-from .focus import FocusTask, create_focus_tasks, format_dispatch_plan
+from .focus import (
+    FocusBatch,
+    FocusTask,
+    create_focus_batches,
+    create_focus_tasks,
+    format_batch_plan,
+    format_dispatch_plan,
+)
 from .verify import (
     Finding,
-    VerifiedResult,
     build_verify_prompt,
     parse_findings_from_text,
 )
@@ -22,18 +28,28 @@ from .install import (
     apply_nudge,
     ensure_nudge,
     install,
+    install_skill,
     remove_nudge,
     render_block,
     should_auto_nudge,
     uninstall,
+    uninstall_skill,
 )
+from .skill_asset import SKILL_MD
 from .orchestrate import (
     TeamConfig,
-    default_team_config,
+    build_advisor_agent,
+    build_advisor_prompt,
     build_explore_agent,
     build_rank_agent,
     build_runner_agents,
+    build_runner_batch_message,
+    build_runner_dispatch_messages,
+    build_runner_pool_agents,
+    build_runner_pool_prompt,
+    build_runner_prompt,
     build_verify_message,
+    default_team_config,
     render_pipeline,
 )
 
@@ -43,20 +59,29 @@ __all__ = [
     "rank_files",
     "rank_to_prompt",
     # focus
+    "FocusBatch",
     "FocusTask",
+    "create_focus_batches",
     "create_focus_tasks",
+    "format_batch_plan",
     "format_dispatch_plan",
     # verify
     "Finding",
-    "VerifiedResult",
     "build_verify_prompt",
     "parse_findings_from_text",
     # orchestrate
     "TeamConfig",
     "default_team_config",
+    "build_advisor_agent",
+    "build_advisor_prompt",
     "build_explore_agent",
     "build_rank_agent",
     "build_runner_agents",
+    "build_runner_batch_message",
+    "build_runner_dispatch_messages",
+    "build_runner_pool_agents",
+    "build_runner_pool_prompt",
+    "build_runner_prompt",
     "build_verify_message",
     "render_pipeline",
     # install
@@ -65,7 +90,11 @@ __all__ = [
     "remove_nudge",
     "render_block",
     "install",
+    "install_skill",
     "uninstall",
+    "uninstall_skill",
     "ensure_nudge",
     "should_auto_nudge",
+    # skill asset
+    "SKILL_MD",
 ]

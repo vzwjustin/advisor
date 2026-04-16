@@ -5,6 +5,8 @@ confirms whether each is real and interesting, and filters out noise. This
 prevents false positives from wasting human attention.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 
@@ -18,12 +20,15 @@ class Finding:
     fix: str
 
 
-@dataclass(frozen=True)
-class VerifiedResult:
-    """The output of the verification pass."""
-    confirmed: tuple[Finding, ...]
-    rejected: tuple[Finding, ...]
-    summary: str
+_REQUIRED_FIELDS = ("file_path", "severity", "description", "evidence", "fix")
+
+_KEY_PREFIXES: dict[str, tuple[str, ...]] = {
+    "file_path": ("- **File**:", "**File**:"),
+    "severity": ("- **Severity**:", "**Severity**:"),
+    "description": ("- **Description**:", "**Description**:"),
+    "evidence": ("- **Evidence**:", "**Evidence**:"),
+    "fix": ("- **Fix**:", "**Fix**:"),
+}
 
 
 VERIFY_PROMPT_TEMPLATE = (
@@ -31,7 +36,9 @@ VERIFY_PROMPT_TEMPLATE = (
     "other agents and determine which are real, significant issues versus "
     "false positives or low-value noise.\n\n"
     "## Findings to Verify\n\n"
-    "{findings_block}\n\n"
+    "```\n"
+    "{findings_block}\n"
+    "```\n\n"
     "## Instructions\n\n"
     "For each finding:\n"
     "1. Read the cited file and line to confirm the issue exists.\n"
@@ -51,14 +58,7 @@ VERIFY_PROMPT_TEMPLATE = (
 
 
 def format_findings_block(findings: list[Finding]) -> str:
-    """Format findings into a markdown block for the verification prompt.
-
-    Args:
-        findings: List of Finding objects from focused agents.
-
-    Returns:
-        Markdown-formatted findings block.
-    """
+    """Format findings into a markdown block for the verification prompt."""
     if not findings:
         return "_No findings to verify._"
 
@@ -76,14 +76,7 @@ def format_findings_block(findings: list[Finding]) -> str:
 
 
 def build_verify_prompt(findings: list[Finding]) -> str:
-    """Build the complete verification agent prompt.
-
-    Args:
-        findings: All findings from focused agents.
-
-    Returns:
-        Ready-to-use prompt string for the verification agent.
-    """
+    """Build the complete verification agent prompt."""
     block = format_findings_block(findings)
     return VERIFY_PROMPT_TEMPLATE.format(findings_block=block)
 
@@ -91,57 +84,68 @@ def build_verify_prompt(findings: list[Finding]) -> str:
 def parse_findings_from_text(text: str) -> list[Finding]:
     """Best-effort parse of agent output into Finding objects.
 
-    Looks for markdown-structured findings with File, Severity, Description,
-    Evidence, and Fix fields. Tolerates missing fields gracefully.
-
-    Args:
-        text: Raw text output from a focused agent.
-
-    Returns:
-        List of Finding objects extracted from the text.
+    Blocks missing any of the five required fields are dropped rather than
+    silently promoted with default values. This prevents the verification
+    pipeline from acting on fabricated data when agent output is malformed.
     """
     findings: list[Finding] = []
     current: dict[str, str] = {}
+    active_key: str | None = None
+
+    def _flush() -> None:
+        finding = _dict_to_finding(current)
+        if finding is not None:
+            findings.append(finding)
+
+    def _match_key(stripped: str) -> tuple[str, str] | None:
+        for key, prefixes in _KEY_PREFIXES.items():
+            for prefix in prefixes:
+                if stripped.startswith(prefix):
+                    return key, _extract_value(stripped, prefix)
+        return None
 
     for line in text.split("\n"):
         stripped = line.strip()
+        matched = _match_key(stripped)
 
-        if stripped.startswith("- **File**:") or stripped.startswith("**File**:"):
-            if current.get("file_path"):
-                findings.append(_dict_to_finding(current))
+        if matched is not None:
+            key, value = matched
+            if key == "file_path" and current:
+                _flush()
                 current = {}
-            current["file_path"] = _extract_value(stripped)
+            current[key] = value
+            active_key = key
+        elif active_key and stripped and not stripped.startswith("#"):
+            current[active_key] = current.get(active_key, "") + " " + stripped
 
-        elif stripped.startswith("- **Severity**:") or stripped.startswith("**Severity**:"):
-            current["severity"] = _extract_value(stripped)
-
-        elif stripped.startswith("- **Description**:") or stripped.startswith("**Description**:"):
-            current["description"] = _extract_value(stripped)
-
-        elif stripped.startswith("- **Evidence**:") or stripped.startswith("**Evidence**:"):
-            current["evidence"] = _extract_value(stripped)
-
-        elif stripped.startswith("- **Fix**:") or stripped.startswith("**Fix**:"):
-            current["fix"] = _extract_value(stripped)
-
-    if current.get("file_path"):
-        findings.append(_dict_to_finding(current))
+    if current:
+        _flush()
 
     return findings
 
 
-def _extract_value(line: str) -> str:
-    """Extract the value after the colon in a '**Key**: value' line."""
+def _extract_value(line: str, prefix: str = "") -> str:
+    """Extract the value after the known prefix in a '**Key**: value' line.
+
+    Uses the matched prefix length to avoid splitting on colons inside the
+    value (e.g. Windows paths like ``C:\\Users\\...``).
+    """
+    if prefix:
+        after = line[len(prefix):]
+        return after.strip().strip("`")
     parts = line.split(":", 1)
     return parts[1].strip().strip("`") if len(parts) > 1 else ""
 
 
-def _dict_to_finding(d: dict[str, str]) -> Finding:
-    """Convert a partial dict to a Finding, filling missing fields."""
+def _dict_to_finding(d: dict[str, str]) -> Finding | None:
+    """Convert a parsed block to a Finding, or None if any required field is missing."""
+    missing = [k for k in _REQUIRED_FIELDS if not d.get(k)]
+    if missing:
+        return None
     return Finding(
-        file_path=d.get("file_path", "unknown"),
-        severity=d.get("severity", "MEDIUM"),
-        description=d.get("description", ""),
-        evidence=d.get("evidence", ""),
-        fix=d.get("fix", ""),
+        file_path=d["file_path"],
+        severity=d["severity"],
+        description=d["description"],
+        evidence=d["evidence"],
+        fix=d["fix"],
     )

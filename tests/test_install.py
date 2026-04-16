@@ -10,11 +10,14 @@ from advisor.install import (
     apply_nudge,
     ensure_nudge,
     install,
+    install_skill,
     remove_nudge,
     render_block,
     should_auto_nudge,
     uninstall,
+    uninstall_skill,
 )
+from advisor.skill_asset import SKILL_MD
 
 
 class TestApplyNudge:
@@ -136,34 +139,103 @@ class TestShouldAutoNudge:
 class TestEnsureNudge:
     def test_installs_on_fresh_file(self, tmp_path: Path):
         target = tmp_path / "CLAUDE.md"
+        skill = tmp_path / "skills" / "advisor" / "SKILL.md"
         stream = io.StringIO()
-        result = ensure_nudge(path=target, env={}, stream=stream)
+        result = ensure_nudge(path=target, env={}, stream=stream, skill_path=skill)
         assert result.action == "installed"
         assert START_MARKER in target.read_text()
-        assert "advisor: added nudge" in stream.getvalue()
+        assert skill.exists()
+        assert skill.read_text(encoding="utf-8") == SKILL_MD
+        notice = stream.getvalue()
+        assert "advisor: first-run setup" in notice
+        assert "nudge" in notice
+        assert "/advisor skill" in notice
 
     def test_unchanged_when_already_installed(self, tmp_path: Path):
         target = tmp_path / "CLAUDE.md"
+        skill = tmp_path / "skills" / "advisor" / "SKILL.md"
         install(path=target)
+        install_skill(path=skill)
         stream = io.StringIO()
-        result = ensure_nudge(path=target, env={}, stream=stream)
+        result = ensure_nudge(path=target, env={}, stream=stream, skill_path=skill)
         assert result.action == "unchanged"
         assert stream.getvalue() == ""
 
     def test_opt_out_skips(self, tmp_path: Path):
         target = tmp_path / "CLAUDE.md"
+        skill = tmp_path / "skills" / "advisor" / "SKILL.md"
         stream = io.StringIO()
         result = ensure_nudge(
-            path=target, env={OPT_OUT_ENV: "1"}, stream=stream
+            path=target,
+            env={OPT_OUT_ENV: "1"},
+            stream=stream,
+            skill_path=skill,
         )
         assert result.action == "unchanged"
         assert not target.exists()
+        assert not skill.exists()
         assert stream.getvalue() == ""
 
     def test_survives_unwritable_parent(self, tmp_path: Path):
         # Make a file where a directory would need to be, so mkdir raises.
         (tmp_path / "blocker").write_text("not a dir")
         target = tmp_path / "blocker" / "nested" / "CLAUDE.md"
-        result = ensure_nudge(path=target, env={}, stream=io.StringIO())
+        skill = tmp_path / "skills" / "advisor" / "SKILL.md"
+        result = ensure_nudge(
+            path=target, env={}, stream=io.StringIO(), skill_path=skill
+        )
         assert result.action == "unchanged"
         assert not target.exists()
+        # Skill install should still succeed even though nudge failed.
+        assert skill.exists()
+
+
+class TestInstallSkill:
+    def test_fresh_install_writes_skill_file(self, tmp_path: Path):
+        target = tmp_path / "skills" / "advisor" / "SKILL.md"
+        result = install_skill(path=target)
+        assert result.action == "installed"
+        assert target.read_text(encoding="utf-8") == SKILL_MD
+
+    def test_second_install_is_unchanged(self, tmp_path: Path):
+        target = tmp_path / "skills" / "advisor" / "SKILL.md"
+        install_skill(path=target)
+        result = install_skill(path=target)
+        assert result.action == "unchanged"
+
+    def test_install_with_different_body_updates(self, tmp_path: Path):
+        target = tmp_path / "skills" / "advisor" / "SKILL.md"
+        install_skill(path=target, body="old body")
+        result = install_skill(path=target)  # bundled SKILL_MD
+        assert result.action == "updated"
+        assert target.read_text(encoding="utf-8") == SKILL_MD
+
+    def test_install_creates_parent_dirs(self, tmp_path: Path):
+        target = tmp_path / "deep" / "nested" / "skills" / "advisor" / "SKILL.md"
+        result = install_skill(path=target)
+        assert result.action == "installed"
+        assert target.exists()
+
+    def test_uninstall_removes_file_and_empty_dir(self, tmp_path: Path):
+        target = tmp_path / "skills" / "advisor" / "SKILL.md"
+        install_skill(path=target)
+        result = uninstall_skill(path=target)
+        assert result.action == "removed"
+        assert not target.exists()
+        assert not target.parent.exists()  # parent advisor/ dir was empty, got cleaned
+        assert target.parent.parent.exists()  # ~/.claude/skills/ itself is left alone
+
+    def test_uninstall_absent_when_nothing_installed(self, tmp_path: Path):
+        target = tmp_path / "skills" / "advisor" / "SKILL.md"
+        result = uninstall_skill(path=target)
+        assert result.action == "absent"
+
+    def test_uninstall_preserves_non_empty_skill_dir(self, tmp_path: Path):
+        skill_dir = tmp_path / "skills" / "advisor"
+        target = skill_dir / "SKILL.md"
+        install_skill(path=target)
+        (skill_dir / "user_added.md").write_text("something the user added")
+        result = uninstall_skill(path=target)
+        assert result.action == "removed"
+        assert not target.exists()
+        assert skill_dir.exists()  # kept because user_added.md is still there
