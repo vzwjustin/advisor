@@ -55,6 +55,23 @@ class InstallResult:
     action: str  # "installed" | "updated" | "unchanged" | "removed" | "absent"
 
 
+@dataclass(frozen=True)
+class ComponentStatus:
+    """State of a single installed component (nudge or skill)."""
+    name: str
+    path: Path
+    present: bool
+    current: bool  # body matches the bundled version
+
+
+@dataclass(frozen=True)
+class Status:
+    """Snapshot of advisor's installed state."""
+    nudge: ComponentStatus
+    skill: ComponentStatus
+    opt_out: bool
+
+
 def render_block(body: str = NUDGE_BODY) -> str:
     """Return the full sentinel-wrapped nudge block."""
     return f"{START_MARKER}\n{body.rstrip()}\n{END_MARKER}\n"
@@ -182,16 +199,25 @@ def ensure_nudge(
         skill_result_action = "unchanged"
 
     if nudge_result.action == "installed" or skill_result_action in ("installed", "updated"):
+        from . import _style
+
         out = stream if stream is not None else sys.stderr
+        check = _style.glyph("✓", "+", stream=out)
+        check = _style.paint(check, "green", stream=out)
+
         pieces: list[str] = []
         if nudge_result.action == "installed":
             pieces.append(f"nudge → {nudge_result.path}")
         if skill_result_action in ("installed", "updated"):
             pieces.append(f"/advisor skill → {skill_target}")
-        lines = ["advisor: first-run setup complete."]
+
+        lines = ["", f"{check} advisor: first-run setup complete."]
         for piece in pieces:
             lines.append(f"  {piece}")
-        lines.append(f"Opt out: {OPT_OUT_ENV}=1  |  Remove: `advisor uninstall`")
+        lines.append(_style.dim(
+            f"  opt out: {OPT_OUT_ENV}=1  ·  remove: advisor uninstall",
+            stream=out,
+        ))
         print("\n".join(lines), file=out)
 
     return nudge_result
@@ -243,6 +269,47 @@ def install_skill(
 
     target.write_text(body, encoding="utf-8")
     return InstallResult(path=target, action="installed")
+
+
+def status(
+    nudge_path: Path | None = None,
+    skill_path: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> Status:
+    """Inspect the local advisor install — does not write anything."""
+    nudge_target = nudge_path or default_claude_md()
+    skill_target = skill_path or default_skill_path()
+    expected_block = render_block().strip()
+
+    nudge_present = False
+    nudge_current = False
+    if nudge_target.exists():
+        try:
+            text = nudge_target.read_text(encoding="utf-8")
+            nudge_present = START_MARKER in text and END_MARKER in text
+            nudge_current = nudge_present and expected_block in text
+        except (OSError, UnicodeDecodeError):
+            pass
+
+    skill_present = skill_target.exists()
+    skill_current = False
+    if skill_present:
+        try:
+            skill_current = skill_target.read_text(encoding="utf-8") == SKILL_MD
+        except (OSError, UnicodeDecodeError):
+            skill_current = False
+
+    return Status(
+        nudge=ComponentStatus(
+            name="nudge", path=nudge_target,
+            present=nudge_present, current=nudge_current,
+        ),
+        skill=ComponentStatus(
+            name="skill", path=skill_target,
+            present=skill_present, current=skill_current,
+        ),
+        opt_out=not should_auto_nudge(env),
+    )
 
 
 def uninstall_skill(path: Path | None = None) -> InstallResult:

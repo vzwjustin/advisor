@@ -139,7 +139,7 @@ def format_dispatch_plan(tasks: list[FocusTask]) -> str:
     for i, t in enumerate(tasks, 1):
         lines.append(f"{i}. **P{t.priority}** `{t.file_path}`")
 
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def format_batch_plan(batches: list[FocusBatch]) -> str:
