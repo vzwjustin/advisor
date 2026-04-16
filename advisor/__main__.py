@@ -7,6 +7,7 @@ Thin wrapper over the existing builders. Prints prompts/plans to stdout so a
 from __future__ import annotations
 
 import argparse
+import select
 import sys
 from importlib.metadata import version as pkg_version
 from pathlib import Path
@@ -97,8 +98,16 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
 
 def cmd_pipeline(args: argparse.Namespace) -> int:
     """Print the full pipeline reference for the given target."""
-    print(render_pipeline(_config_from_args(args)))
+    _print(render_pipeline(_config_from_args(args)))
     return 0
+
+
+def _print(text: str) -> None:
+    """Print without traceback when stdout is piped and downstream closes early."""
+    try:
+        print(text)
+    except BrokenPipeError:
+        raise SystemExit(0)
 
 
 def _read_head(path: str, limit: int = 4000) -> str:
@@ -106,6 +115,27 @@ def _read_head(path: str, limit: int = 4000) -> str:
         return Path(path).read_text(errors="ignore")[:limit]
     except OSError:
         return ""
+
+
+def _read_stdin_if_available(default: str) -> str:
+    """Read stdin without blocking when nothing is piped.
+
+    In some non-interactive environments, stdin is not a TTY but is also empty;
+    `sys.stdin.read()` would block forever. This helper returns `default` when no
+    stdin data is available immediately.
+    """
+    if sys.stdin.isatty():
+        return default
+    try:
+        r, _, _ = select.select([sys.stdin], [], [], 0)
+    except (OSError, ValueError):
+        return default
+    if not r:
+        return default
+    try:
+        return sys.stdin.read()
+    except OSError:
+        return default
 
 
 def _safe_rglob(target: Path, pattern: str) -> tuple[list[str] | None, str | None]:
@@ -150,16 +180,16 @@ def cmd_prompt(args: argparse.Namespace) -> int:
     """Print a specific step's prompt so it can be pasted into Claude Code."""
     config = _config_from_args(args)
     if args.step == "advisor":
-        print(build_advisor_prompt(config))
+        _print(build_advisor_prompt(config))
     elif args.step == "runner":
         runner_id = getattr(args, "runner_id", 1) or 1
-        print(build_runner_pool_prompt(runner_id, config))
+        _print(build_runner_pool_prompt(runner_id, config))
     elif args.step == "rank":
-        inventory = sys.stdin.read() if not sys.stdin.isatty() else "<paste inventory here>"
-        print(build_rank_prompt(inventory, config))
+        inventory = _read_stdin_if_available("<paste inventory here>")
+        _print(build_rank_prompt(inventory, config))
     elif args.step == "verify":
-        findings = sys.stdin.read() if not sys.stdin.isatty() else "<paste findings here>"
-        print(build_verify_dispatch_prompt(
+        findings = _read_stdin_if_available("<paste findings here>")
+        _print(build_verify_dispatch_prompt(
             findings,
             file_count=args.file_count or args.max_runners,
             runner_count=args.max_runners,
