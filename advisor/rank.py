@@ -75,13 +75,24 @@ def load_advisorignore(base_dir: str | Path) -> list[str]:
     Returns:
         List of glob patterns from the file, empty list if file doesn't exist.
         Comments (lines starting with #) and blank lines are ignored.
+
+    A malformed or unreadable file (permission error, invalid UTF-8, etc.)
+    emits a ``UserWarning`` and returns ``[]`` — silent-fallback could cause
+    files the user intended to skip to be reviewed. A missing file is
+    expected and returns ``[]`` without warning.
     """
     path = Path(base_dir) / ADVISORIGNORE_FILENAME
     if not path.exists():
         return []
     try:
         text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+    except (OSError, UnicodeDecodeError) as exc:
+        import warnings
+        warnings.warn(
+            f"could not read {path}: {exc}; treating as no ignore patterns",
+            UserWarning,
+            stacklevel=2,
+        )
         return []
     patterns = []
     for line in text.splitlines():
@@ -115,8 +126,12 @@ def _matches_any_pattern(file_path: str, patterns: list[str]) -> bool:
         # Match against full path
         elif fnmatch.fnmatch(path_str, pattern):
             return True
-        # Match against any path component (e.g., 'tests/' matches 'src/tests/file.py')
-        elif any(fnmatch.fnmatch(part, pattern.rstrip("/")) for part in path.parts):
+        # Match against any path component for bare-word patterns only (no glob metacharacters).
+        # Wildcard patterns like *.py are excluded to avoid matching directory components
+        # with dotted names (e.g., scripts.py/) when only filename matching was intended.
+        elif not any(c in pattern for c in '*?[') and any(
+            fnmatch.fnmatch(part, pattern.rstrip("/")) for part in path.parts
+        ):
             return True
     return False
 

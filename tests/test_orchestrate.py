@@ -277,6 +277,33 @@ class TestRunnerPool:
         with pytest.raises(ValueError, match="batch_id 3 exceeds pool_size 2"):
             build_runner_dispatch_messages(batches, pool_size=2)
 
+    def test_dispatch_messages_rejects_nonpositive_batch_id(self):
+        batches = [
+            FocusBatch(
+                batch_id=0,
+                tasks=(FocusTask("a.py", 3, "..."),),
+                complexity="low",
+            ),
+        ]
+        with pytest.raises(ValueError, match=r"batch_id must be >= 1"):
+            build_runner_dispatch_messages(batches, pool_size=2)
+
+    def test_dispatch_messages_rejects_duplicate_batch_ids(self):
+        batches = [
+            FocusBatch(
+                batch_id=1,
+                tasks=(FocusTask("a.py", 3, "..."),),
+                complexity="low",
+            ),
+            FocusBatch(
+                batch_id=1,
+                tasks=(FocusTask("b.py", 3, "..."),),
+                complexity="low",
+            ),
+        ]
+        with pytest.raises(ValueError, match="duplicate batch_id"):
+            build_runner_dispatch_messages(batches, pool_size=2)
+
 
 class TestRenderPipeline:
     def test_renders_all_steps(self):
@@ -358,6 +385,20 @@ class TestBuildRunnerHandoffMessage:
         )
         assert "Extra context" in msg["message"]
         assert "circular import" in msg["message"]
+
+    def test_no_triple_newline_before_acknowledge_with_extra_context(self):
+        """Regression: earlier form produced '\\n\\n\\n' before 'Acknowledge'."""
+        msg = build_runner_handoff_message(
+            new_runner_id=2,
+            outgoing_runner_id=1,
+            files_touched=["x.py"],
+            invariants=["y"],
+            remaining_fixes=["z"],
+            extra_context="some extra context",
+        )
+        body = msg["message"]
+        assert "\n\n\nAcknowledge" not in body
+        assert "\n\nAcknowledge and wait for the first fix assignment." in body
 
     def test_extra_context_omitted_when_empty(self):
         msg = build_runner_handoff_message(

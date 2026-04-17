@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from advisor.__main__ import build_parser
+from advisor.__main__ import _NUDGE_SKIP_COMMANDS, build_parser
 
 
 class TestCmdPromptVerifyEmptyStdin:
@@ -28,3 +28,38 @@ class TestCmdPromptVerifyEmptyStdin:
         cmd_prompt(args)
         captured = capsys.readouterr()
         assert "no findings on stdin" not in captured.err
+
+    def test_empty_pipe_uses_same_placeholder_as_tty(self, monkeypatch, capsys):
+        """Regression: piped-empty stdin renders the same placeholder
+        template as the TTY path. Previously the two paths diverged — TTY
+        got '<paste findings here>' while an empty pipe built a prompt
+        around an empty findings string."""
+        from advisor.__main__ import cmd_prompt
+
+        class _TTYStdin:
+            def isatty(self) -> bool:
+                return True
+
+            def read(self) -> str:  # pragma: no cover — defensive
+                return ""
+
+        monkeypatch.setattr(sys, "stdin", _TTYStdin())
+        parser = build_parser()
+        args = parser.parse_args(["prompt", "verify", "."])
+        cmd_prompt(args)
+        tty_out = capsys.readouterr().out
+
+        monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+        cmd_prompt(args)
+        pipe_out = capsys.readouterr().out
+
+        assert "<paste findings here>" in tty_out
+        assert "<paste findings here>" in pipe_out
+
+
+class TestNudgeSkipCommands:
+    """Dry-run / preview commands must not mutate ~/.claude/ via ensure_nudge."""
+
+    @pytest.mark.parametrize("cmd", ["plan", "pipeline", "prompt", "install", "uninstall", "status", "doctor"])
+    def test_read_only_commands_skip_nudge(self, cmd):
+        assert cmd in _NUDGE_SKIP_COMMANDS

@@ -84,3 +84,47 @@ class TestRankToPrompt:
     def test_empty_ranked_list(self):
         prompt = rank_to_prompt([])
         assert "## File Priority Ranking" in prompt
+
+
+class TestLoadAdvisorignoreWarnsOnError:
+    def test_warns_when_file_contains_invalid_utf8(self, tmp_path):
+        import warnings
+        from advisor.rank import ADVISORIGNORE_FILENAME, load_advisorignore
+
+        (tmp_path / ADVISORIGNORE_FILENAME).write_bytes(b"\xff\xfe invalid")
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = load_advisorignore(tmp_path)
+
+        assert result == []
+        assert any(issubclass(w.category, UserWarning) for w in caught)
+        assert any("could not read" in str(w.message) for w in caught)
+
+    def test_missing_file_is_silent(self, tmp_path):
+        import warnings
+        from advisor.rank import load_advisorignore
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = load_advisorignore(tmp_path)
+
+        assert result == []
+        assert not any(issubclass(w.category, UserWarning) for w in caught)
+
+
+class TestMatchesAnyPattern:
+    def test_wildcard_pattern_does_not_match_dir_component_with_extension(self):
+        from advisor.rank import _matches_any_pattern
+        assert _matches_any_pattern('scripts.py/handler.txt', ['*.py']) is False
+
+    def test_wildcard_pattern_matches_filename(self):
+        from advisor.rank import _matches_any_pattern
+        assert _matches_any_pattern('src/foo.py', ['*.py']) is True
+
+    def test_bare_word_pattern_matches_dir_component(self):
+        from advisor.rank import _matches_any_pattern
+        assert _matches_any_pattern('src/tests/foo.py', ['tests']) is True
+
+    def test_bare_word_pattern_does_not_match_unrelated_file(self):
+        from advisor.rank import _matches_any_pattern
+        assert _matches_any_pattern('src/tests.py', ['tests']) is False

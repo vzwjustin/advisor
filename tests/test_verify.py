@@ -120,6 +120,27 @@ class TestParseFindingsFromText:
         assert "Fix: parameterized queries" in f.description
         assert f.fix == "Use cursor.execute with placeholders"
 
+    def test_bold_fix_label_in_evidence_body_not_captured(self):
+        """A bold **Fix**: label inside an Evidence body (without a list marker)
+        must not steal the fix slot. Only a proper '- **Fix**:' list item opens
+        the real fix field."""
+        text = """### Finding 1
+- **File**: foo.py:42
+- **Severity**: HIGH
+- **Description**: SQL injection
+- **Evidence**: The bad pattern is
+  **Fix**: something inside evidence narrative
+  continues here
+- **Fix**: Use parameterized queries.
+"""
+        findings = parse_findings_from_text(text)
+        assert len(findings) == 1
+        f = findings[0]
+        assert f.file_path == "foo.py:42"
+        assert "The bad pattern is" in f.evidence
+        assert "something inside evidence narrative" in f.evidence
+        assert f.fix == "Use parameterized queries."
+
     def test_parse_flushes_on_finding_header(self):
         """Two findings with out-of-order fields parse as separate blocks."""
         text = """### Finding 1

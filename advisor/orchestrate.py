@@ -695,7 +695,19 @@ def build_runner_dispatch_messages(
     to `SendMessage` to route work to the existing runner pool.
     """
     if batches:
-        max_batch_id = max(b.batch_id for b in batches)
+        ids = [b.batch_id for b in batches]
+        bad = [i for i in ids if i < 1]
+        if bad:
+            raise ValueError(
+                f"batch_id must be >= 1; got {bad}: "
+                f"dispatch would route to a non-existent runner"
+            )
+        if len(set(ids)) != len(ids):
+            raise ValueError(
+                f"duplicate batch_id in dispatch list {ids}: "
+                f"two batches would collide on the same runner"
+            )
+        max_batch_id = max(ids)
         if max_batch_id > pool_size:
             raise ValueError(
                 f"batch_id {max_batch_id} exceeds pool_size {pool_size}: "
@@ -832,7 +844,7 @@ def build_runner_handoff_message(
         if remaining_fixes
         else "- (none — you're taking the verify pass)"
     )
-    extra = f"\n\n## Extra context\n{extra_context.strip()}\n" if extra_context.strip() else ""
+    extra = f"\n\n## Extra context\n{extra_context.strip()}" if extra_context.strip() else ""
     body = (
         f"## Handoff from runner-{outgoing_runner_id}\n\n"
         f"You are runner-{new_runner_id}. runner-{outgoing_runner_id} is "

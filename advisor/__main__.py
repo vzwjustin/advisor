@@ -179,15 +179,26 @@ def cmd_prompt(args: argparse.Namespace) -> int:
         runner_id = getattr(args, "runner_id", 1) or 1
         print(build_runner_pool_prompt(runner_id, config))
     elif args.step == "verify":
-        findings = sys.stdin.read() if not sys.stdin.isatty() else "<paste findings here>"
-        if not findings.strip():
-            print(
-                _style.warning_box(
-                    "--step verify received no findings on stdin; output will be a template",
-                    stream=sys.stderr,
-                ),
-                file=sys.stderr,
-            )
+        # Consistent no-findings behavior: whether stdin is a TTY (no data
+        # piped) or an empty pipe, fall back to the same placeholder string
+        # so the rendered prompt is always a valid template. Only emit the
+        # warning when the user actually piped something empty — a TTY
+        # invocation is the intended "print the template" path.
+        if sys.stdin.isatty():
+            findings = "<paste findings here>"
+        else:
+            piped = sys.stdin.read()
+            if not piped.strip():
+                print(
+                    _style.warning_box(
+                        "--step verify received no findings on stdin; output will be a template",
+                        stream=sys.stderr,
+                    ),
+                    file=sys.stderr,
+                )
+                findings = "<paste findings here>"
+            else:
+                findings = piped
         print(build_verify_dispatch_prompt(
             findings,
             file_count=args.file_count or args.max_runners,
@@ -422,7 +433,20 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-_NUDGE_SKIP_COMMANDS = {"install", "uninstall", "status", "doctor"}
+# Read-only / dry-run commands never mutate the user's ~/.claude/ tree.
+# `install`/`uninstall` own the setup flow explicitly; `status`/`doctor` are
+# observation-only. `plan`/`pipeline`/`prompt` are preview helpers that print
+# prompts or rankings — they must not silently install anything the user did
+# not ask for.
+_NUDGE_SKIP_COMMANDS = {
+    "install",
+    "uninstall",
+    "status",
+    "doctor",
+    "plan",
+    "pipeline",
+    "prompt",
+}
 
 
 def main(argv: list[str] | None = None) -> int:

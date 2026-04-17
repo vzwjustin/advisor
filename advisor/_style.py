@@ -81,11 +81,16 @@ def banner(text: str, width: int = 50, stream: IO[str] | None = None) -> str:
     """Create a visual banner with box-drawing characters.
 
     Helps with visual scanning and adds clear hierarchy to CLI output.
+    ``width`` auto-expands when ``text`` is longer than ``width - 4`` so the
+    border always encloses the text — otherwise a 60-char title inside a
+    width=50 box would overflow the border, producing a broken banner.
     """
     if not supports_color(stream):
         return f"== {text} =="
-    line = "━" * width
-    centered = text.center(width - 4)
+    # +4 accounts for the two-space pad on each side of the centered text.
+    effective_width = max(width, len(text) + 4)
+    line = "━" * effective_width
+    centered = text.center(effective_width - 4)
     return f"{paint('┏', 'cyan')}{paint(line, 'cyan')}{paint('┓', 'cyan')}\n" \
            f"{paint('┃', 'cyan')}  {paint(centered, 'bold')}  {paint('┃', 'cyan')}\n" \
            f"{paint('┗', 'cyan')}{paint(line, 'cyan')}{paint('┛', 'cyan')}"
@@ -147,6 +152,11 @@ _PRIORITY_STYLES: dict[str, tuple[str, ...]] = {
 
 _PRIORITY_BOLD_RE = re.compile(r"\*\*P([1-5])\*\*")
 _PRIORITY_BARE_RE = re.compile(r"(?<![A-Za-z0-9*\x1b])P([1-5])(?![A-Za-z0-9*])")
+# Matches an SGR escape sequence ending just before the match position,
+# used to detect (and skip) priority matches that sit INSIDE already-
+# colorized text (e.g. a colored header body). Re-painting them would
+# emit an inner ``\x1b[0m`` that prematurely closes the outer style.
+_ANSI_SGR_RE = re.compile(r"\x1b\[[\d;]*m")
 _H2_RE = re.compile(r"^(##\s+)(.+)$", re.MULTILINE)
 _H3_RE = re.compile(r"^(###\s+)(.+)$", re.MULTILINE)
 _H4_RE = re.compile(r"^(####\s+)(.+)$", re.MULTILINE)
@@ -163,11 +173,29 @@ def colorize_markdown(text: str, stream: IO[str] | None = None) -> str:
     if not supports_color(stream):
         return text
 
+    def _inside_ansi_span(full: str, pos: int) -> bool:
+        """True when ``pos`` falls inside an unclosed SGR span.
+
+        Counts SGR escapes preceding ``pos`` and compares openers vs the
+        trailing ``\\x1b[0m`` resets. An odd opener count without a matching
+        reset means the match is inside a painted region — re-painting it
+        there would inject a premature reset and close the outer style.
+        """
+        prefix = full[:pos]
+        escapes = _ANSI_SGR_RE.findall(prefix)
+        open_count = sum(1 for e in escapes if e != "\x1b[0m")
+        close_count = sum(1 for e in escapes if e == "\x1b[0m")
+        return open_count > close_count
+
     def _color_priority_bold(m: re.Match[str]) -> str:
+        if _inside_ansi_span(m.string, m.start()):
+            return m.group(0)
         styles = _PRIORITY_STYLES[m.group(1)]
         return paint(f"**P{m.group(1)}**", *styles, stream=stream)
 
     def _color_priority_bare(m: re.Match[str]) -> str:
+        if _inside_ansi_span(m.string, m.start()):
+            return m.group(0)
         styles = _PRIORITY_STYLES[m.group(1)]
         return paint(f"P{m.group(1)}", *styles, stream=stream)
 
@@ -183,10 +211,18 @@ def colorize_markdown(text: str, stream: IO[str] | None = None) -> str:
     def _color_path(m: re.Match[str]) -> str:
         return "`" + paint(m.group(1), "green", stream=stream) + "`"
 
-    text = _PRIORITY_BOLD_RE.sub(_color_priority_bold, text)
-    text = _PRIORITY_BARE_RE.sub(_color_priority_bare, text)
+    # Order matters. Headers must be colorized BEFORE bare priorities: if a
+    # header line contains a bare `P3`, coloring the priority first inserts
+    # an ANSI reset inside the header's body. The subsequent header regex
+    # then re-wraps the line, nesting escapes — and the inner reset closes
+    # the outer header style early, leaving the text after the priority
+    # unstyled. Running headers first ensures priority ANSI sits cleanly
+    # inside already-painted header text (which the priority lookbehind
+    # then skips).
     text = _H4_RE.sub(_color_h4, text)
     text = _H3_RE.sub(_color_h3, text)
     text = _H2_RE.sub(_color_h2, text)
+    text = _PRIORITY_BOLD_RE.sub(_color_priority_bold, text)
+    text = _PRIORITY_BARE_RE.sub(_color_priority_bare, text)
     text = _BACKTICK_RE.sub(_color_path, text)
     return text

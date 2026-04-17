@@ -138,8 +138,16 @@ def parse_findings_from_text(text: str) -> list[Finding]:
             continue
 
         matched = _match_key(stripped)
+        # A key-label only OPENS a new field if the line is a proper list
+        # item (starts with "- "). Bold labels embedded in body prose — e.g.
+        # a narrative that happens to contain "**Fix**: something" inside an
+        # Evidence value — must NOT steal the field slot. We still match them
+        # (``matched is not None``) so the branch below can treat them as
+        # continuation of the active field rather than dropping to the
+        # generic continuation branch, which would double-count the label.
+        is_list_item = stripped.startswith("- ")
 
-        if matched is not None:
+        if matched is not None and is_list_item:
             key, value = matched
             if key not in current:
                 # New field for this block — record it.

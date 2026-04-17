@@ -201,3 +201,33 @@ def test_priority_styles_all_bold_for_contrast_ladder():
     for level in ("2", "3", "4", "5"):
         styles = _style._PRIORITY_STYLES[level]
         assert "bold" in styles, f"P{level} must be bold for contrast ladder"
+
+
+def test_colorize_markdown_header_with_priority_no_inner_reset():
+    """Header containing a bare priority must render with a single clean wrap.
+
+    Regression: previously the priority colorizer ran first, then the header
+    regex wrapped the entire line, nesting ANSI escapes. The inner `\\x1b[0m`
+    from the priority would close the outer header style early, leaving text
+    after the priority badge unstyled.
+    """
+    out = _style.colorize_markdown("## Ranking P3 files")
+    # No premature reset followed by unstyled body text.
+    assert "\x1b[0m files" not in out
+    # Single outer wrap: exactly one top-level `\x1b[0m` closes the header.
+    assert out.count("\x1b[0m") == 1
+
+
+def test_banner_auto_expands_for_overlong_text():
+    """Regression: text longer than ``width - 4`` previously overflowed the
+    fixed-width border. The banner now auto-widens so the box always encloses
+    the text cleanly."""
+    out = _style.banner("x" * 60, width=50)
+    lines = out.split("\n")
+    assert len(lines) == 3
+    assert "x" * 60 in lines[1]
+    # Borders (strip ANSI) must be wide enough to fit text + 4 padding.
+    top_plain = _style._ANSI_SGR_RE.sub("", lines[0])
+    bot_plain = _style._ANSI_SGR_RE.sub("", lines[2])
+    assert top_plain.count("━") >= 60
+    assert bot_plain.count("━") >= 60

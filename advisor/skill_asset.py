@@ -50,7 +50,7 @@ the `context` string across local accounts):
 ```bash
 ADV_PROMPT=$(mktemp -t advisor-prompt)
 ADV_PROMPT="$ADV_PROMPT" python3 -c "import os; from advisor import default_team_config, build_advisor_prompt
-with open(os.environ['ADV_PROMPT'], 'w') as f: f.write(build_advisor_prompt(default_team_config('TARGET', context='CONTEXT')))" 2>/dev/null
+with open(os.environ['ADV_PROMPT'], 'w', encoding='utf-8') as f: f.write(build_advisor_prompt(default_team_config('TARGET', context='CONTEXT')))" 2>/dev/null
 ```
 
 **Step 5:** Spawn Agent with the prompt you just built (read from
