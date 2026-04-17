@@ -159,6 +159,7 @@ _H2_RE = re.compile(r"^(##\s+)(.+)$", re.MULTILINE)
 _H3_RE = re.compile(r"^(###\s+)(.+)$", re.MULTILINE)
 _H4_RE = re.compile(r"^(####\s+)(.+)$", re.MULTILINE)
 _BACKTICK_RE = re.compile(r"`([^`\n]+)`")
+_BLOCKQUOTE_RE = re.compile(r"^(>\s+)(.+)$", re.MULTILINE)
 
 
 def colorize_markdown(text: str, stream: IO[str] | None = None) -> str:
@@ -209,6 +210,12 @@ def colorize_markdown(text: str, stream: IO[str] | None = None) -> str:
     def _color_path(m: re.Match[str]) -> str:
         return "`" + paint(m.group(1), "green", stream=stream) + "`"
 
+    def _color_blockquote(m: re.Match[str]) -> str:
+        # Dim only the ``> `` marker. Body may already contain ANSI spans
+        # from earlier substitutions (backticks, priorities) — wrapping it
+        # in dim would inject a reset mid-span and break existing styling.
+        return paint(m.group(1), "dim", stream=stream) + m.group(2)
+
     # Order matters. Headers must be colorized BEFORE bare priorities: if a
     # header line contains a bare `P3`, coloring the priority first inserts
     # an ANSI reset inside the header's body. The subsequent header regex
@@ -223,4 +230,5 @@ def colorize_markdown(text: str, stream: IO[str] | None = None) -> str:
     text = _PRIORITY_BOLD_RE.sub(_color_priority_bold, text)
     text = _PRIORITY_BARE_RE.sub(_color_priority_bare, text)
     text = _BACKTICK_RE.sub(_color_path, text)
+    text = _BLOCKQUOTE_RE.sub(_color_blockquote, text)
     return text

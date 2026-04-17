@@ -218,6 +218,21 @@ def test_colorize_markdown_header_with_priority_no_inner_reset():
     assert out.count("\x1b[0m") == 1
 
 
+def test_colorize_markdown_dims_blockquote_marker():
+    out = _style.colorize_markdown("> important note")
+    # The `> ` marker is wrapped in dim; body is left intact.
+    assert "\033[2m> " in out
+    assert "important note" in out
+
+
+def test_colorize_markdown_blockquote_preserves_inner_styling():
+    """Blockquote body may contain a backtick path already colorized —
+    the blockquote sub must not strip or double-wrap it."""
+    out = _style.colorize_markdown("> Use the `config.py` file")
+    # Backtick content should still be green-painted inside the body.
+    assert "\033[32mconfig.py\033[0m" in out
+
+
 def test_error_box_renders_with_color():
     out = _style.error_box("target not found")
     assert "\033[" in out

@@ -120,6 +120,8 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
 def cmd_pipeline(args: argparse.Namespace) -> int:
     """Print the full pipeline reference for the given target."""
     print(_style.colorize_markdown(render_pipeline(_config_from_args(args))))
+    print()
+    print(_style.cta(f"/advisor {args.target}", "run the live pipeline in Claude Code"))
     return 0
 
 
@@ -175,10 +177,20 @@ def cmd_plan(args: argparse.Namespace) -> int:
 def cmd_prompt(args: argparse.Namespace) -> int:
     """Print a specific step's prompt so it can be pasted into Claude Code."""
     config = _config_from_args(args)
+    # TTY-only framing: interactive users see a dim banner announcing what
+    # they're looking at; piped output (curl, redirect, pbcopy) stays clean
+    # so the prompt can be consumed programmatically.
+    show_frame = sys.stdout.isatty()
     if args.step == "advisor":
+        if show_frame:
+            print(_style.dim(f"# advisor prompt — paste into Claude Code (target: {args.target})"))
+            print()
         print(build_advisor_prompt(config))
     elif args.step == "runner":
         runner_id = getattr(args, "runner_id", 1) or 1
+        if show_frame:
+            print(_style.dim(f"# runner-{runner_id} prompt — paste into Claude Code"))
+            print()
         print(build_runner_pool_prompt(runner_id, config))
     elif args.step == "verify":
         # Consistent no-findings behavior: whether stdin is a TTY (no data
@@ -325,6 +337,8 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
         and skill_action in (*_NOOP_ACTIONS, "skipped")
     ):
         return _STRICT_NOOP_EXIT
+    print()
+    print(_style.cta("advisor install", "reinstall if you change your mind"))
     return 0
 
 
