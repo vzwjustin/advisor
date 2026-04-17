@@ -67,16 +67,6 @@ def dim(text: str, stream: IO[str] | None = None) -> str:
     return paint(text, "dim", stream=stream)
 
 
-def spinner_frame(i: int) -> str:
-    """Return a spinner character for the given frame index.
-
-    ADHD-friendly progress indicator. Use in a loop to show activity.
-    Example: for i in range(100): print(f"\\r{spinner_frame(i)} Working...", end="")
-    """
-    frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-    return paint(frames[i % len(frames)], "cyan", "bold")
-
-
 def banner(text: str, width: int = 50, stream: IO[str] | None = None) -> str:
     """Create a visual banner with box-drawing characters.
 
@@ -118,6 +108,14 @@ def warning_box(text: str, stream: IO[str] | None = None) -> str:
     if not supports_color(stream):
         return f"{mark} {text}"
     return f"{paint(mark, 'yellow', 'bold')} {paint(text, 'yellow')}"
+
+
+def error_box(text: str, stream: IO[str] | None = None) -> str:
+    """Draw a red error line with an error glyph — symmetric with success/info/warning_box."""
+    mark = glyph("✗", "[x]")
+    if not supports_color(stream):
+        return f"{mark} {text}"
+    return f"{paint(mark, 'red', 'bold')} {paint(text, 'red')}"
 
 
 def tip(text: str, stream: IO[str] | None = None) -> str:

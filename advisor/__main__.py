@@ -142,12 +142,12 @@ def cmd_plan(args: argparse.Namespace) -> int:
     """Rank local files and print a batch dispatch plan — no agents spawned."""
     target = Path(args.target)
     if not target.exists():
-        print(f"{_style.err('error:')} target not found: {target}", file=sys.stderr)
+        print(_style.error_box(f"target not found: {target}", stream=sys.stderr), file=sys.stderr)
         return 2
 
     paths, glob_err = _safe_rglob(target, args.file_types)
     if glob_err is not None:
-        print(f"{_style.err('error:')} {glob_err}", file=sys.stderr)
+        print(_style.error_box(glob_err, stream=sys.stderr), file=sys.stderr)
         return 2
 
     ranked = rank_files(paths or [], read_fn=_read_head)
@@ -167,6 +167,8 @@ def cmd_plan(args: argparse.Namespace) -> int:
         print(_style.colorize_markdown(format_batch_plan(batches)))
     else:
         print(_style.colorize_markdown(format_dispatch_plan(tasks)))
+    print()
+    print(_style.cta(f"/advisor {target}", "run the live pipeline in Claude Code"))
     return 0
 
 
@@ -248,6 +250,10 @@ def cmd_status(args: argparse.Namespace) -> int:
     skill_target = Path(args.skill_path) if args.skill_path else None
     s = get_status(nudge_path=nudge_target, skill_path=skill_target)
     print(_format_status(s, _get_version()))
+    healthy = s.nudge.present and s.nudge.current and s.skill.present and s.skill.current
+    if healthy:
+        print()
+        print(_style.cta("/advisor <path>", "run the advisor on a codebase"))
     return 0
 
 
@@ -266,7 +272,7 @@ def cmd_install(args: argparse.Namespace) -> int:
     try:
         nudge_result = install_nudge(path=nudge_target)
     except (OSError, UnicodeDecodeError) as exc:
-        print(f"{_style.err('error:')} nudge: {exc}", file=sys.stderr)
+        print(_style.error_box(f"nudge: {exc}", stream=sys.stderr), file=sys.stderr)
         return 1
     print(_fmt_action("nudge", nudge_result.action, nudge_result.path))
 
@@ -276,7 +282,7 @@ def cmd_install(args: argparse.Namespace) -> int:
         try:
             skill_result = install_skill(path=skill_target)
         except (OSError, UnicodeDecodeError) as exc:
-            print(f"{_style.err('error:')} skill: {exc}", file=sys.stderr)
+            print(_style.error_box(f"skill: {exc}", stream=sys.stderr), file=sys.stderr)
             return 1
         skill_action = skill_result.action
         print(_fmt_action("skill", skill_result.action, skill_result.path))
@@ -286,6 +292,8 @@ def cmd_install(args: argparse.Namespace) -> int:
         and skill_action in (*_NOOP_ACTIONS, "skipped")
     ):
         return _STRICT_NOOP_EXIT
+    print()
+    print(_style.cta("/advisor <path>", "run the advisor on a codebase"))
     return 0
 
 
@@ -297,7 +305,7 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     try:
         nudge_result = uninstall_nudge(path=nudge_target)
     except (OSError, UnicodeDecodeError) as exc:
-        print(f"{_style.err('error:')} nudge: {exc}", file=sys.stderr)
+        print(_style.error_box(f"nudge: {exc}", stream=sys.stderr), file=sys.stderr)
         return 1
     print(_fmt_action("nudge", nudge_result.action, nudge_result.path))
 
@@ -307,7 +315,7 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
         try:
             skill_result = uninstall_skill(path=skill_target)
         except (OSError, UnicodeDecodeError) as exc:
-            print(f"{_style.err('error:')} skill: {exc}", file=sys.stderr)
+            print(_style.error_box(f"skill: {exc}", stream=sys.stderr), file=sys.stderr)
             return 1
         skill_action = skill_result.action
         print(_fmt_action("skill", skill_result.action, skill_result.path))

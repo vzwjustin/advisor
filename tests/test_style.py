@@ -218,6 +218,21 @@ def test_colorize_markdown_header_with_priority_no_inner_reset():
     assert out.count("\x1b[0m") == 1
 
 
+def test_error_box_renders_with_color():
+    out = _style.error_box("target not found")
+    assert "\033[" in out
+    assert "target not found" in out
+    assert "\033[0m" in out
+
+
+def test_error_box_ascii_fallback_under_no_color(monkeypatch):
+    monkeypatch.setenv("NO_COLOR", "1")
+    out = _style.error_box("bad input")
+    assert "\033[" not in out
+    assert out.startswith("[x] ")
+    assert "bad input" in out
+
+
 def test_banner_auto_expands_for_overlong_text():
     """Regression: text longer than ``width - 4`` previously overflowed the
     fixed-width border. The banner now auto-widens so the box always encloses
