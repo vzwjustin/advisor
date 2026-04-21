@@ -285,7 +285,31 @@ def cmd_plan(args: argparse.Namespace) -> int:
             for t in cp.tasks
         ]
         batches_from_cp = _batches_from_checkpoint(cp) if cp.batches else None
-        return _emit_plan(args, target, tasks, batches_from_cp, run_id=cp.run_id, context="resumed")
+        # Rebuild the TeamConfig from the checkpoint so downstream surfaces
+        # (cost estimation, test_command) reflect the run being resumed
+        # rather than whatever defaults happen to be on the current invocation.
+        checkpoint_cfg = default_team_config(
+            target_dir=str(target),
+            team_name=cp.team_name,
+            file_types=cp.file_types,
+            max_runners=cp.max_runners,
+            min_priority=cp.min_priority,
+            context=cp.context,
+            advisor_model=cp.advisor_model,
+            runner_model=cp.runner_model,
+            max_fixes_per_runner=cp.max_fixes_per_runner,
+            test_command=cp.test_command,
+            warn_unknown_model=False,
+        )
+        return _emit_plan(
+            args,
+            target,
+            tasks,
+            batches_from_cp,
+            run_id=cp.run_id,
+            context="resumed",
+            resolved_config=checkpoint_cfg,
+        )
 
     paths, glob_err = _resolve_plan_files(target, args)
     if glob_err is not None:
@@ -362,12 +386,22 @@ def _emit_plan(
     *,
     run_id: str | None = None,
     context: str = "",
+    resolved_config: TeamConfig | None = None,
 ) -> int:
-    """Shared rendering logic — JSON or pretty, optional --output FILE."""
+    """Shared rendering logic — JSON or pretty, optional --output FILE.
+
+    ``resolved_config`` lets resume paths hand in the checkpoint's config so
+    cost estimates (and anything else that derives from the run config) use
+    the resumed-run values rather than the current CLI defaults.
+    """
+
+    def _cfg() -> TeamConfig:
+        return resolved_config if resolved_config is not None else _config_from_args(args)
+
     if getattr(args, "json", False):
         estimate = None
         if getattr(args, "estimate", False):
-            cfg = _config_from_args(args)
+            cfg = _cfg()
             estimate = estimate_cost(
                 tasks,
                 batches,
@@ -406,7 +440,7 @@ def _emit_plan(
         print(_style.colorize_markdown(format_dispatch_plan(tasks)))
 
     if getattr(args, "estimate", False):
-        cfg = _config_from_args(args)
+        cfg = _cfg()
         est = estimate_cost(
             tasks,
             batches,

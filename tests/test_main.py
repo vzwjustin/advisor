@@ -707,6 +707,54 @@ class TestCmdProtocolDefaults:
         assert 'model="sonnet"' in out
 
 
+class TestCmdPlanResumeConfig:
+    """`--resume` must use the checkpointed run config for cost estimates."""
+
+    def test_resume_uses_checkpointed_models_for_estimate(self, tmp_path, capsys):
+        import json as _json
+
+        from advisor import __main__ as cli
+        from advisor.checkpoint import save_checkpoint
+        from advisor.focus import FocusTask
+
+        (tmp_path / "auth.py").write_text("def login(password): ...\n", encoding="utf-8")
+        run_id = "resume-test"
+        save_checkpoint(
+            tmp_path,
+            run_id=run_id,
+            tasks=[FocusTask(file_path=str(tmp_path / "auth.py"), priority=5, prompt="p")],
+            batches=None,
+            team_name="review",
+            file_types="*.py",
+            min_priority=3,
+            max_runners=5,
+            advisor_model="haiku",  # non-default; current CLI args would say ``opus``
+            runner_model="haiku",
+            max_fixes_per_runner=5,
+            test_command="",
+            context="",
+        )
+
+        rc = cli.main(
+            [
+                "plan",
+                str(tmp_path),
+                "--resume",
+                run_id,
+                "--estimate",
+                "--json",
+            ]
+        )
+        assert rc == 0
+        out = capsys.readouterr().out
+        payload = _json.loads(out)
+        est = payload["estimate"]
+        # Before the fix, cost estimation grabbed models from the current
+        # CLI args (``opus``/``sonnet``) rather than from the checkpoint.
+        assert est["advisor_model"] == "haiku"
+        assert est["runner_model"] == "haiku"
+
+
 class TestHistoryLimitValidation:
     """`--limit` must reject values that would break the slice semantics."""
 
