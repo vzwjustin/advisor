@@ -1163,6 +1163,7 @@ class TestNoColorFlag:
 
     def test_no_color_flag_sets_no_color_env(self, monkeypatch):
         import os
+
         from advisor import __main__ as cli
         from advisor import _style
 
