@@ -33,13 +33,24 @@ class Finding:
 
 _REQUIRED_FIELDS = ("file_path", "severity", "description", "evidence", "fix")
 
+# Accept both ``-`` and ``*`` list markers; some agents (especially those
+# that also emit Markdown prose) prefer ``*`` bullets. Without this, a
+# runner returning ``* **File**: ...`` blocks would parse as zero findings.
+# The unadorned ``**Key**:`` form remains supported as a safety-net for
+# agents that drop the list marker entirely.
 _KEY_PREFIXES: dict[str, tuple[str, ...]] = {
-    "file_path": ("- **File**:", "**File**:"),
-    "severity": ("- **Severity**:", "**Severity**:"),
-    "description": ("- **Description**:", "**Description**:"),
-    "evidence": ("- **Evidence**:", "**Evidence**:"),
-    "fix": ("- **Fix**:", "**Fix**:"),
+    "file_path": ("- **File**:", "* **File**:", "**File**:"),
+    "severity": ("- **Severity**:", "* **Severity**:", "**Severity**:"),
+    "description": ("- **Description**:", "* **Description**:", "**Description**:"),
+    "evidence": ("- **Evidence**:", "* **Evidence**:", "**Evidence**:"),
+    "fix": ("- **Fix**:", "* **Fix**:", "**Fix**:"),
 }
+
+# List-item markers recognized by the block-opening check. Must stay in
+# sync with the prefixes above — a bold label only opens a new field slot
+# when it appears as a real bullet, not when it's narrative text inside
+# another field's body.
+_LIST_MARKERS = ("- ", "* ")
 
 
 VERIFY_PROMPT_TEMPLATE = (
@@ -140,13 +151,14 @@ def parse_findings_from_text(text: str) -> list[Finding]:
 
         matched = _match_key(stripped)
         # A key-label only OPENS a new field if the line is a proper list
-        # item (starts with "- "). Bold labels embedded in body prose — e.g.
-        # a narrative that happens to contain "**Fix**: something" inside an
-        # Evidence value — must NOT steal the field slot. We still match them
-        # (``matched is not None``) so the branch below can treat them as
-        # continuation of the active field rather than dropping to the
-        # generic continuation branch, which would double-count the label.
-        is_list_item = stripped.startswith("- ")
+        # item (starts with one of the recognized markers — ``- `` or ``* ``).
+        # Bold labels embedded in body prose — e.g. a narrative that happens
+        # to contain "**Fix**: something" inside an Evidence value — must NOT
+        # steal the field slot. We still match them (``matched is not None``)
+        # so the branch below can treat them as continuation of the active
+        # field rather than dropping to the generic continuation branch, which
+        # would double-count the label.
+        is_list_item = stripped.startswith(_LIST_MARKERS)
 
         if matched is not None and is_list_item:
             key, value = matched

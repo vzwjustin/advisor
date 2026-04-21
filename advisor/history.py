@@ -15,10 +15,14 @@ advisory, never fatal.
 from __future__ import annotations
 
 import json
+import secrets
+import sys
 import warnings
+from collections import deque
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import IO
 
 UTC = timezone.utc
 
@@ -48,20 +52,72 @@ def history_path(target: str | Path) -> Path:
     return Path(target) / HISTORY_DIR_NAME / HISTORY_FILE_NAME
 
 
+def _lock_exclusive(fh: IO[str]) -> None:
+    """Acquire an exclusive advisory lock on ``fh``, best-effort.
+
+    Used by :func:`append_entries` so two concurrent ``advisor`` processes
+    cannot interleave partial JSON lines in ``history.jsonl``. ``fcntl``
+    is Unix-only; on Windows we fall back to ``msvcrt.locking``. Any
+    platform that exposes neither (or where the call fails — e.g. NFS
+    without lock support) silently proceeds without a lock. Locking is
+    a best-effort nicety, not a correctness gate: Python's own buffered
+    ``.write`` typically flushes short records atomically, so the
+    unlocked path is still well-behaved in practice.
+    """
+    # Branch on platform so mypy can see both paths — ``fcntl`` is
+    # unconditionally importable on POSIX and unconditionally absent on
+    # Windows; the reverse holds for ``msvcrt``.
+    if sys.platform != "win32":
+        try:
+            import fcntl
+        except ImportError:
+            return
+        try:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        except OSError:
+            pass
+        return
+    # Windows branch — mypy on POSIX considers this unreachable because
+    # ``sys.platform`` is a literal in the stubs. The runtime still
+    # executes it on actual Windows.
+    _lock_windows(fh)  # type: ignore[unreachable]
+
+
+def _lock_windows(fh: IO[str]) -> None:
+    if sys.platform != "win32":  # pragma: no cover - platform guard
+        return
+    try:  # type: ignore[unreachable]
+        import msvcrt
+    except ImportError:
+        return
+    try:
+        msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+    except OSError:
+        pass
+
+
 def append_entries(target: str | Path, entries: list[HistoryEntry]) -> Path:
     """Append ``entries`` to the history file, creating it if needed.
 
     Creates ``.advisor/`` on first use. Returns the path written to.
     Empty ``entries`` is a no-op (no file is created).
+
+    The append holds an exclusive advisory lock for the duration of the
+    write so two parallel ``advisor`` processes cannot interleave
+    partial JSON lines. Locking is best-effort — see
+    :func:`_lock_exclusive`.
     """
     if not entries:
         return history_path(target)
     path = history_path(target)
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Pre-serialize the whole batch so the locked critical section is as
+    # short as possible — one ``write`` call per process rather than
+    # ``len(entries)`` of them.
+    payload = "".join(entry.to_json_line() + "\n" for entry in entries)
     with path.open("a", encoding="utf-8") as f:
-        for entry in entries:
-            f.write(entry.to_json_line())
-            f.write("\n")
+        _lock_exclusive(f)
+        f.write(payload)
     return path
 
 
@@ -69,18 +125,28 @@ def load_recent(target: str | Path, limit: int = 20) -> list[HistoryEntry]:
     """Return the ``limit`` most recent entries from the history file.
 
     Malformed lines are skipped with a warning. A missing file returns ``[]``.
+
+    Streams the file through a bounded :class:`collections.deque` so only
+    the tail fits in memory — important once ``.advisor/history.jsonl``
+    accumulates months of findings. We over-sample by ``limit * 2`` lines
+    so that a pathological run of malformed lines near the tail still
+    yields ``limit`` valid entries when possible.
     """
     path = history_path(target)
     if not path.exists():
         return []
+    if limit <= 0:
+        return []
+    buffer_size = max(limit * 2, limit + 8)
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        with path.open("r", encoding="utf-8") as f:
+            lines: deque[tuple[int, str]] = deque(enumerate(f, 1), maxlen=buffer_size)
     except (OSError, UnicodeDecodeError) as exc:
         warnings.warn(f"could not read {path}: {exc}", UserWarning, stacklevel=2)
         return []
 
     entries: list[HistoryEntry] = []
-    for line_num, line in enumerate(lines, 1):
+    for line_num, line in lines:
         stripped = line.strip()
         if not stripped:
             continue
@@ -124,12 +190,16 @@ def format_history_block(entries: list[HistoryEntry]) -> str:
 
 
 def new_run_id() -> str:
-    """Generate a UTC ISO-8601 timestamp suitable as a run_id.
+    """Generate a collision-resistant run_id.
 
-    Collision-free at second granularity; if multiple runs can start in
-    the same second, callers should append a random suffix.
+    Format: ``YYYYMMDDTHHMMSSZ-XXXX`` where ``XXXX`` is a random 4-hex
+    suffix. The leading timestamp keeps lexical order == chronological
+    order (so ``sorted(..., reverse=True)`` in ``list_checkpoints`` still
+    returns newest-first); the suffix prevents two back-to-back runs in
+    the same second from overwriting each other's checkpoint.
     """
-    return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    return f"{ts}-{secrets.token_hex(2)}"
 
 
 def entry_now(

@@ -161,6 +161,38 @@ class TestParseFindingsFromText:
         assert findings[1].file_path == "src/util.py:3"
         assert findings[1].severity == "LOW"
 
+    def test_parses_asterisk_bullets(self):
+        """Agents that emit ``* **File**:`` bullets must parse identically
+        to the ``-`` bullet form. Regression: previously these were
+        silently dropped, yielding zero findings.
+        """
+        text = """### Finding 1
+* **File**: src/auth.py:42
+* **Severity**: CRITICAL
+* **Description**: Hardcoded API key
+* **Evidence**: API_KEY = 'secret'
+* **Fix**: Use os.environ
+"""
+        findings = parse_findings_from_text(text)
+        assert len(findings) == 1
+        assert findings[0].file_path == "src/auth.py:42"
+        assert findings[0].severity == "CRITICAL"
+
+    def test_parses_mixed_bullet_styles(self):
+        """A block mixing ``-`` and ``*`` bullets (rare but possible)
+        still parses all fields.
+        """
+        text = """### Finding 1
+- **File**: src/db.py:10
+* **Severity**: HIGH
+- **Description**: SQL injection
+* **Evidence**: f-string in query
+- **Fix**: Use parameterized queries
+"""
+        findings = parse_findings_from_text(text)
+        assert len(findings) == 1
+        assert findings[0].fix == "Use parameterized queries"
+
 
 class TestRoundTrip:
     """``format_findings_block`` and ``parse_findings_from_text`` must be

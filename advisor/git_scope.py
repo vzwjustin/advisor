@@ -35,10 +35,18 @@ def _require_git() -> None:
         raise GitScopeError("git is not on PATH; --since/--staged/--branch require a git checkout")
 
 
+# Git commands occasionally hang — e.g. a ``diff`` against a ref that
+# triggers credential-manager prompt on a misconfigured machine. Bound
+# every invocation so the CLI cannot wedge indefinitely; 30 s is the
+# tradeoff between "works on a large repo" and "bails quickly on a hang".
+_GIT_TIMEOUT_SECONDS = 30
+
+
 def _run_git(cwd: Path, *args: str) -> list[str]:
     """Run ``git *args`` in ``cwd`` and return stdout lines (empty on empty output).
 
-    Raises :class:`GitScopeError` on non-zero exit or missing binary.
+    Raises :class:`GitScopeError` on non-zero exit, missing binary, or
+    timeout.
     """
     _require_git()
     try:
@@ -48,7 +56,12 @@ def _run_git(cwd: Path, *args: str) -> list[str]:
             capture_output=True,
             text=True,
             check=False,
+            timeout=_GIT_TIMEOUT_SECONDS,
         )
+    except subprocess.TimeoutExpired as exc:
+        raise GitScopeError(
+            f"git {' '.join(args)} timed out after {_GIT_TIMEOUT_SECONDS}s"
+        ) from exc
     except OSError as exc:
         raise GitScopeError(f"failed to invoke git: {exc}") from exc
     if completed.returncode != 0:

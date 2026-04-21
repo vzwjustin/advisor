@@ -12,6 +12,8 @@ history file. They are human-readable JSON — diffable and auditable.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -54,6 +56,34 @@ def _dir(target: str | Path) -> Path:
 def checkpoint_path(target: str | Path, run_id: str) -> Path:
     """Absolute path for a checkpoint file with the given run_id."""
     return _dir(target) / f"{CHECKPOINT_PREFIX}{run_id}{CHECKPOINT_SUFFIX}"
+
+
+def _atomic_write_text(target: Path, text: str) -> None:
+    """Write ``text`` to ``target`` atomically via a same-dir tmpfile + rename.
+
+    A SIGINT / disk-full mid-write leaves the original file untouched —
+    ``os.replace`` is atomic on POSIX and Windows when source and target
+    sit on the same filesystem. We write to a tmpfile in the target's
+    parent directory to guarantee that property. Unlike the hardened
+    ``install._atomic_write_text`` (which defends against symlink TOCTOU
+    on shared $HOME), checkpoints live under the user's own target dir
+    and don't warrant the same ceremony — but atomic rename is still the
+    right reliability primitive.
+    """
+    parent = target.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=str(parent))
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, target)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def save_checkpoint(
@@ -111,8 +141,7 @@ def save_checkpoint(
         batches=batch_dicts,
     )
     path = checkpoint_path(target, run_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(asdict(checkpoint), indent=2), encoding="utf-8")
+    _atomic_write_text(path, json.dumps(asdict(checkpoint), indent=2))
     return path
 
 

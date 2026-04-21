@@ -129,6 +129,28 @@ class TestCreateFocusBatches:
         batches = create_focus_batches(self._tasks(4), files_per_batch=2, complexity="high")
         assert all(b.complexity == "high" for b in batches)
 
+    def test_complexity_auto_derives_from_top_priority(self):
+        """Default ``complexity="auto"`` maps top priority to a label —
+        replaces the previous flat ``medium`` for every batch, which
+        made ``advisor plan --batch-size N`` reports misleading.
+        """
+        tasks = [
+            FocusTask(file_path="low.py", priority=1, prompt=""),
+            FocusTask(file_path="med.py", priority=3, prompt=""),
+            FocusTask(file_path="hot.py", priority=5, prompt=""),
+        ]
+        batches = create_focus_batches(tasks, files_per_batch=1)
+        assert [b.complexity for b in batches] == ["low", "medium", "high"]
+
+    def test_complexity_auto_uses_top_priority_within_batch(self):
+        tasks = [
+            FocusTask(file_path="a.py", priority=2, prompt=""),
+            FocusTask(file_path="b.py", priority=5, prompt=""),
+        ]
+        batches = create_focus_batches(tasks, files_per_batch=5)
+        # Batch-wide complexity is driven by the hottest file in it.
+        assert batches[0].complexity == "high"
+
     def test_empty_input(self):
         assert create_focus_batches([], files_per_batch=5) == []
 

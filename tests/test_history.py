@@ -82,8 +82,25 @@ class TestFormatHistoryBlock:
 class TestRunIdAndEntryNow:
     def test_new_run_id_format(self) -> None:
         rid = new_run_id()
-        assert len(rid) == 16  # YYYYMMDDTHHMMSSZ
-        assert rid.endswith("Z")
+        # YYYYMMDDTHHMMSSZ-XXXX  (timestamp + "-" + 4 hex chars)
+        assert len(rid) == 21
+        ts, sep, suffix = rid.partition("-")
+        assert sep == "-"
+        assert ts.endswith("Z")
+        assert len(ts) == 16
+        assert len(suffix) == 4
+        # 4-hex suffix ⇒ only 0-9a-f
+        assert all(c in "0123456789abcdef" for c in suffix)
+
+    def test_new_run_id_is_unique_within_a_second(self) -> None:
+        """Regression: back-to-back runs in the same second used to
+        collide on the run_id and silently overwrite each other's
+        checkpoint. The random suffix makes collisions vanishingly rare.
+        """
+        ids = {new_run_id() for _ in range(50)}
+        # With 16 bits of entropy, 50 draws colliding would be a freak event
+        # (birthday bound ≈ 50²/2¹⁶ ≈ 0.04). Require at least 48 unique.
+        assert len(ids) >= 48
 
     def test_entry_now_populates_timestamp(self) -> None:
         e = entry_now(

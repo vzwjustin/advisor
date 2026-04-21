@@ -197,6 +197,53 @@ def language_for_path(path: str) -> str | None:
     return EXTENSION_LANGUAGE.get(suffix)
 
 
+# Shebang interpreter → canonical language name. Used as a fallback when
+# a file has no recognized extension (common for CLI scripts like
+# ``/usr/local/bin/deploy`` with ``#!/usr/bin/env python3``). Only the
+# interpreter basename is examined, so ``python3.12``, ``python``, and
+# ``/opt/python/bin/python`` all resolve identically.
+_SHEBANG_INTERPRETERS: dict[str, str] = {
+    "python": "python",
+    "python2": "python",
+    "python3": "python",
+    "node": "javascript",
+    "deno": "javascript",
+    "bun": "javascript",
+    "ruby": "ruby",
+    "php": "php",
+}
+
+
+def _language_from_shebang(first_line: str) -> str | None:
+    """Extract a canonical language from a ``#!...`` line, or ``None``.
+
+    Handles the common forms:
+        ``#!/usr/bin/python3``            → ``python``
+        ``#!/usr/bin/env python3``        → ``python``
+        ``#!/usr/bin/env -S python3 -u``  → ``python``
+    Unrecognized interpreters return ``None`` so callers fall back to
+    the base (language-less) keyword scoring.
+    """
+    if not first_line.startswith("#!"):
+        return None
+    tokens = first_line[2:].strip().split()
+    if not tokens:
+        return None
+    # ``env`` forms: pick the first non-flag argument after ``env``.
+    first = tokens[0].rsplit("/", 1)[-1]
+    if first == "env":
+        for tok in tokens[1:]:
+            if tok.startswith("-"):
+                continue
+            first = tok.rsplit("/", 1)[-1]
+            break
+        else:
+            return None
+    # Strip version suffixes like ``python3.12`` → ``python3``.
+    base = first.split(".", 1)[0]
+    return _SHEBANG_INTERPRETERS.get(base) or _SHEBANG_INTERPRETERS.get(first)
+
+
 SKIP_DIRS = frozenset(
     {
         "__pycache__",
@@ -447,10 +494,16 @@ def _combined_regex_for(language: str | None) -> tuple[re.Pattern[str], dict[str
 
 
 # Back-compat export: the module used to expose a precomputed base regex as
-# ``_COMBINED_KEYWORD_RE`` / ``_COMBINED_GROUP_MAP``. Some tests import these
-# directly to verify the wiring; keep the names alive as aliases for the
-# language-less (base) variant.
-_COMBINED_KEYWORD_RE, _COMBINED_GROUP_MAP = _combined_regex_for(None)
+# ``_COMBINED_KEYWORD_RE`` / ``_COMBINED_GROUP_MAP``. Importers (tests, etc.)
+# get a lazily-initialized reference so merely importing :mod:`advisor.rank`
+# doesn't force the regex to compile when the caller (e.g. ``advisor
+# --version``) never ranks a file.
+def __getattr__(name: str) -> object:
+    if name == "_COMBINED_KEYWORD_RE":
+        return _combined_regex_for(None)[0]
+    if name == "_COMBINED_GROUP_MAP":
+        return _combined_regex_for(None)[1]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _score_file(path: str, content: str) -> tuple[int, tuple[str, ...]]:
@@ -462,9 +515,16 @@ def _score_file(path: str, content: str) -> tuple[int, tuple[str, ...]]:
 
     Only the first ``CONTENT_SCAN_LIMIT`` characters of content are scanned.
     The language is detected from the file extension and augments the base
-    keyword set with ecosystem-specific terms when available.
+    keyword set with ecosystem-specific terms when available. When the
+    extension is unrecognized, the content's first line is inspected for
+    a ``#!`` shebang — so a file named ``deploy`` with
+    ``#!/usr/bin/env python3`` still gets Python-specific scoring.
     """
     language = language_for_path(path)
+    if language is None and content:
+        first_newline = content.find("\n")
+        first_line = content[:first_newline] if first_newline != -1 else content
+        language = _language_from_shebang(first_line)
     regex, group_map = _combined_regex_for(language)
     combined = f"{path} {content[:CONTENT_SCAN_LIMIT]}"
     matches_per_tier: dict[int, list[str]] = {}
@@ -488,6 +548,8 @@ def rank_files(
     file_paths: list[str],
     read_fn: Callable[[str], str] | None = None,
     ignore_patterns: list[str] | None = None,
+    *,
+    max_workers: int | None = None,
 ) -> list[RankedFile]:
     """Rank files by vulnerability likelihood, highest priority first.
 
@@ -497,35 +559,81 @@ def rank_files(
                  If None, ranks by filename alone.
         ignore_patterns: Optional list of glob patterns to skip. Use
                         load_advisorignore() to get patterns from file.
+        max_workers: Thread-pool size for ``read_fn`` I/O. ``None`` (default)
+                    picks ``min(32, os.cpu_count() or 4) * 4`` — enough to
+                    saturate SSD read queues without swamping small VMs.
+                    Set to ``1`` to disable parallelism entirely (handy for
+                    deterministic tests or debugging).
 
     Returns:
         A new list of RankedFile sorted by priority descending, then by path
         ascending for deterministic tie-breaking across platforms.
+
+    File reads run in a thread pool when ``read_fn`` is provided — scoring
+    itself is pure CPU (regex matching) and stays on the caller's thread.
+    For small repos (< ~20 files) the pool is skipped to avoid its
+    startup overhead.
     """
-    ranked: list[RankedFile] = []
     patterns = ignore_patterns or []
 
+    # Skip directory / extension / ignore-pattern filters first so we
+    # don't pay for reading a file we'll drop anyway.
+    kept_paths: list[str] = []
     for fp in file_paths:
         p = Path(fp)
-
         if any(part in SKIP_DIRS for part in p.parts):
             continue
         if p.suffix in SKIP_EXTENSIONS:
             continue
         if _matches_any_pattern(fp, patterns):
             continue
+        kept_paths.append(fp)
 
-        content = ""
-        if read_fn is not None:
-            try:
-                content = read_fn(fp)
-            except (OSError, UnicodeDecodeError):
-                content = ""
+    if not kept_paths:
+        return []
 
+    contents = _read_contents_parallel(kept_paths, read_fn, max_workers)
+
+    ranked: list[RankedFile] = []
+    for fp, content in zip(kept_paths, contents, strict=True):
         priority, reasons = _score_file(fp, content)
         ranked.append(RankedFile(path=fp, priority=priority, reasons=reasons))
 
     return sorted(ranked, key=lambda r: (-r.priority, r.path))
+
+
+def _read_contents_parallel(
+    paths: list[str],
+    read_fn: Callable[[str], str] | None,
+    max_workers: int | None,
+) -> list[str]:
+    """Read every path via ``read_fn`` using a bounded thread pool.
+
+    Returns a list of contents aligned with ``paths``. Any read error
+    yields an empty string for that path so a single unreadable file
+    can't abort the rank.
+    """
+    if read_fn is None:
+        return [""] * len(paths)
+
+    def _safe(p: str) -> str:
+        try:
+            return read_fn(p)
+        except (OSError, UnicodeDecodeError):
+            return ""
+
+    # Small jobs: serial is faster than spinning up a pool.
+    if len(paths) < 20 or max_workers == 1:
+        return [_safe(p) for p in paths]
+
+    import os
+    from concurrent.futures import ThreadPoolExecutor
+
+    workers = max_workers if max_workers is not None else min(32, (os.cpu_count() or 4) * 4)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        # ``executor.map`` preserves input order, which is exactly what
+        # we need to keep the result list aligned with ``paths``.
+        return list(executor.map(_safe, paths))
 
 
 def rank_to_prompt(ranked: list[RankedFile], top_n: int = 10) -> str:

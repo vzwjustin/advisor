@@ -128,10 +128,33 @@ def create_focus_tasks(
     return tasks
 
 
+# Marker for ``create_focus_batches(complexity=...)`` that tells the
+# builder to auto-derive per-batch complexity from the top priority of
+# the tasks it contains. Exposed as a module constant rather than a
+# sentinel string so callers can reference it unambiguously.
+AUTO_COMPLEXITY = "auto"
+
+
+def _complexity_for_priority(top_priority: int) -> str:
+    """Map a top-priority tier to a default complexity label.
+
+    Covers the offline ``advisor plan --batch-size N`` path — in the
+    live pipeline the advisor overrides this based on reading the
+    files. Simple heuristic: P1–P2 is ``low``, P3 is ``medium``,
+    P4–P5 is ``high``. Keeps the plan's batch-header informative
+    instead of the previous flat ``medium`` for everything.
+    """
+    if top_priority >= 4:
+        return "high"
+    if top_priority <= 2:
+        return "low"
+    return "medium"
+
+
 def create_focus_batches(
     tasks: list[FocusTask],
     files_per_batch: int = 5,
-    complexity: str = "medium",
+    complexity: str = AUTO_COMPLEXITY,
 ) -> list[FocusBatch]:
     """Group FocusTasks into batches for parallel runner dispatch.
 
@@ -139,6 +162,12 @@ def create_focus_batches(
     pipeline the Opus advisor decides batch composition and complexity per
     batch based on its own reading of each file. No hard upper cap — `files_per_batch`
     is a simple grouping knob, not a ceiling on what a runner can handle.
+
+    When ``complexity == "auto"`` (the default), each batch's complexity
+    is derived from the top priority of its tasks via
+    :func:`_complexity_for_priority`. Passing any other string forces all
+    batches to that exact value — preserves the previous fixed-label
+    behavior for callers that want it.
     """
     if files_per_batch < 1:
         raise ValueError("files_per_batch must be >= 1")
@@ -146,11 +175,16 @@ def create_focus_batches(
     batches: list[FocusBatch] = []
     for i in range(0, len(tasks), files_per_batch):
         chunk = tuple(tasks[i : i + files_per_batch])
+        if complexity == AUTO_COMPLEXITY:
+            top = max((t.priority for t in chunk), default=1)
+            batch_complexity = _complexity_for_priority(top)
+        else:
+            batch_complexity = complexity
         batches.append(
             FocusBatch(
                 batch_id=len(batches) + 1,
                 tasks=chunk,
-                complexity=complexity,
+                complexity=batch_complexity,
             )
         )
     return batches

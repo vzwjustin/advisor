@@ -61,13 +61,26 @@ class TestCmdPromptVerifyEmptyStdin:
 
 
 class TestNudgeSkipCommands:
-    """Dry-run / preview commands must not mutate ~/.claude/ via ensure_nudge."""
+    """Only commands that explicitly manage the nudge should skip ensure_nudge.
+
+    The first-run auto-install behavior (documented in the README) relies on
+    every OTHER subcommand triggering ``ensure_nudge()`` — including dry-run
+    / preview commands like ``plan`` and ``status``. ``ensure_nudge`` is
+    idempotent, so firing it on each command is harmless after the first.
+    """
+
+    @pytest.mark.parametrize("cmd", ["install", "uninstall", "version"])
+    def test_explicit_management_commands_skip_nudge(self, cmd):
+        assert cmd in _NUDGE_SKIP_COMMANDS
 
     @pytest.mark.parametrize(
-        "cmd", ["plan", "pipeline", "prompt", "install", "uninstall", "status", "doctor"]
+        "cmd",
+        ["plan", "pipeline", "prompt", "status", "doctor", "protocol", "history", "checkpoints"],
     )
-    def test_read_only_commands_skip_nudge(self, cmd):
-        assert cmd in _NUDGE_SKIP_COMMANDS
+    def test_other_commands_trigger_nudge(self, cmd):
+        """Regression: previously every subcommand was in the skip set,
+        which silently disabled the entire auto-install feature."""
+        assert cmd not in _NUDGE_SKIP_COMMANDS
 
 
 class TestSafeRglob:
@@ -346,9 +359,12 @@ class TestCmdProtocol:
         # Must warn against the broadcast pitfall documented in the audit:
         assert 'broadcast "*"' in out or 'broadcast `"*"`' in out
 
-    def test_does_not_install_nudge(self, tmp_path, monkeypatch, capsys):
-        """`protocol` is a pure read-only reference; it must not touch
-        ~/.claude/CLAUDE.md even when the nudge is missing."""
+    def test_triggers_first_run_setup(self, tmp_path, monkeypatch):
+        """`protocol` — like every non-install command — triggers the
+        documented first-run auto-install of the nudge + skill so the
+        README promise holds. ``ensure_nudge`` is idempotent, so subsequent
+        invocations see an already-installed nudge and no-op.
+        """
         from advisor import __main__ as cli
 
         monkeypatch.setenv("HOME", str(tmp_path))
@@ -356,8 +372,8 @@ class TestCmdProtocol:
         assert not claude_md.exists()
         rc = cli.main(["protocol"])
         assert rc == 0
-        # Nudge must NOT have been installed as a side effect:
-        assert not claude_md.exists()
+        # First-run installs the nudge as a side effect:
+        assert claude_md.exists()
 
 
 class TestMainEntrypoint:
@@ -773,3 +789,237 @@ class TestHistoryLimitValidation:
         with pytest.raises(SystemExit) as exc:
             cli.main(["history", ".", "--limit", "0"])
         assert exc.value.code == 2
+
+
+class TestCmdVersion:
+    """``advisor version`` reports environment details with optional JSON."""
+
+    def test_plain_version_prints_details(self, capsys):
+        from advisor import __main__ as cli
+
+        rc = cli.main(["version"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "advisor" in out
+        assert "python" in out
+        assert "install" in out
+
+    def test_json_version_has_stable_keys(self, capsys):
+        import json as _json
+
+        from advisor import __main__ as cli
+
+        rc = cli.main(["version", "--json"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        payload = _json.loads(out)
+        for key in (
+            "schema_version",
+            "advisor_version",
+            "python_version",
+            "python_implementation",
+            "install_path",
+            "platform",
+        ):
+            assert key in payload
+
+
+class TestCmdCheckpoints:
+    """``advisor checkpoints`` lists + deletes saved plans."""
+
+    def _write_stub_checkpoint(self, tmp_path, run_id):
+        from advisor.checkpoint import checkpoint_path
+
+        p = checkpoint_path(tmp_path, run_id)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("{}", encoding="utf-8")
+        return p
+
+    def test_list_empty_prints_placeholder(self, tmp_path, capsys):
+        from advisor import __main__ as cli
+
+        rc = cli.main(["checkpoints", str(tmp_path)])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "no checkpoints" in out
+
+    def test_list_json_emits_ids(self, tmp_path, capsys):
+        import json as _json
+
+        from advisor import __main__ as cli
+
+        self._write_stub_checkpoint(tmp_path, "20260101T000000Z-abc123")
+        self._write_stub_checkpoint(tmp_path, "20260101T000001Z-def456")
+        rc = cli.main(["checkpoints", str(tmp_path), "--json"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        payload = _json.loads(out)
+        assert payload["count"] == 2
+        assert set(payload["run_ids"]) == {
+            "20260101T000000Z-abc123",
+            "20260101T000001Z-def456",
+        }
+
+    def test_rm_removes_specific_checkpoint(self, tmp_path):
+        from advisor import __main__ as cli
+        from advisor.checkpoint import checkpoint_path
+
+        keep = self._write_stub_checkpoint(tmp_path, "20260101T000000Z-keepme")
+        gone = self._write_stub_checkpoint(tmp_path, "20260101T000001Z-nukeme")
+        rc = cli.main(
+            ["checkpoints", str(tmp_path), "--rm", "20260101T000001Z-nukeme", "--quiet"]
+        )
+        assert rc == 0
+        assert keep.exists()
+        assert not gone.exists()
+        # idempotent: removing again returns 0
+        assert (
+            cli.main(
+                ["checkpoints", str(tmp_path), "--rm", "20260101T000001Z-nukeme", "--quiet"]
+            )
+            == 0
+        )
+        # sanity: path helper agrees with our stub layout
+        assert checkpoint_path(tmp_path, "20260101T000000Z-keepme") == keep
+
+    def test_clear_removes_all(self, tmp_path):
+        from advisor import __main__ as cli
+        from advisor.checkpoint import list_checkpoints
+
+        self._write_stub_checkpoint(tmp_path, "20260101T000000Z-a")
+        self._write_stub_checkpoint(tmp_path, "20260101T000001Z-b")
+        rc = cli.main(["checkpoints", str(tmp_path), "--clear", "--quiet"])
+        assert rc == 0
+        assert list_checkpoints(tmp_path) == []
+
+    def test_rm_and_clear_are_mutually_exclusive(self, tmp_path, capsys):
+        from advisor import __main__ as cli
+
+        rc = cli.main(["checkpoints", str(tmp_path), "--rm", "anything", "--clear"])
+        assert rc == 2
+        err = capsys.readouterr().err
+        assert "mutually exclusive" in err
+
+
+class TestCmdPlanExclude:
+    """``--exclude`` filters paths before ranking."""
+
+    def test_exclude_drops_matching_files(self, tmp_path, capsys):
+        import json as _json
+
+        from advisor import __main__ as cli
+
+        (tmp_path / "app.py").write_text("def f():\n    pass\n")
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_app.py").write_text("def test_f():\n    pass\n")
+        rc = cli.main(
+            [
+                "plan",
+                str(tmp_path),
+                "--min-priority",
+                "1",
+                "--exclude",
+                "tests/**",
+                "--json",
+            ]
+        )
+        assert rc == 0
+        payload = _json.loads(capsys.readouterr().out)
+        names = {Path(t["file_path"]).name for t in payload["tasks"]}
+        assert "app.py" in names
+        assert "test_app.py" not in names
+
+
+class TestCmdPlanPricing:
+    """``--pricing FILE`` overrides the default per-family pricing."""
+
+    def test_pricing_file_overrides_estimate(self, tmp_path, capsys):
+        import json as _json
+
+        from advisor import __main__ as cli
+
+        (tmp_path / "a.py").write_text("x = 1\n" * 200)
+        pricing = tmp_path / "pricing.json"
+        pricing.write_text(
+            _json.dumps(
+                {
+                    "opus": {"input": 1, "output": 1},
+                    "sonnet": {"input": 1, "output": 1},
+                    "haiku": {"input": 1, "output": 1},
+                }
+            )
+        )
+        rc = cli.main(
+            [
+                "plan",
+                str(tmp_path),
+                "--min-priority",
+                "1",
+                "--estimate",
+                "--pricing",
+                str(pricing),
+                "--json",
+            ]
+        )
+        assert rc == 0
+        payload = _json.loads(capsys.readouterr().out)
+        est = payload["estimate"]
+        # With 1c/1c/Mtok across the board, cost is orders of magnitude
+        # below the 300/1500c sonnet default — anything > $0.01 means
+        # the override didn't take effect.
+        assert est["cost_usd_max"] < 0.01
+
+    def test_invalid_pricing_file_errors_cleanly(self, tmp_path, capsys):
+        from advisor import __main__ as cli
+
+        (tmp_path / "a.py").write_text("x = 1\n")
+        bad = tmp_path / "pricing.json"
+        bad.write_text("{not json")
+        rc = cli.main(
+            [
+                "plan",
+                str(tmp_path),
+                "--min-priority",
+                "1",
+                "--estimate",
+                "--pricing",
+                str(bad),
+                "--json",
+            ]
+        )
+        assert rc == 2
+        err = capsys.readouterr().err
+        assert "pricing file" in err
+
+
+class TestCmdPlanGitignoreTip:
+    """Checkpointing a plan nudges the user when ``.advisor/`` isn't ignored."""
+
+    def test_tip_printed_when_gitignore_lacks_advisor(self, tmp_path, capsys):
+        from advisor import __main__ as cli
+
+        (tmp_path / "a.py").write_text("x = 1\n")
+        (tmp_path / ".gitignore").write_text("__pycache__/\n*.pyc\n")
+        rc = cli.main(["plan", str(tmp_path), "--min-priority", "1", "--checkpoint"])
+        assert rc == 0
+        err = capsys.readouterr().err
+        assert ".advisor/" in err
+
+    def test_tip_suppressed_when_gitignore_has_advisor(self, tmp_path, capsys):
+        from advisor import __main__ as cli
+
+        (tmp_path / "a.py").write_text("x = 1\n")
+        (tmp_path / ".gitignore").write_text(".advisor/\n")
+        rc = cli.main(["plan", str(tmp_path), "--min-priority", "1", "--checkpoint"])
+        assert rc == 0
+        err = capsys.readouterr().err
+        assert ".advisor/" not in err
+
+    def test_tip_suppressed_without_gitignore(self, tmp_path, capsys):
+        from advisor import __main__ as cli
+
+        (tmp_path / "a.py").write_text("x = 1\n")
+        rc = cli.main(["plan", str(tmp_path), "--min-priority", "1", "--checkpoint"])
+        assert rc == 0
+        err = capsys.readouterr().err
+        assert ".advisor/" not in err

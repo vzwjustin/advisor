@@ -12,7 +12,10 @@ advisory — treat the output as "order of magnitude", not invoice-accurate.
 
 from __future__ import annotations
 
+import json
+import warnings
 from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
 
 from .focus import FocusBatch, FocusTask
@@ -39,7 +42,14 @@ CHARS_PER_TOKEN = 3.5
 
 
 def _family_of(model: str) -> str:
-    """Return the canonical family (``opus``, ``sonnet``, ``haiku``) for a model name."""
+    """Return the canonical family (``opus``, ``sonnet``, ``haiku``) for a model name.
+
+    Unknown names fall back to ``sonnet`` pricing as a reasonable
+    middle-of-the-road default, but emit a one-shot :class:`UserWarning`
+    so the caller knows their estimate is a guess. Warning is
+    de-duplicated per unique model string so a plan with many runners
+    doesn't spam stderr.
+    """
     m = model.lower()
     if "opus" in m:
         return "opus"
@@ -47,8 +57,24 @@ def _family_of(model: str) -> str:
         return "sonnet"
     if "haiku" in m:
         return "haiku"
-    # Unknown; default to sonnet pricing as a middle-of-the-road guess.
+    _warn_unknown_family(model)
     return "sonnet"
+
+
+@cache
+def _warn_unknown_family(model: str) -> None:
+    """Issue a once-per-model warning for unclassifiable model names.
+
+    ``cache`` dedupes so repeated calls for the same model during a
+    single ``estimate_cost`` invocation (advisor + N runners of the same
+    family) emit exactly one line.
+    """
+    warnings.warn(
+        f"cost: unknown model family for {model!r}; pricing as 'sonnet' — "
+        f"pass `pricing=` to override",
+        UserWarning,
+        stacklevel=3,
+    )
 
 
 def _tokens_for_file(path: str) -> int:
@@ -161,6 +187,67 @@ def estimate_cost(
         advisor_model=advisor_model,
         runner_model=runner_model,
     )
+
+
+def load_pricing(path: str | Path) -> dict[str, tuple[int, int]]:
+    """Load a pricing override table from a JSON file.
+
+    Accepts two equivalent shapes so hand-authored files stay readable:
+
+    * ``{"opus": {"input": 1500, "output": 7500}, ...}`` (preferred)
+    * ``{"opus": [1500, 7500], ...}`` (matches the in-memory tuple layout)
+
+    Values are in cents per million tokens (same unit as
+    :data:`DEFAULT_PRICING_CENTS_PER_MTOK`). All three canonical families
+    (``opus``, ``sonnet``, ``haiku``) must be present so unknown-family
+    fallbacks have something to land on. Raises :class:`ValueError` with
+    an actionable message for any parse or shape error.
+    """
+    p = Path(path)
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ValueError(f"could not read pricing file {p}: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"pricing file {p} is not valid JSON: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise ValueError(f"pricing file {p} must be a JSON object at the top level")
+    out: dict[str, tuple[int, int]] = {}
+    for family in ("opus", "sonnet", "haiku"):
+        if family not in raw:
+            raise ValueError(
+                f"pricing file {p} is missing family {family!r}; "
+                f"all three of opus/sonnet/haiku must be present"
+            )
+        entry = raw[family]
+        if isinstance(entry, dict):
+            try:
+                in_c = int(entry["input"])
+                out_c = int(entry["output"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"pricing file {p}: family {family!r} object must have "
+                    f"integer 'input' and 'output' keys"
+                ) from exc
+        elif isinstance(entry, list) and len(entry) == 2:
+            try:
+                in_c = int(entry[0])
+                out_c = int(entry[1])
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"pricing file {p}: family {family!r} array must contain two integers"
+                ) from exc
+        else:
+            raise ValueError(
+                f"pricing file {p}: family {family!r} must be "
+                f"an object {{input, output}} or a [input, output] array"
+            )
+        if in_c < 0 or out_c < 0:
+            raise ValueError(
+                f"pricing file {p}: family {family!r} cents values must be non-negative"
+            )
+        out[family] = (in_c, out_c)
+    return out
 
 
 def format_estimate(est: CostEstimate) -> str:

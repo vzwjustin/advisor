@@ -18,10 +18,12 @@ from . import _style
 from ._fs import read_head as _read_head
 from .checkpoint import (
     Checkpoint,
+    checkpoint_path,
+    list_checkpoints,
     load_checkpoint,
     save_checkpoint,
 )
-from .cost import estimate_cost, format_estimate
+from .cost import estimate_cost, format_estimate, load_pricing
 from .doctor import format_report, run_doctor
 from .focus import (
     FocusBatch,
@@ -191,6 +193,62 @@ def _safe_rglob(target: Path, pattern: str) -> tuple[list[str] | None, str | Non
         return None, f"filesystem error scanning {target}: {exc}"
 
 
+def _apply_exclude_patterns(target: Path, paths: list[str], patterns: list[str]) -> list[str]:
+    """Filter ``paths`` by ``--exclude`` glob patterns.
+
+    Patterns are evaluated against the target-relative path (``tests/foo.py``
+    rather than ``/abs/…/tests/foo.py``) so user-written patterns match
+    the way they intuitively expect. Reuses
+    :func:`advisor.rank._matches_any_pattern` for parity with the
+    ``.advisorignore`` semantics (including ``**`` globs and trailing-slash
+    directory patterns).
+    """
+    from .rank import _matches_any_pattern
+
+    try:
+        target_resolved = target.resolve()
+    except OSError:
+        target_resolved = target
+    kept: list[str] = []
+    for fp in paths:
+        try:
+            rel = str(Path(fp).resolve().relative_to(target_resolved))
+        except (ValueError, OSError):
+            rel = fp
+        # Check both the relative and absolute form — the user might
+        # paste a literal absolute path for a one-off exclude.
+        if _matches_any_pattern(rel, patterns) or _matches_any_pattern(fp, patterns):
+            continue
+        kept.append(fp)
+    return kept
+
+
+def _gitignore_missing_advisor_entry(target: Path) -> bool:
+    """True when ``target/.gitignore`` exists but doesn't ignore ``.advisor/``.
+
+    Used to emit a one-shot tip when the user first checkpoints a plan.
+    We only nag when there's already a ``.gitignore`` in the target —
+    projects that aren't tracked in git have nothing to accidentally
+    commit. Common accepted forms (``.advisor``, ``.advisor/``,
+    ``.advisor/*``) are all recognized to avoid false positives.
+    """
+    gi = target / ".gitignore"
+    if not gi.is_file():
+        return False
+    try:
+        content = gi.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    accepted = {".advisor", ".advisor/", ".advisor/*", "/.advisor", "/.advisor/"}
+    for line in content.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        if s in accepted:
+            return False
+    return True
+
+
 def _plan_to_dict(
     target: Path,
     tasks: list[FocusTask],
@@ -244,6 +302,11 @@ def _resolve_plan_files(
     prevented resolution. Git-scope selectors (``--since``, ``--staged``,
     ``--branch``) take precedence over the recursive scan and are mutually
     exclusive with each other.
+
+    Git-returned paths are filtered against ``--file-types`` using the same
+    fnmatch semantics the recursive scan applies, so
+    ``advisor plan --since main --file-types '*.py'`` does not surface
+    unrelated markdown/yaml changes that happen to share the diff.
     """
     since = getattr(args, "since", None)
     staged = getattr(args, "staged", False)
@@ -255,6 +318,11 @@ def _resolve_plan_files(
             return None, str(exc)
         if files is None:
             return [], None
+        pattern = args.file_types
+        if pattern and pattern != "*":
+            import fnmatch
+
+            files = [p for p in files if fnmatch.fnmatch(Path(p).name, pattern)]
         return files, None
     return _safe_rglob(target, args.file_types)
 
@@ -316,6 +384,17 @@ def cmd_plan(args: argparse.Namespace) -> int:
         print(_style.error_box(glob_err, stream=sys.stderr), file=sys.stderr)
         return 2
 
+    # ``--exclude`` complements ``.advisorignore`` for ad-hoc filtering.
+    # Patterns are applied against the target-relative path so users can
+    # write ``--exclude 'tests/**'`` without worrying about the absolute
+    # prefix. We filter here (not inside ``rank_files``) because the
+    # rank matcher anchors at the start of the path, which doesn't play
+    # nicely with the absolute paths ``_safe_rglob`` returns. Falls back
+    # to absolute matching when relativization fails (symlinks, etc.).
+    exclude_patterns: list[str] = list(getattr(args, "exclude", []) or [])
+    if exclude_patterns and paths:
+        paths = _apply_exclude_patterns(target, paths, exclude_patterns)
+
     ranked = rank_files(paths or [], read_fn=_read_head)
     tasks = create_focus_tasks(
         ranked,
@@ -348,6 +427,15 @@ def cmd_plan(args: argparse.Namespace) -> int:
             test_command=cfg.test_command,
             context=cfg.context,
         )
+        # One-shot gitignore nudge: checkpoints live under ``.advisor/``,
+        # which users often don't realize is a writable dir until they see
+        # it in ``git status``. We only hint when there's already a
+        # ``.gitignore`` (i.e. git-tracked project) that doesn't cover it.
+        if not getattr(args, "quiet", False) and _gitignore_missing_advisor_entry(target):
+            print(
+                _style.tip("add `.advisor/` to .gitignore so checkpoints + history stay local"),
+                file=sys.stderr,
+            )
 
     return _emit_plan(args, target, tasks, batches, run_id=saved_run_id)
 
@@ -398,6 +486,18 @@ def _emit_plan(
     def _cfg() -> TeamConfig:
         return resolved_config if resolved_config is not None else _config_from_args(args)
 
+    # ``--pricing FILE`` overrides the default per-family pricing table
+    # for cost estimates. Loaded once so both the JSON and pretty branches
+    # see the same override (and parse errors fail fast with a clear box).
+    pricing_path = getattr(args, "pricing", None)
+    pricing_override: dict[str, tuple[int, int]] | None = None
+    if pricing_path:
+        try:
+            pricing_override = load_pricing(pricing_path)
+        except ValueError as exc:
+            print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
+            return 2
+
     if getattr(args, "json", False):
         estimate = None
         if getattr(args, "estimate", False):
@@ -408,6 +508,7 @@ def _emit_plan(
                 advisor_model=cfg.advisor_model,
                 runner_model=cfg.runner_model,
                 max_fixes_per_runner=cfg.max_fixes_per_runner,
+                pricing=pricing_override,
             )
         payload = _plan_to_dict(target, tasks, batches, estimate=estimate, run_id=run_id)
         rendered = json.dumps(payload, indent=2)
@@ -447,6 +548,7 @@ def _emit_plan(
             advisor_model=cfg.advisor_model,
             runner_model=cfg.runner_model,
             max_fixes_per_runner=cfg.max_fixes_per_runner,
+            pricing=pricing_override,
         )
         print()
         print(_style.colorize_markdown(format_estimate(est)))
@@ -837,6 +939,108 @@ def cmd_history(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_version(args: argparse.Namespace) -> int:
+    """Print version + environment details (lighter-weight than ``doctor``).
+
+    Mirrors ``advisor --version`` but also reports the Python version,
+    the install path of the package, and the JSON schema version so
+    scripts can pin against both. ``--json`` produces a stable payload.
+    """
+    import platform
+
+    pkg_root = Path(__file__).resolve().parent
+    info: dict[str, str] = {
+        "schema_version": JSON_SCHEMA_VERSION,
+        "advisor_version": _get_version(),
+        "python_version": platform.python_version(),
+        "python_implementation": platform.python_implementation(),
+        "install_path": str(pkg_root),
+        "platform": platform.platform(),
+    }
+    if getattr(args, "json", False):
+        print(json.dumps(info, indent=2))
+        return 0
+    header = _style.banner(f"advisor {info['advisor_version']}", width=40)
+    lines = [
+        header,
+        f"  python     {info['python_version']} ({info['python_implementation']})",
+        f"  platform   {info['platform']}",
+        f"  install    {info['install_path']}",
+        f"  schema     {info['schema_version']}",
+    ]
+    print("\n".join(lines))
+    return 0
+
+
+def cmd_checkpoints(args: argparse.Namespace) -> int:
+    """List or delete saved ``.advisor/run-<id>.json`` checkpoints.
+
+    Default action is to list newest-first. ``--rm RUN_ID`` deletes a
+    single checkpoint; ``--clear`` deletes all of them. Both destructive
+    actions are idempotent — removing a nonexistent run_id is a no-op.
+    ``--json`` is supported for the list form so scripts can pick a
+    ``run_id`` to ``--resume``.
+    """
+    target = Path(args.target)
+    rm_id = getattr(args, "rm", None)
+    clear = getattr(args, "clear", False)
+    if rm_id and clear:
+        print(
+            _style.error_box("--rm and --clear are mutually exclusive", stream=sys.stderr),
+            file=sys.stderr,
+        )
+        return 2
+
+    if rm_id:
+        path = checkpoint_path(target, rm_id)
+        if path.exists():
+            try:
+                path.unlink()
+            except OSError as exc:
+                print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
+                return 2
+            if not getattr(args, "quiet", False):
+                print(_style.dim(f"removed checkpoint {rm_id}"))
+        elif not getattr(args, "quiet", False):
+            print(_style.dim(f"no checkpoint {rm_id} at {path}"))
+        return 0
+
+    if clear:
+        ids = list_checkpoints(target)
+        removed = 0
+        for rid in ids:
+            path = checkpoint_path(target, rid)
+            try:
+                path.unlink()
+                removed += 1
+            except OSError:
+                pass
+        if not getattr(args, "quiet", False):
+            print(_style.dim(f"removed {removed} checkpoint(s)"))
+        return 0
+
+    ids = list_checkpoints(target)
+    if getattr(args, "json", False):
+        payload = {
+            "schema_version": JSON_SCHEMA_VERSION,
+            "target": str(target),
+            "count": len(ids),
+            "run_ids": ids,
+        }
+        print(json.dumps(payload, indent=2))
+        return 0
+    if not ids:
+        print(_style.dim(f"no checkpoints at {target}/.advisor/"))
+        return 0
+    print(_style.colorize_markdown(f"## Checkpoints ({len(ids)})"))
+    for rid in ids:
+        path = checkpoint_path(target, rid)
+        print(f"- `{rid}` — {path}")
+    print()
+    print(_style.tip("resume with: advisor plan --resume <RUN_ID>"))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="advisor",
@@ -941,6 +1145,26 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="RUN_ID",
         help="Resume a previously-saved checkpoint (skips discovery)",
+    )
+    # Ad-hoc exclusion — complements ``.advisorignore`` for one-off runs
+    # without mutating the user's repo. Each ``--exclude`` is appended to
+    # the ignore list used by ``rank_files``. Accepts glob patterns with
+    # ``**`` (e.g. ``--exclude 'tests/**' --exclude 'docs/**'``).
+    p_plan.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="PATTERN",
+        help="Exclude paths matching PATTERN (repeatable; supports ** globs)",
+    )
+    # Pricing override — organizations with bespoke contracts or
+    # forward-looking estimates can supply a JSON file. See
+    # ``advisor.cost.load_pricing`` for the accepted shapes.
+    p_plan.add_argument(
+        "--pricing",
+        default=None,
+        metavar="FILE",
+        help="Load model pricing (cents per 1M tokens) from JSON FILE",
     )
     p_plan.set_defaults(func=cmd_plan)
 
@@ -1139,24 +1363,65 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_history.set_defaults(func=cmd_history)
 
+    p_version = sub.add_parser(
+        "version",
+        help="Print version + environment details (like a lighter `doctor`)",
+    )
+    p_version.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit version info as JSON for scripting",
+    )
+    p_version.set_defaults(func=cmd_version)
+
+    p_checkpoints = sub.add_parser(
+        "checkpoints",
+        help="List or delete saved plan checkpoints under <target>/.advisor/",
+    )
+    p_checkpoints.add_argument(
+        "target",
+        nargs="?",
+        default=".",
+        help="Target directory containing the .advisor/ tree (default: current directory)",
+    )
+    p_checkpoints.add_argument(
+        "--rm",
+        default=None,
+        metavar="RUN_ID",
+        help="Remove a single checkpoint by run_id (idempotent)",
+    )
+    p_checkpoints.add_argument(
+        "--clear",
+        action="store_true",
+        help="Remove all checkpoints for the target",
+    )
+    p_checkpoints.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the list as JSON for scripting",
+    )
+    p_checkpoints.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress informational lines (errors still go to stderr)",
+    )
+    p_checkpoints.set_defaults(func=cmd_checkpoints)
+
     return parser
 
 
-# Read-only / dry-run commands never mutate the user's ~/.claude/ tree.
-# `install`/`uninstall` own the setup flow explicitly; `status`/`doctor` are
-# observation-only. `plan`/`pipeline`/`prompt` are preview helpers that print
-# prompts or rankings — they must not silently install anything the user did
-# not ask for.
+# `install` / `uninstall` manage the nudge + skill explicitly, so calling
+# ``ensure_nudge()`` before them is redundant (and would produce a confusing
+# setup-complete banner right before the user's actual install command runs).
+# Every other subcommand — including dry-run / read-only ones like ``status``,
+# ``plan``, ``doctor`` — triggers the first-run setup so the README claim
+# "The first run wires up ~/.claude/CLAUDE.md automatically" actually holds.
+# ``ensure_nudge`` is itself idempotent: on every run after the first it
+# detects existing state and returns UNCHANGED without writing anything.
 _NUDGE_SKIP_COMMANDS = {
     "install",
     "uninstall",
-    "status",
-    "doctor",
-    "plan",
-    "pipeline",
-    "prompt",
-    "protocol",
-    "history",
+    "version",
     "ui",
 }
 

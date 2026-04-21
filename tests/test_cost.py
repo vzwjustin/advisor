@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from advisor.cost import CostEstimate, estimate_cost, format_estimate
+from advisor.cost import CostEstimate, estimate_cost, format_estimate, load_pricing
 from advisor.focus import FocusTask
 
 
@@ -81,3 +81,118 @@ class TestEstimateCost:
         d = e.to_dict()
         assert d["file_count"] == 1
         assert d["advisor_model"] == "opus"
+
+
+class TestLoadPricing:
+    """``load_pricing`` parses both object and array shapes."""
+
+    def test_object_shape(self, tmp_path: Path) -> None:
+        import json
+
+        p = tmp_path / "pricing.json"
+        p.write_text(
+            json.dumps(
+                {
+                    "opus": {"input": 2000, "output": 8000},
+                    "sonnet": {"input": 400, "output": 2000},
+                    "haiku": {"input": 120, "output": 600},
+                }
+            )
+        )
+        pricing = load_pricing(p)
+        assert pricing == {
+            "opus": (2000, 8000),
+            "sonnet": (400, 2000),
+            "haiku": (120, 600),
+        }
+
+    def test_array_shape(self, tmp_path: Path) -> None:
+        import json
+
+        p = tmp_path / "pricing.json"
+        p.write_text(
+            json.dumps(
+                {
+                    "opus": [1500, 7500],
+                    "sonnet": [300, 1500],
+                    "haiku": [100, 500],
+                }
+            )
+        )
+        pricing = load_pricing(p)
+        assert pricing["opus"] == (1500, 7500)
+
+    def test_missing_family_raises(self, tmp_path: Path) -> None:
+        import json
+
+        import pytest
+
+        p = tmp_path / "pricing.json"
+        p.write_text(json.dumps({"opus": [1, 1], "sonnet": [1, 1]}))
+        with pytest.raises(ValueError, match="haiku"):
+            load_pricing(p)
+
+    def test_bad_json_raises(self, tmp_path: Path) -> None:
+        import pytest
+
+        p = tmp_path / "pricing.json"
+        p.write_text("not json at all")
+        with pytest.raises(ValueError, match="not valid JSON"):
+            load_pricing(p)
+
+    def test_negative_cents_raises(self, tmp_path: Path) -> None:
+        import json
+
+        import pytest
+
+        p = tmp_path / "pricing.json"
+        p.write_text(
+            json.dumps(
+                {
+                    "opus": [-1, 1],
+                    "sonnet": [1, 1],
+                    "haiku": [1, 1],
+                }
+            )
+        )
+        with pytest.raises(ValueError, match="non-negative"):
+            load_pricing(p)
+
+    def test_pricing_threads_into_estimate(self, tmp_path: Path) -> None:
+        import json
+
+        (tmp_path / "f.py").write_text("x" * 2000)
+        pricing = {
+            "opus": (1, 1),
+            "sonnet": (1, 1),
+            "haiku": (1, 1),
+        }
+        cheap = estimate_cost(
+            [_task(str(tmp_path / "f.py"))],
+            None,
+            advisor_model="opus",
+            runner_model="opus",
+            max_fixes_per_runner=5,
+            pricing=pricing,
+        )
+        # Also check the file-loading round trip produces the same estimate.
+        file_path = tmp_path / "pricing.json"
+        file_path.write_text(
+            json.dumps(
+                {
+                    "opus": list(pricing["opus"]),
+                    "sonnet": list(pricing["sonnet"]),
+                    "haiku": list(pricing["haiku"]),
+                }
+            )
+        )
+        loaded = load_pricing(file_path)
+        same = estimate_cost(
+            [_task(str(tmp_path / "f.py"))],
+            None,
+            advisor_model="opus",
+            runner_model="opus",
+            max_fixes_per_runner=5,
+            pricing=loaded,
+        )
+        assert cheap.cost_usd_max == same.cost_usd_max
