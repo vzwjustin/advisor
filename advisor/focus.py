@@ -85,7 +85,7 @@ def create_focus_tasks(
     min_priority: int = 2,
     prompt_template: str = DEFAULT_TASK_PROMPT,
 ) -> list[FocusTask]:
-    """Generate one FocusTask per ranked file above `min_priority`.
+    """Generate one FocusTask per ranked file at or above `min_priority`.
 
     Args:
         ranked_files: Output of rank.rank_files(), sorted by priority
