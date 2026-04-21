@@ -1,6 +1,7 @@
 """Tests for advisor.install — nudge append/remove helpers."""
 
 import io
+import os
 import sys
 from pathlib import Path
 
@@ -277,6 +278,10 @@ class TestInstallSkill:
         assert skill_dir.exists()  # kept because user_added.md is still there
 
     @pytest.mark.skipif(sys.platform == "win32", reason="chmod not meaningful on Windows")
+    @pytest.mark.skipif(
+        hasattr(os, "geteuid") and os.geteuid() == 0,
+        reason="root bypasses POSIX permission bits so the unlink won't fail",
+    )
     def test_uninstall_raises_oserror_on_permission_failure(self, tmp_path: Path):
         """OSError propagates when the file exists but cannot be deleted."""
         skill_dir = tmp_path / "skills" / "advisor"
