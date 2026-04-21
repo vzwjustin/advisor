@@ -143,6 +143,9 @@ def _config_from_args(args: argparse.Namespace) -> TeamConfig:
         context=context,
         advisor_model=args.advisor_model,
         runner_model=args.runner_model,
+        max_fixes_per_runner=getattr(args, "max_fixes_per_runner", 5),
+        large_file_line_threshold=getattr(args, "large_file_line_threshold", 800),
+        large_file_max_fixes=getattr(args, "large_file_max_fixes", 3),
         test_command=getattr(args, "test_cmd", "") or "",
     )
 
@@ -186,6 +189,36 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
         "--runner-model",
         default="sonnet",
         help="Model for the runner pool agents (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--max-fixes-per-runner",
+        type=int,
+        default=5,
+        help=(
+            "Hard cap on sequential fix assignments per runner before the "
+            "advisor rotates to a fresh runner. Lower this (e.g. 3) if "
+            "runners are exhausting context mid-fix-wave. Default: %(default)s"
+        ),
+    )
+    parser.add_argument(
+        "--large-file-line-threshold",
+        type=int,
+        default=800,
+        help=(
+            "Line count above which a file is considered 'large' for the "
+            "tighter per-runner fix cap (see --large-file-max-fixes). "
+            "Default: %(default)s"
+        ),
+    )
+    parser.add_argument(
+        "--large-file-max-fixes",
+        type=int,
+        default=3,
+        help=(
+            "Effective fix cap for any batch containing a file at or above "
+            "--large-file-line-threshold lines. Lowest applicable cap wins. "
+            "Default: %(default)s"
+        ),
     )
 
 
@@ -386,6 +419,8 @@ def cmd_plan(args: argparse.Namespace) -> int:
             advisor_model=cp.advisor_model,
             runner_model=cp.runner_model,
             max_fixes_per_runner=cp.max_fixes_per_runner,
+            large_file_line_threshold=cp.large_file_line_threshold,
+            large_file_max_fixes=cp.large_file_max_fixes,
             test_command=cp.test_command,
             warn_unknown_model=False,
         )
@@ -454,6 +489,8 @@ def cmd_plan(args: argparse.Namespace) -> int:
             advisor_model=cfg.advisor_model,
             runner_model=cfg.runner_model,
             max_fixes_per_runner=cfg.max_fixes_per_runner,
+            large_file_line_threshold=cfg.large_file_line_threshold,
+            large_file_max_fixes=cfg.large_file_max_fixes,
             test_command=cfg.test_command,
             context=cfg.context,
         )

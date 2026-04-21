@@ -398,6 +398,46 @@ class TestMaxFixesPerRunner:
         assert "Hard cap: 3 fix assignments" in prompt
         assert "CONTEXT_PRESSURE" in prompt
 
+    def test_runner_prompt_demands_preemptive_ping(self):
+        """Runner must be told to ping at N-1, not at the cap itself."""
+        config = default_team_config("/src", max_fixes_per_runner=5)
+        prompt = build_runner_pool_prompt(1, config)
+        # Preemptive rule: ping after fix 4 (N-1), before accepting fix 5
+        assert "fix #4 of 5" in prompt
+        assert "BEFORE accepting the next" in prompt
+
+    def test_runner_prompt_preemptive_ping_clamps_at_one(self):
+        """With a cap of 1, N-1 clamps to 1 instead of going to 0."""
+        config = default_team_config("/src", max_fixes_per_runner=1)
+        prompt = build_runner_pool_prompt(1, config)
+        # max(1, 1-1) == 1 — the ping fires on fix 1 itself
+        assert "fix #1 of 1" in prompt
+        assert "#0" not in prompt
+
+    def test_runner_prompt_has_read_count_proxy(self):
+        """Runner must be told to track file reads as a secondary proxy."""
+        config = default_team_config("/src")
+        prompt = build_runner_pool_prompt(1, config)
+        lowered = prompt.lower()
+        assert "read-count proxy" in lowered
+        assert "15" in prompt  # the threshold hint
+
+    def test_runner_prompt_acknowledges_no_direct_context_signal(self):
+        """Runner must be told it has no direct read on remaining context."""
+        config = default_team_config("/src")
+        prompt = build_runner_pool_prompt(1, config)
+        lowered = prompt.lower()
+        assert "no direct read" in lowered or "no tool reports" in lowered
+        assert "proxies" in lowered
+
+    def test_advisor_prompt_expects_early_ping_as_normal(self):
+        """Advisor prompt must treat the preemptive ping as the normal trigger."""
+        config = default_team_config("/src")
+        prompt = build_advisor_prompt(config)
+        lowered = prompt.lower()
+        assert "one fix before" in lowered or "before hitting the cap" in lowered
+        assert "ledger" in lowered
+
 
 class TestBuildRunnerHandoffMessage:
     def test_returns_sendmessage_spec_for_new_runner(self):

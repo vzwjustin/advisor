@@ -42,6 +42,8 @@ class Checkpoint:
     advisor_model: str
     runner_model: str
     max_fixes_per_runner: int
+    large_file_line_threshold: int
+    large_file_max_fixes: int
     test_command: str
     context: str
     tasks: list[dict[str, object]]
@@ -99,6 +101,8 @@ def save_checkpoint(
     advisor_model: str,
     runner_model: str,
     max_fixes_per_runner: int = 5,
+    large_file_line_threshold: int = 800,
+    large_file_max_fixes: int = 3,
     test_command: str = "",
     context: str = "",
 ) -> Path:
@@ -135,6 +139,8 @@ def save_checkpoint(
         advisor_model=advisor_model,
         runner_model=runner_model,
         max_fixes_per_runner=max_fixes_per_runner,
+        large_file_line_threshold=large_file_line_threshold,
+        large_file_max_fixes=large_file_max_fixes,
         test_command=test_command,
         context=context,
         tasks=task_dicts,
@@ -169,6 +175,8 @@ def load_checkpoint(target: str | Path, run_id: str) -> Checkpoint:
             advisor_model=str(obj["advisor_model"]),
             runner_model=str(obj["runner_model"]),
             max_fixes_per_runner=int(obj.get("max_fixes_per_runner", 5)),
+            large_file_line_threshold=int(obj.get("large_file_line_threshold", 800)),
+            large_file_max_fixes=int(obj.get("large_file_max_fixes", 3)),
             test_command=str(obj.get("test_command", "")),
             context=str(obj.get("context", "")),
             tasks=list(obj.get("tasks", [])),

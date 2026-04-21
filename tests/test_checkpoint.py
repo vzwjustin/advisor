@@ -57,6 +57,54 @@ class TestSaveAndLoad:
         assert len(cp.batches) == 1
         assert cp.batches[0]["batch_id"] == 1
 
+    def test_large_file_fields_roundtrip(self, tmp_path: Path) -> None:
+        save_checkpoint(
+            tmp_path,
+            run_id="big",
+            tasks=_tasks(),
+            batches=None,
+            team_name="t",
+            file_types="*.py",
+            min_priority=3,
+            max_runners=5,
+            advisor_model="opus",
+            runner_model="sonnet",
+            max_fixes_per_runner=4,
+            large_file_line_threshold=500,
+            large_file_max_fixes=1,
+        )
+        cp = load_checkpoint(tmp_path, "big")
+        assert cp.max_fixes_per_runner == 4
+        assert cp.large_file_line_threshold == 500
+        assert cp.large_file_max_fixes == 1
+
+    def test_legacy_checkpoint_without_large_file_fields(self, tmp_path: Path) -> None:
+        """A pre-upgrade checkpoint (no large_file_* keys) still loads with defaults."""
+        import json
+
+        path = checkpoint_path(tmp_path, "legacy")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "run_id": "legacy",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "target": str(tmp_path),
+            "team_name": "t",
+            "file_types": "*.py",
+            "min_priority": 3,
+            "max_runners": 5,
+            "advisor_model": "opus",
+            "runner_model": "sonnet",
+            "max_fixes_per_runner": 5,
+            "test_command": "",
+            "context": "",
+            "tasks": [],
+            "batches": [],
+        }
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        cp = load_checkpoint(tmp_path, "legacy")
+        assert cp.large_file_line_threshold == 800
+        assert cp.large_file_max_fixes == 3
+
     def test_missing_checkpoint_raises(self, tmp_path: Path) -> None:
         with pytest.raises(FileNotFoundError):
             load_checkpoint(tmp_path, "nope")

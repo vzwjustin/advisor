@@ -144,6 +144,39 @@ class TestConfigFromArgs:
         assert cfg.advisor_model == "opus-4"
         assert cfg.runner_model == "sonnet-3.5"
 
+    def test_config_from_args_context_pressure_flags(self):
+        """The three context-pressure knobs must thread through the CLI."""
+        from advisor.__main__ import _config_from_args
+
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "pipeline",
+                "some/dir",
+                "--max-fixes-per-runner",
+                "3",
+                "--large-file-line-threshold",
+                "500",
+                "--large-file-max-fixes",
+                "1",
+            ]
+        )
+        cfg = _config_from_args(args)
+        assert cfg.max_fixes_per_runner == 3
+        assert cfg.large_file_line_threshold == 500
+        assert cfg.large_file_max_fixes == 1
+
+    def test_config_from_args_context_pressure_defaults(self):
+        """Without the flags, config falls back to the documented defaults."""
+        from advisor.__main__ import _config_from_args
+
+        parser = build_parser()
+        args = parser.parse_args(["pipeline", "some/dir"])
+        cfg = _config_from_args(args)
+        assert cfg.max_fixes_per_runner == 5
+        assert cfg.large_file_line_threshold == 800
+        assert cfg.large_file_max_fixes == 3
+
 
 class TestCmdPlanJson:
     """``advisor plan --json`` emits parseable JSON with the expected shape."""

@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — context-pressure knobs on the CLI
+- `advisor plan --max-fixes-per-runner N` (and `pipeline`, `prompt`, `ui`):
+  lower the hard cap on sequential fixes per runner when runners are
+  exhausting context mid-fix-wave. Default remains `5`; the knob was
+  previously only reachable by constructing a `TeamConfig` in Python.
+- `advisor plan --large-file-line-threshold N` / `--large-file-max-fixes M`:
+  tune the tighter fix cap that kicks in for batches containing any file
+  at/above the threshold. Defaults remain `800` lines / `3` fixes.
+- Checkpoints now persist `large_file_line_threshold` and
+  `large_file_max_fixes`, so `advisor plan --resume` reproduces the
+  capped-run configuration instead of silently using the live defaults.
+  Legacy checkpoints (pre-upgrade) load cleanly with the documented
+  defaults.
+
+### Changed — runner prompt gives runners sharper self-awareness
+- `build_runner_pool_prompt` now tells each runner, explicitly, that it
+  has no direct read on its remaining context window (no tool exposes it
+  to subagents, and subjective "I feel foggy" signals are unreliable)
+  and to track two concrete proxies instead:
+  - **Fix-count proxy (primary):** ping `CONTEXT_PRESSURE` after fix
+    `(N-1)` of `max_fixes_per_runner` — *before* accepting the next
+    assignment — so the advisor has one fix of runway to spawn the
+    successor runner and build a handoff brief. Previously runners were
+    told to ping "as they approach the cap", which in practice meant at
+    the cap, which is too late.
+  - **Read-count proxy (secondary):** if the runner has Read more than
+    ~15 files in its session (explore + fixes combined), flag at-risk at
+    the start of the next assignment. Catches heavy-cross-reference
+    sessions that exhaust context before the fix count catches up.
+  - Subjective symptoms (slower replies, hazy recall) are demoted to a
+    backup-only signal.
+- Advisor prompt mirror-updated: the strategist is now told to keep an
+  explicit mental ledger of per-runner fix counts and to treat the
+  early `CONTEXT_PRESSURE` ping as the normal rotation trigger, not an
+  exception.
+
 ### Fixed
 - `advisor --print-completion` error hint now points at the correct PyPI
   distribution name (`advisor-agent[completion]`) instead of the non-existent
