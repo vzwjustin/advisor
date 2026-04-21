@@ -662,16 +662,16 @@ Strict sequence for any Claude Code session using the /advisor skill.
 Deviating (e.g. shutting down with broadcast `"*"`, forgetting TeamDelete,
 or spawning runners before the advisor) breaks the pipeline.
 
-1. TeamCreate(name="advisor-review")
+1. TeamCreate(name="review")
 
 2. Spawn advisor FIRST (no runners yet):
-   Agent(name="advisor", model="opus-4", subagent_type="deep-reasoning",
-         team_name="advisor-review", prompt=<build_advisor_prompt(config)>)
+   Agent(name="advisor", model="opus", subagent_type="deep-reasoning",
+         team_name="review", prompt=<build_advisor_prompt(config)>)
 
 3. Advisor does Glob+Grep discovery, ranks P1–P5, decides runner pool size,
    THEN tells you to spawn N runners:
-   Agent(name="runner-<i>", model="sonnet-4", subagent_type="code-review",
-         team_name="advisor-review", run_in_background=true,
+   Agent(name="runner-<i>", model="sonnet", subagent_type="code-review",
+         team_name="review", run_in_background=true,
          prompt=<build_runner_pool_prompt(i, config)>)
 
 4. Advisor dispatches explore assignments, verifies each runner reply as it
@@ -687,8 +687,10 @@ or spawning runners before the advisor) breaks the pipeline.
 
 6. TeamDelete()
 
-Full reference (with build_* prompt wiring) is available via:
-    advisor pipeline
+Names and models shown here are the defaults (team "review", models
+"opus" / "sonnet"). Override them via `--team`, `--advisor-model`,
+`--runner-model` on the CLI; `advisor pipeline <dir>` renders the
+concrete call sites for a given config.
 """
 
 
@@ -1083,9 +1085,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=".",
         help="Target directory containing the .advisor/ tree (default: current directory)",
     )
+    def _pos_int(value: str) -> int:
+        n = int(value)
+        if n < 1:
+            raise argparse.ArgumentTypeError(f"--limit must be >= 1, got {n}")
+        return n
+
     p_history.add_argument(
         "--limit",
-        type=int,
+        type=_pos_int,
         default=20,
         help="Maximum number of recent entries to show (default: %(default)s)",
     )
@@ -1128,7 +1136,7 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 _style.error_box(
                     "Shell completion requires the `shtab` extra.\n"
-                    "Install with: pip install 'advisor[completion]'",
+                    "Install with: pip install 'advisor-agent[completion]'",
                     stream=sys.stderr,
                 ),
                 file=sys.stderr,
