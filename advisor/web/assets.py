@@ -300,9 +300,10 @@ APP_JS = r"""(() => {
 
   // --- plan ---
   async function loadPlan() {
+    // Server binds to a single target at launch (see AppState); only the
+    // ranking knobs round-trip to /api/plan.
     const form = new FormData($('#config-form'));
     const qs = new URLSearchParams();
-    qs.set('target', form.get('target') || '.');
     qs.set('file_types', form.get('file_types') || '*.py');
     qs.set('min_priority', form.get('min_priority') || '3');
     const r = await fetch('/api/plan?' + qs.toString());
@@ -366,7 +367,6 @@ APP_JS = r"""(() => {
   async function loadCost() {
     const form = new FormData($('#config-form'));
     const qs = new URLSearchParams();
-    qs.set('target', form.get('target') || '.');
     qs.set('file_types', form.get('file_types') || '*.py');
     qs.set('min_priority', form.get('min_priority') || '3');
     qs.set('advisor_model', form.get('advisor_model') || 'opus');
