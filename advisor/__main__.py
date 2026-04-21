@@ -1263,8 +1263,7 @@ def cmd_audit(args: argparse.Namespace) -> int:
         print()
         print(
             _style.tip(
-                "tighten caps with: advisor plan --max-fixes-per-runner N "
-                "--large-file-max-fixes M"
+                "tighten caps with: advisor plan --max-fixes-per-runner N --large-file-max-fixes M"
             )
         )
     return 0

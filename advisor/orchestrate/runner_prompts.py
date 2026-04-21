@@ -432,9 +432,7 @@ def build_fix_assignment_message(
         ``{"to": "runner-N", "message": <budget-stamped body>}``.
     """
     if fix_number < 1:
-        raise ValueError(
-            f"fix_number must be >= 1 (got {fix_number}); fix numbering is 1-indexed"
-        )
+        raise ValueError(f"fix_number must be >= 1 (got {fix_number}); fix numbering is 1-indexed")
 
     effective_cap = large_file_max_fixes if is_large_file else max_fixes
     cap_label = "large-file cap" if is_large_file else "cap"

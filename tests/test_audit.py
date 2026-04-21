@@ -36,9 +36,7 @@ def _mk_checkpoint(
                 "batch_id": i,
                 "complexity": "medium",
                 "top_priority": 3,
-                "tasks": [
-                    {"file_path": fp, "priority": 3, "prompt": ""} for fp in files
-                ],
+                "tasks": [{"file_path": fp, "priority": 3, "prompt": ""} for fp in files],
             }
         )
     all_tasks: list[dict[str, object]] = []
@@ -86,8 +84,7 @@ class TestAuditTranscriptFixCounts:
     def test_last_fix_wrapper_parses(self):
         """The LAST FIX banner form must be recognized too."""
         transcript = (
-            "SendMessage(to='runner-1', message='## Fix assignment "
-            "(**LAST FIX** (5 of 5)).'))"
+            "SendMessage(to='runner-1', message='## Fix assignment (**LAST FIX** (5 of 5)).'))"
         )
         report = audit_transcript(transcript, _mk_checkpoint())
         assert report.fix_counts["runner-1"] == 1
