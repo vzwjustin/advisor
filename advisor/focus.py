@@ -8,6 +8,7 @@ driven by the advisor, not hard-coded caps.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from .rank import RankedFile
@@ -16,6 +17,7 @@ from .rank import RankedFile
 @dataclass(frozen=True, slots=True)
 class FocusTask:
     """A single-file task with advisor guidance attached."""
+
     file_path: str
     priority: int
     prompt: str
@@ -28,6 +30,7 @@ class FocusBatch:
     The advisor sizes each batch based on file complexity. A hot, dense file
     may be alone in its batch; dozens of small utilities may share one.
     """
+
     batch_id: int
     tasks: tuple[FocusTask, ...]
     complexity: str  # "low" | "medium" | "high" — advisor's assessment
@@ -58,6 +61,22 @@ DEFAULT_TASK_PROMPT = (
     "5. If no issues found, state that explicitly.\n\n"
     "Do NOT review other files. Stay focused on this one."
 )
+
+# Single-pass placeholder substitution. Using a chain of ``str.replace`` on
+# each field would be order-dependent: if a substituted value (e.g. a
+# malicious ``file_path``) contained a literal ``{reasons}`` token, a later
+# pass would then rewrite it. ``re.sub`` with a single combined pattern
+# replaces each placeholder exactly once from its own slot.
+_PLACEHOLDER_RE = re.compile(r"\{(file_path|priority|reasons)\}")
+
+
+def _render_task_prompt(template: str, mapping: dict[str, str]) -> str:
+    """Fill ``{file_path}``/``{priority}``/``{reasons}`` in one pass.
+
+    Unknown placeholders are left intact so custom templates can use
+    literal braces (e.g. JSON examples) without escaping.
+    """
+    return _PLACEHOLDER_RE.sub(lambda m: mapping.get(m.group(1), m.group(0)), template)
 
 
 def create_focus_tasks(
@@ -90,17 +109,21 @@ def create_focus_tasks(
             break
 
         reasons_str = ", ".join(rf.reasons) if rf.reasons else "general review"
-        prompt = (
-            prompt_template
-            .replace("{file_path}", rf.path)
-            .replace("{priority}", str(rf.priority))
-            .replace("{reasons}", reasons_str)
+        prompt = _render_task_prompt(
+            prompt_template,
+            {
+                "file_path": rf.path,
+                "priority": str(rf.priority),
+                "reasons": reasons_str,
+            },
         )
-        tasks.append(FocusTask(
-            file_path=rf.path,
-            priority=rf.priority,
-            prompt=prompt,
-        ))
+        tasks.append(
+            FocusTask(
+                file_path=rf.path,
+                priority=rf.priority,
+                prompt=prompt,
+            )
+        )
 
     return tasks
 
@@ -123,11 +146,13 @@ def create_focus_batches(
     batches: list[FocusBatch] = []
     for i in range(0, len(tasks), files_per_batch):
         chunk = tuple(tasks[i : i + files_per_batch])
-        batches.append(FocusBatch(
-            batch_id=len(batches) + 1,
-            tasks=chunk,
-            complexity=complexity,
-        ))
+        batches.append(
+            FocusBatch(
+                batch_id=len(batches) + 1,
+                tasks=chunk,
+                complexity=complexity,
+            )
+        )
     return batches
 
 

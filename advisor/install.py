@@ -7,31 +7,85 @@ testability; the CLI wrapper handles filesystem IO.
 
 from __future__ import annotations
 
+import enum
 import os
 import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import IO
 
 from .skill_asset import SKILL_MD
+
+
+class InstallAction(str, enum.Enum):
+    """Outcome of an install/uninstall operation.
+
+    Subclassing ``str`` keeps backwards compatibility with call sites that
+    compare ``result.action == "installed"`` — the enum members are still
+    equal to their string values.
+    """
+
+    INSTALLED = "installed"
+    UPDATED = "updated"
+    UNCHANGED = "unchanged"
+    REMOVED = "removed"
+    ABSENT = "absent"
+    SKIPPED = "skipped"
+
+    def __str__(self) -> str:  # pragma: no cover — trivial
+        return self.value
 
 
 def _atomic_write_text(target: Path, text: str) -> None:
     """Atomically write `text` to `target` via a unique tmp file in the same dir.
 
-    Uses a randomized tmp name (not a predictable `.tmp` suffix) to avoid
-    symlink-follow TOCTOU on shared hosts, and cleans up the tmp file if
-    the write or replace fails partway through.
+    Hardening against symlink-follow TOCTOU on shared hosts:
+
+    - **Parent dir is opened with** ``O_NOFOLLOW`` (where available) so a
+      race that swaps ``target.parent`` to a symlink between the parent's
+      ``mkdir`` and our write is detected and refused.
+    - **The target itself is rejected if it is a symlink.** ``os.replace``
+      does not follow the final path component, so replacing over a
+      symlink would silently swap in our content at the symlink's path —
+      but if an attacker tricked us into reading a symlink *beforehand*,
+      our idempotency logic could then be fooled. Easiest defense: refuse.
+    - Uses a randomized tmp name and cleans up on any exception.
+    - Final file is written with mode 0o644 — ``tempfile.mkstemp`` defaults
+      to 0o600 which would otherwise carry through ``os.replace``.
     """
+    if target.is_symlink():
+        raise OSError(f"refusing to write through symlink: {target} -> {os.readlink(target)}")
+
+    parent = target.parent
+    parent_fd: int | None = None
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    directory = getattr(os, "O_DIRECTORY", 0)
+    # ``O_NOFOLLOW`` + ``O_DIRECTORY`` on Unix guarantees we opened the real
+    # parent directory inode, not a symlink to one. Windows lacks both; we
+    # fall back to the plain Path check, which is still covered by the
+    # symlink-target check above for the common case.
+    if nofollow and hasattr(os, "open"):
+        try:
+            parent_fd = os.open(str(parent), os.O_RDONLY | nofollow | directory)
+        except OSError:
+            parent_fd = None
+
     fd, tmp_name = tempfile.mkstemp(
         prefix=f".{target.name}.",
         suffix=".tmp",
-        dir=str(target.parent),
+        dir=str(parent),
     )
     tmp = Path(tmp_name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(text)
+        try:
+            os.chmod(tmp, 0o644)
+        except OSError:
+            # Best-effort: Windows / restricted fs may refuse. The write
+            # still succeeds; mode just stays at the tempfile default.
+            pass
         os.replace(tmp, target)
     except BaseException:
         try:
@@ -39,6 +93,13 @@ def _atomic_write_text(target: Path, text: str) -> None:
         except OSError:
             pass
         raise
+    finally:
+        if parent_fd is not None:
+            try:
+                os.close(parent_fd)
+            except OSError:
+                pass
+
 
 OPT_OUT_ENV = "ADVISOR_NO_NUDGE"
 
@@ -84,12 +145,14 @@ TeamCreate → (silent bash) → Agent spawns. NO Bash before TeamCreate.
 @dataclass(frozen=True)
 class InstallResult:
     path: Path
-    action: str  # "installed" | "updated" | "unchanged" | "removed" | "absent"
+    action: str  # value from :class:`InstallAction` (kept as str for back-compat)
+    error: str | None = None  # populated when a non-fatal write failure occurred
 
 
 @dataclass(frozen=True)
 class ComponentStatus:
     """State of a single installed component (nudge or skill)."""
+
     name: str
     path: Path
     present: bool
@@ -99,6 +162,7 @@ class ComponentStatus:
 @dataclass(frozen=True)
 class Status:
     """Snapshot of advisor's installed state."""
+
     nudge: ComponentStatus
     skill: ComponentStatus
     opt_out: bool
@@ -145,27 +209,25 @@ def apply_nudge(existing: str, body: str = NUDGE_BODY) -> tuple[str, str]:
 
     if has_block:
         stripped = _strip_all_blocks(existing).strip()
-        updated = (
-            f"{stripped}\n\n{block}".lstrip("\n") if stripped else block
-        )
+        updated = f"{stripped}\n\n{block}".lstrip("\n") if stripped else block
         if updated.strip() == existing.strip():
-            return existing, "unchanged"
-        return updated, "updated"
+            return existing, InstallAction.UNCHANGED.value
+        return updated, InstallAction.UPDATED.value
 
     if not existing.strip():
-        return block, "installed"
+        return block, InstallAction.INSTALLED.value
 
     separator = "" if existing.endswith("\n\n") else ("\n" if existing.endswith("\n") else "\n\n")
-    return f"{existing}{separator}{block}", "installed"
+    return f"{existing}{separator}{block}", InstallAction.INSTALLED.value
 
 
 def remove_nudge(existing: str) -> tuple[str, str]:
     """Return (new_contents, action) with every sentinel block removed."""
     if START_MARKER not in existing or END_MARKER not in existing:
-        return existing, "absent"
+        return existing, InstallAction.ABSENT.value
     stripped = _strip_all_blocks(existing).strip()
     cleaned = f"{stripped}\n" if stripped else ""
-    return cleaned, "removed"
+    return cleaned, InstallAction.REMOVED.value
 
 
 def default_claude_md() -> Path:
@@ -174,10 +236,18 @@ def default_claude_md() -> Path:
 
 def install(path: Path | None = None, body: str = NUDGE_BODY) -> InstallResult:
     target = path or default_claude_md()
+    # Defense-in-depth: if no explicit path was supplied, refuse to write
+    # outside the user's home dir. Protects against a manipulated ``$HOME``
+    # redirecting the nudge to an unrelated file. Explicit ``path=`` is
+    # respected as-is — tests and power-users need to target arbitrary files.
+    if path is None:
+        resolved = target.resolve()
+        if not resolved.is_relative_to(Path.home().resolve()):
+            raise OSError(f"refusing to install nudge outside $HOME: {resolved}")
     target.parent.mkdir(parents=True, exist_ok=True)
     current = target.read_text(encoding="utf-8") if target.exists() else ""
     new_contents, action = apply_nudge(current, body)
-    if action != "unchanged":
+    if action != InstallAction.UNCHANGED.value:
         _atomic_write_text(target, new_contents)
     return InstallResult(path=target, action=action)
 
@@ -192,7 +262,7 @@ def should_auto_nudge(env: dict[str, str] | None = None) -> bool:
 def ensure_nudge(
     path: Path | None = None,
     env: dict[str, str] | None = None,
-    stream=None,
+    stream: IO[str] | None = None,
     skill_path: Path | None = None,
 ) -> InstallResult:
     """First-run hook: silently install the nudge AND the /advisor skill.
@@ -212,35 +282,47 @@ def ensure_nudge(
     """
     target = path or default_claude_md()
     if not should_auto_nudge(env):
-        return InstallResult(path=target, action="unchanged")
+        return InstallResult(path=target, action=InstallAction.UNCHANGED.value)
 
-    nudge_result = InstallResult(path=target, action="unchanged")
-    skill_result_action = "unchanged"
+    nudge_result = InstallResult(path=target, action=InstallAction.UNCHANGED.value)
+    skill_result_action = InstallAction.UNCHANGED.value
     skill_target = skill_path or default_skill_path()
 
     out = stream if stream is not None else sys.stderr
     from . import _style
 
+    errors: list[str] = []
     try:
         current = target.read_text(encoding="utf-8") if target.exists() else ""
         if START_MARKER not in current or END_MARKER not in current:
             nudge_result = install(path=target)
     except (OSError, UnicodeDecodeError) as exc:
-        print(_style.dim(f"  warn: nudge: {exc}", stream=out), file=out)
+        # Warnings for auto-install failures are non-fatal by design — we
+        # don't want `advisor plan` to bail because ~/.claude is readonly.
+        # But stay visible: use the warning glyph, not dim text, so a user
+        # who misses the warning once will still see it on the next run.
+        msg = f"nudge write failed ({target}): {exc}"
+        errors.append(msg)
+        glyph = _style.glyph("⚠", "!", stream=out)
+        print(_style.paint(f"  {glyph} {msg}", "yellow", stream=out), file=out)
 
     try:
         if not skill_target.exists() or skill_target.read_text(encoding="utf-8") != SKILL_MD:
             skill_res = install_skill(path=skill_target)
             skill_result_action = skill_res.action
     except (OSError, UnicodeDecodeError) as exc:
-        print(_style.dim(f"  warn: skill: {exc}", stream=out), file=out)
-        skill_result_action = "unchanged"
+        msg = f"skill write failed ({skill_target}): {exc}"
+        errors.append(msg)
+        glyph = _style.glyph("⚠", "!", stream=out)
+        print(_style.paint(f"  {glyph} {msg}", "yellow", stream=out), file=out)
+        skill_result_action = InstallAction.UNCHANGED.value
 
-    if nudge_result.action == "installed" or skill_result_action in ("installed", "updated"):
+    _updated = {InstallAction.INSTALLED.value, InstallAction.UPDATED.value}
+    if nudge_result.action == InstallAction.INSTALLED.value or skill_result_action in _updated:
         pieces: list[str] = []
-        if nudge_result.action == "installed":
+        if nudge_result.action == InstallAction.INSTALLED.value:
             pieces.append(f"  nudge     → {nudge_result.path}")
-        if skill_result_action in ("installed", "updated"):
+        if skill_result_action in _updated:
             pieces.append(f"  skill     → {skill_target}")
 
         lines = [
@@ -257,22 +339,35 @@ def ensure_nudge(
         lines.append(_style.cta("advisor status", "Check installation", stream=out))
         lines.append(_style.cta("advisor --help", "See all commands", stream=out))
         lines.append("")
-        lines.append(_style.dim(
-            f"  opt out: {OPT_OUT_ENV}=1  ·  remove: advisor uninstall",
-            stream=out,
-        ))
+        lines.append(
+            _style.dim(
+                f"  opt out: {OPT_OUT_ENV}=1  ·  remove: advisor uninstall",
+                stream=out,
+            )
+        )
         print("\n".join(lines), file=out)
 
+    # If anything failed (nudge or skill), surface it on the returned
+    # result. The caller (``__main__.main``) still proceeds normally — a
+    # readonly ~/.claude must not break the rest of the CLI — but
+    # programmatic consumers can inspect ``result.error`` to detect partial
+    # installs.
+    if errors:
+        return InstallResult(
+            path=nudge_result.path,
+            action=nudge_result.action,
+            error="; ".join(errors),
+        )
     return nudge_result
 
 
 def uninstall(path: Path | None = None) -> InstallResult:
     target = path or default_claude_md()
     if not target.exists():
-        return InstallResult(path=target, action="absent")
+        return InstallResult(path=target, action=InstallAction.ABSENT.value)
     current = target.read_text(encoding="utf-8")
     new_contents, action = remove_nudge(current)
-    if action == "removed":
+    if action == InstallAction.REMOVED.value:
         _atomic_write_text(target, new_contents)
     return InstallResult(path=target, action=action)
 
@@ -298,6 +393,12 @@ def install_skill(
     never touches other files or directories under ~/.claude/skills.
     """
     target = path or default_skill_path()
+    # Same $HOME guard as ``install()`` — refuse to auto-write outside the
+    # user's home when no explicit path is supplied.
+    if path is None:
+        resolved = target.resolve()
+        if not resolved.is_relative_to(Path.home().resolve()):
+            raise OSError(f"refusing to install skill outside $HOME: {resolved}")
     target.parent.mkdir(parents=True, exist_ok=True)
 
     if target.exists():
@@ -306,12 +407,12 @@ def install_skill(
         except (OSError, UnicodeDecodeError):
             current = ""
         if current == body:
-            return InstallResult(path=target, action="unchanged")
+            return InstallResult(path=target, action=InstallAction.UNCHANGED.value)
         _atomic_write_text(target, body)
-        return InstallResult(path=target, action="updated")
+        return InstallResult(path=target, action=InstallAction.UPDATED.value)
 
     _atomic_write_text(target, body)
-    return InstallResult(path=target, action="installed")
+    return InstallResult(path=target, action=InstallAction.INSTALLED.value)
 
 
 def status(
@@ -344,12 +445,16 @@ def status(
 
     return Status(
         nudge=ComponentStatus(
-            name="nudge", path=nudge_target,
-            present=nudge_present, current=nudge_current,
+            name="nudge",
+            path=nudge_target,
+            present=nudge_present,
+            current=nudge_current,
         ),
         skill=ComponentStatus(
-            name="skill", path=skill_target,
-            present=skill_present, current=skill_current,
+            name="skill",
+            path=skill_target,
+            present=skill_present,
+            current=skill_current,
         ),
         opt_out=not should_auto_nudge(env),
     )
@@ -363,7 +468,7 @@ def uninstall_skill(path: Path | None = None) -> InstallResult:
     """
     target = path or default_skill_path()
     if not target.exists():
-        return InstallResult(path=target, action="absent")
+        return InstallResult(path=target, action=InstallAction.ABSENT.value)
     target.unlink()
     parent = target.parent
     try:
@@ -371,4 +476,4 @@ def uninstall_skill(path: Path | None = None) -> InstallResult:
             parent.rmdir()
     except OSError:
         pass
-    return InstallResult(path=target, action="removed")
+    return InstallResult(path=target, action=InstallAction.REMOVED.value)

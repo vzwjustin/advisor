@@ -8,7 +8,7 @@ configuration in pyproject.toml.
 
 from __future__ import annotations
 
-SKILL_MD = '''---
+SKILL_MD = """---
 name: advisor
 description: >-
   Opus-led code review-and-fix pipeline. The advisor (Opus) wakes up first,
@@ -300,4 +300,4 @@ The local `advisor` binary provides:
 - `advisor pipeline <dir>` — pipeline reference as a sanity check
 - `advisor prompt advisor <dir>` — the exact Opus advisor prompt
 - `advisor plan <dir>` — local batch dispatch plan (no agents spawned)
-'''
+"""

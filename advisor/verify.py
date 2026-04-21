@@ -23,6 +23,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True, slots=True)
 class Finding:
     """A single finding from a focused agent."""
+
     file_path: str
     severity: str
     description: str
@@ -164,7 +165,7 @@ def parse_findings_from_text(text: str) -> list[Finding]:
                 # value. Treat as continuation of the active field.
                 if active_key:
                     current[active_key] = current[active_key] + " " + stripped
-        elif active_key and stripped and not stripped.startswith("#"):
+        elif active_key and stripped and not stripped.startswith("### Finding"):
             current[active_key] = current.get(active_key, "") + " " + stripped
 
     if current:
@@ -180,7 +181,7 @@ def _extract_value(line: str, prefix: str = "") -> str:
     value (e.g. Windows paths like ``C:\\Users\\...``).
     """
     if prefix:
-        after = line[len(prefix):]
+        after = line[len(prefix) :]
         return after.strip().strip("`")
     parts = line.split(":", 1)
     return parts[1].strip().strip("`") if len(parts) > 1 else ""

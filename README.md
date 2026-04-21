@@ -83,19 +83,45 @@ Or use the standalone CLI to inspect the prompts and plans:
 ```bash
 advisor pipeline src/                  # full pipeline reference
 advisor plan src/                      # rank local files, print dispatch plan
+advisor plan src/ --json               # same, machine-readable for `jq` etc.
 advisor prompt advisor src/            # the advisor's prompt body
 advisor prompt runner src/ --runner-id 1   # a runner's bootstrap prompt
 advisor prompt verify src/ < findings  # verify-pass prompt
 advisor status                         # health check (alias: doctor)
+advisor status --json                  # JSON-formatted health for scripting
 advisor install                        # install nudge + /advisor skill
 advisor uninstall                      # remove nudge + /advisor skill
 ```
+
+Every subcommand's `target` defaults to `.` (current directory). Piping a
+long scope description is supported via `--context -` (reads stdin).
 
 Flags: `--team`, `--file-types`, `--max-runners` (advisory — Opus may
 exceed for large repos), `--min-priority`, `--context`, `--advisor-model`,
 `--runner-model`. Default models: `opus` / `sonnet`.
 
+Automation flags: `--json` on `status`/`plan`/`install --check`,
+`--quiet` on `install`/`uninstall`, `--strict` on `status`/`install`/`uninstall`
+(exit `3` when nothing changed or the install is unhealthy).
+
 Colors are on by default. Opt out with `NO_COLOR=1` or `TERM=dumb`.
+
+## Excluding files (`.advisorignore`)
+
+Drop an `.advisorignore` file into your project root to skip paths during
+`advisor plan` and the live pipeline:
+
+```gitignore
+# comments begin with #
+tests/            # skip directories (trailing slash)
+*.md              # skip by filename glob
+vendor/
+generated/**/*.py # ** recursive globs are supported
+```
+
+Patterns follow ``fnmatch`` semantics for filename matches, and use
+``PurePath.match`` when ``**`` is present. Bare words match any path
+component (``docs`` matches both ``docs/`` and ``foo/docs/bar.py``).
 
 ## Python API
 
@@ -105,11 +131,17 @@ from advisor import (
     build_advisor_agent,
     build_advisor_prompt,
     build_runner_pool_agents,
+    build_runner_pool_prompt,
     build_runner_dispatch_messages,
+    build_runner_handoff_message,
+    build_verify_dispatch_prompt,
     build_verify_message,
     rank_files,
+    load_advisorignore,
     create_focus_tasks,
+    create_focus_batches,
     parse_findings_from_text,
+    format_findings_block,
     render_pipeline,
 )
 
@@ -132,7 +164,9 @@ Code `Agent(...)` or `SendMessage(...)` call.
 
 ## Modules
 
-- `advisor/orchestrate.py` — `TeamConfig`, advisor + runner prompt builders, dispatch helpers, pipeline renderer
+- `advisor/orchestrate/` — `TeamConfig`, advisor + runner prompt builders,
+  dispatch helpers, pipeline renderer (package: `config`, `advisor_prompt`,
+  `runner_prompts`, `verify_dispatch`, `pipeline`)
 - `advisor/rank.py` — `rank_files`, `RankedFile` (keyword-signal priority ranking)
 - `advisor/focus.py` — `create_focus_tasks` / `create_focus_batches`, plan formatters
 - `advisor/verify.py` — `Finding`, `parse_findings_from_text`, verify-pass builders
@@ -156,6 +190,14 @@ See `CLAUDE.md` for the full protocol.
 ## Tests
 
 ```bash
-pytest
+pip install -e ".[dev]"
+make check        # ruff + mypy + pytest
 pytest --cov=advisor --cov-report=term-missing
 ```
+
+## Further reading
+
+- [`docs/architecture.md`](docs/architecture.md) — module dependency graph,
+  runtime flow, data contract, design invariants
+- [`docs/prompts.md`](docs/prompts.md) — prompt engineering notes for
+  contributors modifying prompt templates

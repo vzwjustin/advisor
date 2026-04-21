@@ -2,15 +2,14 @@
 
 import pytest
 
-from advisor.rank import RankedFile
 from advisor.focus import (
-    FocusBatch,
     FocusTask,
     create_focus_batches,
     create_focus_tasks,
     format_batch_plan,
     format_dispatch_plan,
 )
+from advisor.rank import RankedFile
 
 
 class TestCreateFocusTasks:
@@ -26,19 +25,13 @@ class TestCreateFocusTasks:
         assert tasks[1].file_path == "src/api.py"
 
     def test_respects_max_tasks(self):
-        ranked = [
-            RankedFile(path=f"src/f{i}.py", priority=5, reasons=("auth",))
-            for i in range(20)
-        ]
+        ranked = [RankedFile(path=f"src/f{i}.py", priority=5, reasons=("auth",)) for i in range(20)]
         tasks = create_focus_tasks(ranked, max_tasks=3)
 
         assert len(tasks) == 3
 
     def test_no_max_tasks_default(self):
-        ranked = [
-            RankedFile(path=f"src/f{i}.py", priority=5, reasons=("auth",))
-            for i in range(50)
-        ]
+        ranked = [RankedFile(path=f"src/f{i}.py", priority=5, reasons=("auth",)) for i in range(50)]
         tasks = create_focus_tasks(ranked)
         assert len(tasks) == 50  # no hard cap by default
 
@@ -70,6 +63,35 @@ class TestCreateFocusTasks:
         assert tasks[0].file_path == "weird{name}.py"
         assert "weird{name}.py" in tasks[0].prompt
 
+    def test_single_pass_substitution_is_not_reentrant(self):
+        """Regression for the `.replace()` chain bug: a path containing
+        a literal ``{reasons}`` token must NOT have reasons re-substituted
+        into it. The substituted ``file_path`` value is final — later
+        placeholder passes cannot touch it."""
+        # Adversarial path — would have been rewritten by the old replace()
+        # chain because replace("{file_path}", ...) runs before
+        # replace("{reasons}", ...).
+        ranked = [RankedFile(path="weird{reasons}.py", priority=3, reasons=("alpha",))]
+        tasks = create_focus_tasks(ranked)
+        prompt = tasks[0].prompt
+        # The literal ``{reasons}`` from the path must survive intact:
+        assert "weird{reasons}.py" in prompt
+        # And the dedicated {reasons} slot must still render "alpha":
+        assert "Relevant signals: alpha" in prompt
+        # Guard against the ordering bug: "weirdalpha.py" must never appear.
+        assert "weirdalpha.py" not in prompt
+
+    def test_unknown_placeholders_passthrough(self):
+        """Custom templates may use literal braces (e.g. JSON examples);
+        unknown placeholders are left intact so the template author
+        doesn't need to escape them."""
+        from advisor.focus import create_focus_tasks
+
+        ranked = [RankedFile(path="a.py", priority=3, reasons=("x",))]
+        template = "for {file_path} priority={priority} {unknown} reasons={reasons}"
+        tasks = create_focus_tasks(ranked, prompt_template=template)
+        assert tasks[0].prompt == "for a.py priority=3 {unknown} reasons=x"
+
     def test_immutability(self):
         ranked = [RankedFile(path="src/a.py", priority=5, reasons=("auth",))]
         task = create_focus_tasks(ranked)[0]
@@ -92,10 +114,7 @@ class TestFormatDispatchPlan:
 
 class TestCreateFocusBatches:
     def _tasks(self, n: int) -> list[FocusTask]:
-        return [
-            FocusTask(file_path=f"src/f{i}.py", priority=3, prompt="...")
-            for i in range(n)
-        ]
+        return [FocusTask(file_path=f"src/f{i}.py", priority=3, prompt="...") for i in range(n)]
 
     def test_groups_into_batches(self):
         batches = create_focus_batches(self._tasks(12), files_per_batch=5)

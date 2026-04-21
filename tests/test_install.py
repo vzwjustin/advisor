@@ -10,6 +10,7 @@ from advisor.install import (
     END_MARKER,
     OPT_OUT_ENV,
     START_MARKER,
+    _atomic_write_text,
     apply_nudge,
     ensure_nudge,
     install,
@@ -196,13 +197,33 @@ class TestEnsureNudge:
         (tmp_path / "blocker").write_text("not a dir")
         target = tmp_path / "blocker" / "nested" / "CLAUDE.md"
         skill = tmp_path / "skills" / "advisor" / "SKILL.md"
-        result = ensure_nudge(
-            path=target, env={}, stream=io.StringIO(), skill_path=skill
-        )
+        result = ensure_nudge(path=target, env={}, stream=io.StringIO(), skill_path=skill)
         assert result.action == "unchanged"
         assert not target.exists()
         # Skill install should still succeed even though nudge failed.
         assert skill.exists()
+
+    def test_surface_error_via_result(self, tmp_path: Path):
+        """Non-fatal write failures must be surfaced on the returned result
+        so programmatic consumers can detect partial installs (audit 7.1)."""
+        (tmp_path / "blocker").write_text("not a dir")
+        target = tmp_path / "blocker" / "nested" / "CLAUDE.md"
+        # Also break the skill target so both halves fail:
+        skill = tmp_path / "blocker" / "skills" / "advisor" / "SKILL.md"
+        stream = io.StringIO()
+        result = ensure_nudge(path=target, env={}, stream=stream, skill_path=skill)
+        # Warning is visible (not dim), not silently swallowed:
+        out = stream.getvalue()
+        assert "nudge write failed" in out or "skill write failed" in out
+        # And surfaced on the result itself:
+        assert result.error is not None
+        assert "nudge write failed" in result.error or "skill write failed" in result.error
+
+    def test_no_error_on_success(self, tmp_path: Path):
+        target = tmp_path / "CLAUDE.md"
+        skill = tmp_path / "skills" / "advisor" / "SKILL.md"
+        result = ensure_nudge(path=target, env={}, stream=io.StringIO(), skill_path=skill)
+        assert result.error is None
 
 
 class TestInstallSkill:
@@ -258,7 +279,6 @@ class TestInstallSkill:
     @pytest.mark.skipif(sys.platform == "win32", reason="chmod not meaningful on Windows")
     def test_uninstall_raises_oserror_on_permission_failure(self, tmp_path: Path):
         """OSError propagates when the file exists but cannot be deleted."""
-        import os
         skill_dir = tmp_path / "skills" / "advisor"
         target = skill_dir / "SKILL.md"
         install_skill(path=target)
@@ -318,3 +338,105 @@ class TestStatus:
         status(nudge_path=nudge, skill_path=skill, env={})
         assert not nudge.exists()
         assert not skill.exists()
+
+
+class TestAtomicWriteSymlinkHardening:
+    """`_atomic_write_text` refuses to clobber a symlink target.
+
+    Defense against a shared-host attack where a writable ``~/.claude``
+    contains a symlink a malicious user points at, e.g., ``~/.bashrc``.
+    We must not follow that symlink through ``os.replace``.
+    """
+
+    def test_refuses_symlink_target(self, tmp_path: Path):
+        real = tmp_path / "real.txt"
+        real.write_text("original\n")
+        link = tmp_path / "link.txt"
+        link.symlink_to(real)
+
+        with pytest.raises(OSError, match="refusing to write through symlink"):
+            _atomic_write_text(link, "payload\n")
+
+        # Real file untouched — no follow-through happened.
+        assert real.read_text() == "original\n"
+
+    def test_writes_normally_when_target_is_not_a_symlink(self, tmp_path: Path):
+        target = tmp_path / "plain.txt"
+        _atomic_write_text(target, "hello\n")
+        assert target.read_text() == "hello\n"
+        assert not target.is_symlink()
+
+    def test_chmod_failure_is_non_fatal(self, tmp_path: Path, monkeypatch):
+        """On restricted filesystems ``os.chmod`` may refuse (Windows, FAT,
+        certain container mounts). The write must still succeed — mode
+        simply stays at the tempfile default (0o600).
+        """
+        import os as _os
+
+        target = tmp_path / "out.txt"
+        real_chmod = _os.chmod
+
+        def picky(path, mode, *a, **kw):
+            if str(path).endswith(".tmp"):
+                raise OSError("read-only fs")
+            return real_chmod(path, mode, *a, **kw)
+
+        monkeypatch.setattr(_os, "chmod", picky)
+        _atomic_write_text(target, "payload\n")
+        assert target.read_text() == "payload\n"
+
+
+class TestInstallSkillUpdateAndUninstall:
+    """Cover the update / unchanged / uninstall-empty-parent paths of
+    ``install_skill`` and ``uninstall_skill``.
+    """
+
+    def test_install_skill_is_unchanged_when_content_identical(self, tmp_path: Path):
+        from advisor.install import SKILL_MD, install_skill
+
+        target = tmp_path / "SKILL.md"
+        target.write_text(SKILL_MD)
+        result = install_skill(path=target)
+        assert result.action == "unchanged"
+
+    def test_install_skill_updates_when_content_differs(self, tmp_path: Path):
+        from advisor.install import install_skill
+
+        target = tmp_path / "SKILL.md"
+        target.write_text("stale\n")
+        result = install_skill(path=target)
+        assert result.action == "updated"
+
+    def test_install_skill_handles_unreadable_existing_file(self, tmp_path: Path, monkeypatch):
+        from advisor.install import install_skill
+
+        target = tmp_path / "SKILL.md"
+        target.write_text("whatever")
+        real_read = Path.read_text
+
+        def boom(self, *a, **kw):
+            if self == target:
+                raise OSError("denied")
+            return real_read(self, *a, **kw)
+
+        monkeypatch.setattr(Path, "read_text", boom)
+        # Should not raise — treats as empty and overwrites
+        result = install_skill(path=target)
+        assert result.action == "updated"
+
+    def test_uninstall_skill_removes_empty_parent_advisor_dir(self, tmp_path: Path):
+        from advisor.install import SKILL_DIR_NAME, uninstall_skill
+
+        parent = tmp_path / SKILL_DIR_NAME
+        parent.mkdir()
+        target = parent / "SKILL.md"
+        target.write_text("x")
+        result = uninstall_skill(path=target)
+        assert result.action == "removed"
+        assert not parent.exists(), "empty advisor/ parent should be cleaned up"
+
+    def test_uninstall_skill_absent_returns_absent(self, tmp_path: Path):
+        from advisor.install import uninstall_skill
+
+        result = uninstall_skill(path=tmp_path / "does-not-exist.md")
+        assert result.action == "absent"

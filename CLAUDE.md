@@ -129,7 +129,6 @@ Invoke via `/advisor` slash command. Full protocol details in
 
 ## General Rules
 
-- **rtk prefix** — All Bash commands: `rtk git status`, `rtk ls`, etc.
 - **Immutability** — Never mutate. Return new objects.
 - **TDD** — Write tests first. 80%+ coverage.
 - **Code review** — Use `code-review` agent after any edits.

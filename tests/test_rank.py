@@ -1,6 +1,8 @@
 """Tests for advisor.rank module."""
 
-from advisor.rank import RankedFile, rank_files, rank_to_prompt
+import pytest
+
+from advisor.rank import PRIORITY_KEYWORDS, RankedFile, rank_files, rank_to_prompt
 
 
 class TestRankFiles:
@@ -53,11 +55,8 @@ class TestRankFiles:
         ranked = rank_files(["src/auth.py"])
         rf = ranked[0]
         # frozen dataclass should raise on mutation
-        try:
+        with pytest.raises(AttributeError):
             rf.priority = 1  # type: ignore
-            assert False, "Should have raised"
-        except AttributeError:
-            pass
 
 
 class TestRankToPrompt:
@@ -74,8 +73,7 @@ class TestRankToPrompt:
 
     def test_respects_top_n(self):
         ranked = [
-            RankedFile(path=f"src/f{i}.py", priority=5 - i, reasons=("x",))
-            for i in range(20)
+            RankedFile(path=f"src/f{i}.py", priority=5 - i, reasons=("x",)) for i in range(20)
         ]
         prompt = rank_to_prompt(ranked, top_n=3)
 
@@ -89,6 +87,7 @@ class TestRankToPrompt:
 class TestLoadAdvisorignoreWarnsOnError:
     def test_warns_when_file_contains_invalid_utf8(self, tmp_path):
         import warnings
+
         from advisor.rank import ADVISORIGNORE_FILENAME, load_advisorignore
 
         (tmp_path / ADVISORIGNORE_FILENAME).write_bytes(b"\xff\xfe invalid")
@@ -102,6 +101,7 @@ class TestLoadAdvisorignoreWarnsOnError:
 
     def test_missing_file_is_silent(self, tmp_path):
         import warnings
+
         from advisor.rank import load_advisorignore
 
         with warnings.catch_warnings(record=True) as caught:
@@ -115,16 +115,163 @@ class TestLoadAdvisorignoreWarnsOnError:
 class TestMatchesAnyPattern:
     def test_wildcard_pattern_does_not_match_dir_component_with_extension(self):
         from advisor.rank import _matches_any_pattern
-        assert _matches_any_pattern('scripts.py/handler.txt', ['*.py']) is False
+
+        assert _matches_any_pattern("scripts.py/handler.txt", ["*.py"]) is False
 
     def test_wildcard_pattern_matches_filename(self):
         from advisor.rank import _matches_any_pattern
-        assert _matches_any_pattern('src/foo.py', ['*.py']) is True
+
+        assert _matches_any_pattern("src/foo.py", ["*.py"]) is True
 
     def test_bare_word_pattern_matches_dir_component(self):
         from advisor.rank import _matches_any_pattern
-        assert _matches_any_pattern('src/tests/foo.py', ['tests']) is True
+
+        assert _matches_any_pattern("src/tests/foo.py", ["tests"]) is True
 
     def test_bare_word_pattern_does_not_match_unrelated_file(self):
         from advisor.rank import _matches_any_pattern
-        assert _matches_any_pattern('src/tests.py', ['tests']) is False
+
+        assert _matches_any_pattern("src/tests.py", ["tests"]) is False
+
+
+class TestDoubleStarGlob:
+    """``**`` recursive globs must descend into subdirs."""
+
+    def test_double_star_matches_nested(self):
+        from advisor.rank import _matches_any_pattern
+
+        assert _matches_any_pattern("src/a/b/c/foo.py", ["src/**/*.py"]) is True
+
+    def test_double_star_matches_direct_child(self):
+        from advisor.rank import _matches_any_pattern
+
+        assert _matches_any_pattern("src/foo.py", ["src/**/*.py"]) is True
+
+    def test_double_star_does_not_match_different_tree(self):
+        from advisor.rank import _matches_any_pattern
+
+        assert _matches_any_pattern("tests/foo.py", ["src/**/*.py"]) is False
+
+
+@pytest.mark.parametrize(
+    "priority,keyword",
+    [(priority, kw) for priority, kws in PRIORITY_KEYWORDS.items() for kw in kws],
+)
+def test_priority_keywords_match_their_own_tier(priority, keyword):
+    """Every declared keyword must rank its own filename at its own tier.
+
+    Catches accidental tier re-assignments during refactors. We put the
+    keyword into the *content* rather than the path so non-word filename
+    separators (``_``) don't break the word-boundary match (``auth_foo``
+    is not a word boundary for ``\\bauth\\b``). This also exercises the
+    full content-scoring path that the combined regex optimizes.
+    """
+    ranked = rank_files(
+        [f"/file_{priority}.py"],
+        read_fn=lambda _p, kw=keyword: f"# contains a {kw} reference",
+    )
+    assert ranked[0].priority >= priority, (
+        f"{keyword!r} should rank at priority >= {priority}, got {ranked[0].priority}"
+    )
+
+
+class TestCombinedRegexParityWithPerTier:
+    """Smoke tests for the combined-regex scoring path (perf optimization)."""
+
+    def test_auth_on_word_boundary_scores_p5(self):
+        # `auth.py` -> `auth` is bounded by `/` and `.` (non-word chars),
+        # so \bauth\b matches cleanly.
+        ranked = rank_files(["/src/auth.py"])
+        assert ranked[0].priority == 5
+
+    def test_helper_only_scores_p1(self):
+        ranked = rank_files(["/src/helper.py"])
+        assert ranked[0].priority == 1
+
+    def test_no_keyword_scores_p1(self):
+        ranked = rank_files(["/src/zzz_qqq_xyzzy.py"])
+        assert ranked[0].priority == 1
+        assert ranked[0].reasons == ()
+
+
+class TestAdvisorIgnore:
+    """Cover the uncommon branches of ``.advisorignore`` handling:
+    warning on unreadable file, ``**`` globs, malformed regex, and
+    directory-pattern (trailing ``/``) matches.
+    """
+
+    def test_unreadable_advisorignore_warns_and_returns_empty(self, tmp_path):
+        import warnings
+
+        from advisor.rank import load_advisorignore
+
+        # A directory is not readable as text -> OSError path
+        target = tmp_path / ".advisorignore"
+        target.mkdir()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            patterns = load_advisorignore(tmp_path)
+        assert patterns == []
+        assert any("could not read" in str(w.message) for w in caught)
+
+    def test_advisorignore_missing_returns_empty(self, tmp_path):
+        from advisor.rank import load_advisorignore
+
+        # No file at all -> empty list, no warning
+        assert load_advisorignore(tmp_path) == []
+
+    def test_advisorignore_strips_comments_and_blanks(self, tmp_path):
+        from advisor.rank import load_advisorignore
+
+        (tmp_path / ".advisorignore").write_text("# comment\n\n  *.log  \n  \n# another\nvendor/\n")
+        assert load_advisorignore(tmp_path) == ["*.log", "vendor/"]
+
+    def test_double_star_recursive_glob(self):
+        ranked = rank_files(
+            ["src/a/b/c/d.py", "src/top.py", "tests/x.py"],
+            ignore_patterns=["src/**/*.py"],
+        )
+        paths = {r.path for r in ranked}
+        assert paths == {"tests/x.py"}
+
+    def test_leading_double_star_matches_any_prefix(self):
+        ranked = rank_files(
+            ["deep/nested/generated/file.py", "generated/file.py", "src/ok.py"],
+            ignore_patterns=["**/generated/*.py"],
+        )
+        assert {r.path for r in ranked} == {"src/ok.py"}
+
+    def test_directory_pattern_with_trailing_slash(self):
+        ranked = rank_files(
+            ["vendor/lib.py", "src/vendor_note.py", "src/ok.py"],
+            ignore_patterns=["vendor/"],
+        )
+        # `vendor/` only matches a path *component* equal to "vendor";
+        # the `src/vendor_note.py` file is kept because "vendor_note" != "vendor".
+        assert {r.path for r in ranked} == {"src/vendor_note.py", "src/ok.py"}
+
+    def test_malformed_double_star_pattern_does_not_crash(self):
+        # Unclosed bracket would produce a bad regex — the caller must
+        # survive it and move on.
+        ranked = rank_files(
+            ["src/a.py"],
+            ignore_patterns=["src/**/[unclosed"],
+        )
+        # File is not ignored because the pattern was invalid
+        assert [r.path for r in ranked] == ["src/a.py"]
+
+    def test_bare_word_pattern_matches_path_component(self):
+        ranked = rank_files(
+            ["src/node_modules/x.py", "src/app.py"],
+            ignore_patterns=["node_modules"],
+        )
+        assert {r.path for r in ranked} == {"src/app.py"}
+
+    def test_read_fn_errors_are_swallowed(self):
+        def bad(_path: str) -> str:
+            raise OSError("nope")
+
+        # Should not raise — content is treated as empty and scoring
+        # falls back to path-based keywords.
+        ranked = rank_files(["src/auth.py"], read_fn=bad)
+        assert ranked[0].priority == 5  # still matched on "auth" in path

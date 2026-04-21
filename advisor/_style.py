@@ -27,6 +27,40 @@ _CODES = {
 }
 
 
+def _compute_supports_color() -> bool:
+    if "NO_COLOR" in os.environ:
+        return False
+    if os.environ.get("TERM") == "dumb":
+        return False
+    return True
+
+
+# Cached env snapshot used by ``supports_color``. Each styled span on a
+# rendered pipeline can call this dozens of times; re-reading the two
+# env vars in tight loops is wasteful. The cache is invalidated either
+# explicitly via :func:`reset_color_cache` (used by the autouse pytest
+# fixture so ``monkeypatch.setenv`` is observed) or implicitly by detecting
+# the env snapshot changed.
+_CACHED_SUPPORT: bool | None = None
+_CACHED_ENV_SNAPSHOT: tuple[str | None, str | None] | None = None
+
+
+def _env_snapshot() -> tuple[str | None, str | None]:
+    return (os.environ.get("NO_COLOR"), os.environ.get("TERM"))
+
+
+def reset_color_cache() -> None:
+    """Invalidate the cached ``supports_color`` result.
+
+    Public hook for test fixtures — ``monkeypatch.setenv`` doesn't flush
+    our cache on its own, so tests that flip ``NO_COLOR``/``TERM`` must
+    call this (the autouse fixture in ``tests/conftest.py`` handles it).
+    """
+    global _CACHED_SUPPORT, _CACHED_ENV_SNAPSHOT
+    _CACHED_SUPPORT = None
+    _CACHED_ENV_SNAPSHOT = None
+
+
 def supports_color(stream: IO[str] | None = None) -> bool:
     """Return True when ANSI styling should be emitted.
 
@@ -34,13 +68,18 @@ def supports_color(stream: IO[str] | None = None) -> bool:
     helper so a future per-stream policy (e.g. respect a NO_COLOR env-var
     set on a captured `io.StringIO`) can be added without touching call
     sites. Today only process-wide env vars are consulted.
+
+    Result is cached across calls; the cache auto-invalidates if the
+    relevant env vars change (covers normal process mutation without
+    requiring callers to remember :func:`reset_color_cache`).
     """
     del stream  # reserved for per-stream policy
-    if "NO_COLOR" in os.environ:
-        return False
-    if os.environ.get("TERM") == "dumb":
-        return False
-    return True
+    global _CACHED_SUPPORT, _CACHED_ENV_SNAPSHOT
+    snap = _env_snapshot()
+    if _CACHED_SUPPORT is None or snap != _CACHED_ENV_SNAPSHOT:
+        _CACHED_SUPPORT = _compute_supports_color()
+        _CACHED_ENV_SNAPSHOT = snap
+    return _CACHED_SUPPORT
 
 
 def paint(text: str, *styles: str, stream: IO[str] | None = None) -> str:
@@ -81,9 +120,11 @@ def banner(text: str, width: int = 50, stream: IO[str] | None = None) -> str:
     effective_width = max(width, len(text) + 4)
     line = "━" * effective_width
     centered = text.center(effective_width - 4)
-    return f"{paint('┏', 'cyan')}{paint(line, 'cyan')}{paint('┓', 'cyan')}\n" \
-           f"{paint('┃', 'cyan')}  {paint(centered, 'bold')}  {paint('┃', 'cyan')}\n" \
-           f"{paint('┗', 'cyan')}{paint(line, 'cyan')}{paint('┛', 'cyan')}"
+    return (
+        f"{paint('┏', 'cyan')}{paint(line, 'cyan')}{paint('┓', 'cyan')}\n"
+        f"{paint('┃', 'cyan')}  {paint(centered, 'bold')}  {paint('┃', 'cyan')}\n"
+        f"{paint('┗', 'cyan')}{paint(line, 'cyan')}{paint('┛', 'cyan')}"
+    )
 
 
 def success_box(text: str, stream: IO[str] | None = None) -> str:
@@ -148,18 +189,32 @@ _PRIORITY_STYLES: dict[str, tuple[str, ...]] = {
     "1": ("dim",),
 }
 
-_PRIORITY_BOLD_RE = re.compile(r"\*\*P([1-5])\*\*")
-_PRIORITY_BARE_RE = re.compile(r"(?<![A-Za-z0-9*\x1b])P([1-5])(?![A-Za-z0-9*])")
+# Combined priority regex — bold (**P3**) OR bare (P3) in one pass.
+# Group 1 = bold digit; Group 2 = bare digit. Exactly one of the two is
+# populated per match. Collapsing the two patterns into one alternation
+# eliminates a full-text scan without changing semantics.
+_PRIORITY_RE = re.compile(
+    r"\*\*P([1-5])\*\*"
+    r"|(?<![A-Za-z0-9*\x1b])P([1-5])(?![A-Za-z0-9*])"
+)
 # Matches an SGR escape sequence ending just before the match position,
 # used to detect (and skip) priority matches that sit INSIDE already-
 # colorized text (e.g. a colored header body). Re-painting them would
 # emit an inner ``\x1b[0m`` that prematurely closes the outer style.
 _ANSI_SGR_RE = re.compile(r"\x1b\[[\d;]*m")
-_H2_RE = re.compile(r"^(##\s+)(.+)$", re.MULTILINE)
-_H3_RE = re.compile(r"^(###\s+)(.+)$", re.MULTILINE)
-_H4_RE = re.compile(r"^(####\s+)(.+)$", re.MULTILINE)
+# Combined header regex (H2/H3/H4 in a single pass). Depth is inferred
+# from the captured ``#`` run length; each depth gets a different style.
+# H1 is intentionally excluded — Markdown docs almost never emit ``# `` at
+# the start of a line outside titles, and we don't want to color those.
+_HEADER_RE = re.compile(r"^(#{2,4})(\s+)(.+)$", re.MULTILINE)
 _BACKTICK_RE = re.compile(r"`([^`\n]+)`")
 _BLOCKQUOTE_RE = re.compile(r"^(>\s+)(.+)$", re.MULTILINE)
+
+_HEADER_STYLES: dict[int, tuple[str, ...]] = {
+    2: ("cyan", "bold"),
+    3: ("blue", "bold"),
+    4: ("bold",),
+}
 
 
 def colorize_markdown(text: str, stream: IO[str] | None = None) -> str:
@@ -186,26 +241,21 @@ def colorize_markdown(text: str, stream: IO[str] | None = None) -> str:
         close_count = sum(1 for e in escapes if e == "\x1b[0m")
         return open_count > close_count
 
-    def _color_priority_bold(m: re.Match[str]) -> str:
+    def _color_priority(m: re.Match[str]) -> str:
         if _inside_ansi_span(m.string, m.start()):
             return m.group(0)
-        styles = _PRIORITY_STYLES[m.group(1)]
-        return paint(f"**P{m.group(1)}**", *styles, stream=stream)
+        # Exactly one of group(1) (bold) / group(2) (bare) is non-None.
+        digit = m.group(1) or m.group(2)
+        assert digit is not None  # regex guarantees one branch matched
+        styles = _PRIORITY_STYLES[digit]
+        token = f"**P{digit}**" if m.group(1) is not None else f"P{digit}"
+        return paint(token, *styles, stream=stream)
 
-    def _color_priority_bare(m: re.Match[str]) -> str:
-        if _inside_ansi_span(m.string, m.start()):
-            return m.group(0)
-        styles = _PRIORITY_STYLES[m.group(1)]
-        return paint(f"P{m.group(1)}", *styles, stream=stream)
-
-    def _color_h2(m: re.Match[str]) -> str:
-        return m.group(1) + paint(m.group(2), "cyan", "bold", stream=stream)
-
-    def _color_h3(m: re.Match[str]) -> str:
-        return m.group(1) + paint(m.group(2), "blue", "bold", stream=stream)
-
-    def _color_h4(m: re.Match[str]) -> str:
-        return m.group(1) + paint(m.group(2), "bold", stream=stream)
+    def _color_header(m: re.Match[str]) -> str:
+        hashes, ws, body = m.group(1), m.group(2), m.group(3)
+        depth = len(hashes)
+        styles = _HEADER_STYLES.get(depth, ("bold",))
+        return hashes + ws + paint(body, *styles, stream=stream)
 
     def _color_path(m: re.Match[str]) -> str:
         return "`" + paint(m.group(1), "green", stream=stream) + "`"
@@ -216,7 +266,7 @@ def colorize_markdown(text: str, stream: IO[str] | None = None) -> str:
         # in dim would inject a reset mid-span and break existing styling.
         return paint(m.group(1), "dim", stream=stream) + m.group(2)
 
-    # Order matters. Headers must be colorized BEFORE bare priorities: if a
+    # Order matters. Headers must be colorized BEFORE priorities: if a
     # header line contains a bare `P3`, coloring the priority first inserts
     # an ANSI reset inside the header's body. The subsequent header regex
     # then re-wraps the line, nesting escapes — and the inner reset closes
@@ -224,11 +274,8 @@ def colorize_markdown(text: str, stream: IO[str] | None = None) -> str:
     # unstyled. Running headers first ensures priority ANSI sits cleanly
     # inside already-painted header text (which the priority lookbehind
     # then skips).
-    text = _H4_RE.sub(_color_h4, text)
-    text = _H3_RE.sub(_color_h3, text)
-    text = _H2_RE.sub(_color_h2, text)
-    text = _PRIORITY_BOLD_RE.sub(_color_priority_bold, text)
-    text = _PRIORITY_BARE_RE.sub(_color_priority_bare, text)
+    text = _HEADER_RE.sub(_color_header, text)
+    text = _PRIORITY_RE.sub(_color_priority, text)
     text = _BACKTICK_RE.sub(_color_path, text)
     text = _BLOCKQUOTE_RE.sub(_color_blockquote, text)
     return text

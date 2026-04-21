@@ -7,34 +7,40 @@ Thin wrapper over the existing builders. Prints prompts/plans to stdout so a
 from __future__ import annotations
 
 import argparse
+import json
 import sys
-from importlib.metadata import PackageNotFoundError, version as pkg_version
+from collections.abc import Callable
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as pkg_version
 from pathlib import Path
-
-
-def _get_version() -> str:
-    try:
-        return pkg_version("advisor-agent")
-    except PackageNotFoundError:
-        return "dev"
 
 from . import _style
 from .focus import (
+    FocusBatch,
+    FocusTask,
     create_focus_batches,
     create_focus_tasks,
     format_batch_plan,
     format_dispatch_plan,
 )
 from .install import (
-    ComponentStatus,
     OPT_OUT_ENV,
+    ComponentStatus,
+    InstallAction,
+    InstallResult,
     Status,
     ensure_nudge,
-    install as install_nudge,
     install_skill,
-    status as get_status,
-    uninstall as uninstall_nudge,
     uninstall_skill,
+)
+from .install import (
+    install as install_nudge,
+)
+from .install import (
+    status as get_status,
+)
+from .install import (
+    uninstall as uninstall_nudge,
 )
 from .orchestrate import (
     TeamConfig,
@@ -44,24 +50,29 @@ from .orchestrate import (
     default_team_config,
     render_pipeline,
 )
-from .rank import rank_files
+from .rank import CONTENT_SCAN_LIMIT, rank_files
+
+
+def _get_version() -> str:
+    try:
+        return pkg_version("advisor-agent")
+    except PackageNotFoundError:
+        return "dev"
 
 
 # (action_label, fancy_glyph, ascii_glyph, color)
 _ACTION_DISPLAY: dict[str, tuple[str, str, str, str | None]] = {
     "installed": ("installed", "✓", "+", "green"),
-    "updated":   ("updated",   "↻", "~", "cyan"),
+    "updated": ("updated", "↻", "~", "cyan"),
     "unchanged": ("unchanged", "·", "-", "dim"),
-    "removed":   ("removed",   "✗", "x", "yellow"),
-    "absent":    ("not found", "·", "-", "dim"),
-    "skipped":   ("skipped",   "·", "-", "dim"),
+    "removed": ("removed", "✗", "x", "yellow"),
+    "absent": ("not found", "·", "-", "dim"),
+    "skipped": ("skipped", "·", "-", "dim"),
 }
 
 
 def _fmt_action(component: str, action: str, path: object) -> str:
-    label, fancy, plain, color = _ACTION_DISPLAY.get(
-        action, (action, "?", "?", None)
-    )
+    label, fancy, plain, color = _ACTION_DISPLAY.get(action, (action, "?", "?", None))
     mark = _style.glyph(fancy, plain)
     if color:
         mark = _style.paint(mark, color)
@@ -76,22 +87,42 @@ def _fmt_action(component: str, action: str, path: object) -> str:
 
 
 def _config_from_args(args: argparse.Namespace) -> TeamConfig:
+    # Allow piping a large scope description into any subcommand via
+    # `--context -` (or the literal string "-"), matching POSIX stdin
+    # conventions. Explicit flag required so callers that accidentally
+    # pipe into the CLI don't silently swallow stdin as context.
+    context = args.context or ""
+    if context == "-":
+        context = sys.stdin.read().strip()
     return default_team_config(
         target_dir=args.target,
         team_name=args.team,
         file_types=args.file_types,
         max_runners=args.max_runners,
         min_priority=args.min_priority,
-        context=args.context or "",
+        context=context,
         advisor_model=args.advisor_model,
         runner_model=args.runner_model,
     )
 
 
 def _add_common(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("target", help="Target directory to analyze")
+    parser.add_argument(
+        "target",
+        nargs="?",
+        default=".",
+        help="Target directory to analyze (default: current directory)",
+    )
     parser.add_argument("--team", default="review", help="Team name")
-    parser.add_argument("--file-types", default="*.py", help="Glob pattern")
+    parser.add_argument(
+        "--file-types",
+        default="*.py",
+        help=(
+            "Glob pattern matched against each path's filename during rglob "
+            "(recursive). `*.py` already descends into subdirectories — do "
+            "NOT pass `**/*.py`. Examples: `*.py`, `*.{py,pyi}`, `*.ts`."
+        ),
+    )
     parser.add_argument(
         "--max-runners",
         type=int,
@@ -125,7 +156,7 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
     return 0
 
 
-def _read_head(path: str, limit: int = 4000) -> str:
+def _read_head(path: str, limit: int = CONTENT_SCAN_LIMIT) -> str:
     try:
         return Path(path).read_text(errors="ignore")[:limit]
     except OSError:
@@ -133,11 +164,45 @@ def _read_head(path: str, limit: int = 4000) -> str:
 
 
 def _safe_rglob(target: Path, pattern: str) -> tuple[list[str] | None, str | None]:
-    """Return (paths, error). `error` is non-None on a malformed glob pattern."""
+    """Return (paths, error). `error` is non-None on a malformed glob pattern
+    or a filesystem error (e.g. symlink loops, permission denied)."""
     try:
         return [str(p) for p in target.rglob(pattern) if p.is_file()], None
     except ValueError as exc:
         return None, f"invalid --file-types pattern {pattern!r}: {exc}"
+    except OSError as exc:
+        return None, f"filesystem error scanning {target}: {exc}"
+
+
+def _plan_to_dict(
+    target: Path,
+    tasks: list[FocusTask],
+    batches: list[FocusBatch] | None = None,
+) -> dict[str, object]:
+    """Serialize a ranking/plan to a JSON-friendly dict for ``--json`` output."""
+    task_data = [
+        {
+            "file_path": t.file_path,
+            "priority": t.priority,
+        }
+        for t in tasks
+    ]
+    payload: dict[str, object] = {
+        "target": str(target),
+        "task_count": len(tasks),
+        "tasks": task_data,
+    }
+    if batches is not None:
+        payload["batches"] = [
+            {
+                "batch_id": b.batch_id,
+                "complexity": b.complexity,
+                "top_priority": b.top_priority,
+                "tasks": [{"file_path": t.file_path, "priority": t.priority} for t in b.tasks],
+            }
+            for b in batches
+        ]
+    return payload
 
 
 def cmd_plan(args: argparse.Namespace) -> int:
@@ -158,6 +223,13 @@ def cmd_plan(args: argparse.Namespace) -> int:
         max_tasks=None,  # no hard cap; advisor decides in the live pipeline
         min_priority=args.min_priority,
     )
+    if getattr(args, "json", False):
+        batches = None
+        if args.batch_size and args.batch_size > 1:
+            batches = create_focus_batches(tasks, files_per_batch=args.batch_size)
+        print(json.dumps(_plan_to_dict(target, tasks, batches), indent=2))
+        return 0
+
     if not tasks:
         print(_style.warning_box(f"No files at priority P{args.min_priority}+ in {target}"))
         print(_style.tip("Try --min-priority 1 to include all files"))
@@ -213,11 +285,13 @@ def cmd_prompt(args: argparse.Namespace) -> int:
                 findings = "<paste findings here>"
             else:
                 findings = piped
-        print(build_verify_dispatch_prompt(
-            findings,
-            file_count=args.file_count or args.max_runners,
-            runner_count=args.max_runners,
-        ))
+        print(
+            build_verify_dispatch_prompt(
+                findings,
+                file_count=args.file_count or args.max_runners,
+                runner_count=args.max_runners,
+            )
+        )
     return 0
 
 
@@ -226,7 +300,7 @@ def cmd_prompt(args: argparse.Namespace) -> int:
 #   0 — no-op under idempotent semantics (unchanged / absent) by default
 #   3 — no-op when --strict is passed (lets automation distinguish)
 _STRICT_NOOP_EXIT = 3
-_NOOP_ACTIONS = frozenset({"unchanged", "absent"})
+_NOOP_ACTIONS = frozenset({InstallAction.UNCHANGED.value, InstallAction.ABSENT.value})
 
 
 def _component_line(c: ComponentStatus) -> str:
@@ -256,89 +330,162 @@ def _format_status(s: Status, version: str) -> str:
     return "\n".join(lines)
 
 
+def _status_to_dict(s: Status, version: str) -> dict[str, object]:
+    """Serialize status to a JSON-friendly dict for ``--json`` output."""
+
+    def _c(c: ComponentStatus) -> dict[str, object]:
+        return {
+            "name": c.name,
+            "path": str(c.path),
+            "present": c.present,
+            "current": c.current,
+        }
+
+    return {
+        "version": version,
+        "nudge": _c(s.nudge),
+        "skill": _c(s.skill),
+        "opt_out": s.opt_out,
+        "healthy": (s.nudge.present and s.nudge.current and s.skill.present and s.skill.current),
+    }
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     """Print a colored health summary of the local advisor install."""
     nudge_target = Path(args.path) if args.path else None
     skill_target = Path(args.skill_path) if args.skill_path else None
     s = get_status(nudge_path=nudge_target, skill_path=skill_target)
-    print(_format_status(s, _get_version()))
     healthy = s.nudge.present and s.nudge.current and s.skill.present and s.skill.current
-    if healthy:
+
+    if getattr(args, "json", False):
+        print(json.dumps(_status_to_dict(s, _get_version()), indent=2))
+    else:
+        print(_format_status(s, _get_version()))
+        if healthy:
+            print()
+            print(_style.cta("/advisor <path>", "run the advisor on a codebase"))
+
+    if getattr(args, "strict", False) and not healthy:
+        return _STRICT_NOOP_EXIT
+    return 0
+
+
+def _run_install_op(
+    args: argparse.Namespace,
+    nudge_fn: Callable[..., InstallResult],
+    skill_fn: Callable[..., InstallResult],
+    trailing_cta: tuple[str, str] | None,
+) -> int:
+    """Shared body for ``install`` / ``uninstall``: call nudge + skill ops,
+    print per-component status lines, honor ``--skip-skill``/``--strict``
+    /``--quiet`` flags, and emit a trailing call-to-action.
+    """
+    nudge_target = Path(args.path) if args.path else None
+    skill_target = Path(args.skill_path) if args.skill_path else None
+    quiet = getattr(args, "quiet", False)
+
+    try:
+        nudge_result = nudge_fn(path=nudge_target)
+    except (OSError, UnicodeDecodeError) as exc:
+        print(_style.error_box(f"nudge: {exc}", stream=sys.stderr), file=sys.stderr)
+        return 1
+    if not quiet:
+        print(_fmt_action("nudge", nudge_result.action, nudge_result.path))
+
+    if args.skip_skill:
+        skill_action: str = InstallAction.SKIPPED.value
+    else:
+        try:
+            skill_result = skill_fn(path=skill_target)
+        except (OSError, UnicodeDecodeError) as exc:
+            print(_style.error_box(f"skill: {exc}", stream=sys.stderr), file=sys.stderr)
+            return 1
+        skill_action = skill_result.action
+        if not quiet:
+            print(_fmt_action("skill", skill_result.action, skill_result.path))
+
+    if args.strict and (
+        nudge_result.action in _NOOP_ACTIONS
+        and skill_action in (*_NOOP_ACTIONS, InstallAction.SKIPPED.value)
+    ):
+        return _STRICT_NOOP_EXIT
+    if trailing_cta and not quiet:
         print()
-        print(_style.cta("/advisor <path>", "run the advisor on a codebase"))
+        print(_style.cta(*trailing_cta))
     return 0
 
 
 def cmd_install(args: argparse.Namespace) -> int:
     """Install the /advisor skill AND append the CLAUDE.md nudge."""
-    nudge_target = Path(args.path) if args.path else None
-    skill_target = Path(args.skill_path) if args.skill_path else None
-
     if args.check:
+        nudge_target = Path(args.path) if args.path else None
+        skill_target = Path(args.skill_path) if args.skill_path else None
         s = get_status(nudge_path=nudge_target, skill_path=skill_target)
-        print(_format_status(s, _get_version()))
-        # Exit non-zero if anything is missing or outdated, so scripts can branch.
+        quiet = getattr(args, "quiet", False)
+        if getattr(args, "json", False):
+            print(json.dumps(_status_to_dict(s, _get_version()), indent=2))
+        elif not quiet:
+            print(_format_status(s, _get_version()))
         ok = s.nudge.present and s.nudge.current and s.skill.present and s.skill.current
         return 0 if ok else _STRICT_NOOP_EXIT
 
-    try:
-        nudge_result = install_nudge(path=nudge_target)
-    except (OSError, UnicodeDecodeError) as exc:
-        print(_style.error_box(f"nudge: {exc}", stream=sys.stderr), file=sys.stderr)
-        return 1
-    print(_fmt_action("nudge", nudge_result.action, nudge_result.path))
-
-    if args.skip_skill:
-        skill_action = "skipped"
-    else:
-        try:
-            skill_result = install_skill(path=skill_target)
-        except (OSError, UnicodeDecodeError) as exc:
-            print(_style.error_box(f"skill: {exc}", stream=sys.stderr), file=sys.stderr)
-            return 1
-        skill_action = skill_result.action
-        print(_fmt_action("skill", skill_result.action, skill_result.path))
-
-    if args.strict and (
-        nudge_result.action in _NOOP_ACTIONS
-        and skill_action in (*_NOOP_ACTIONS, "skipped")
-    ):
-        return _STRICT_NOOP_EXIT
-    print()
-    print(_style.cta("/advisor <path>", "run the advisor on a codebase"))
-    return 0
+    return _run_install_op(
+        args,
+        install_nudge,
+        install_skill,
+        ("/advisor <path>", "run the advisor on a codebase"),
+    )
 
 
 def cmd_uninstall(args: argparse.Namespace) -> int:
     """Remove the /advisor skill AND the CLAUDE.md nudge block."""
-    nudge_target = Path(args.path) if args.path else None
-    skill_target = Path(args.skill_path) if args.skill_path else None
+    return _run_install_op(
+        args,
+        uninstall_nudge,
+        uninstall_skill,
+        ("advisor install", "reinstall if you change your mind"),
+    )
 
-    try:
-        nudge_result = uninstall_nudge(path=nudge_target)
-    except (OSError, UnicodeDecodeError) as exc:
-        print(_style.error_box(f"nudge: {exc}", stream=sys.stderr), file=sys.stderr)
-        return 1
-    print(_fmt_action("nudge", nudge_result.action, nudge_result.path))
 
-    if args.skip_skill:
-        skill_action = "skipped"
-    else:
-        try:
-            skill_result = uninstall_skill(path=skill_target)
-        except (OSError, UnicodeDecodeError) as exc:
-            print(_style.error_box(f"skill: {exc}", stream=sys.stderr), file=sys.stderr)
-            return 1
-        skill_action = skill_result.action
-        print(_fmt_action("skill", skill_result.action, skill_result.path))
+_PROTOCOL_TEXT = """# Advisor team lifecycle protocol
 
-    if args.strict and (
-        nudge_result.action in _NOOP_ACTIONS
-        and skill_action in (*_NOOP_ACTIONS, "skipped")
-    ):
-        return _STRICT_NOOP_EXIT
-    print()
-    print(_style.cta("advisor install", "reinstall if you change your mind"))
+Strict sequence for any Claude Code session using the /advisor skill.
+Deviating (e.g. shutting down with broadcast `"*"`, forgetting TeamDelete,
+or spawning runners before the advisor) breaks the pipeline.
+
+1. TeamCreate(name="advisor-review")
+
+2. Spawn advisor FIRST (no runners yet):
+   Agent(name="advisor", model="opus-4", subagent_type="deep-reasoning",
+         team_name="advisor-review", prompt=<build_advisor_prompt(config)>)
+
+3. Advisor does Glob+Grep discovery, ranks P1–P5, decides runner pool size,
+   THEN tells you to spawn N runners:
+   Agent(name="runner-<i>", model="sonnet-4", subagent_type="code-review",
+         team_name="advisor-review", run_in_background=true,
+         prompt=<build_runner_pool_prompt(i, config)>)
+
+4. Advisor dispatches explore assignments, verifies each runner reply as it
+   lands, optionally dispatches fix assignments, then sends the final
+   structured report to team-lead.
+
+5. Shut down teammates INDIVIDUALLY (broadcast "*" with structured messages
+   fails silently):
+     SendMessage(to="advisor",  message={"type": "shutdown_request"})
+     SendMessage(to="runner-1", message={"type": "shutdown_request"})
+     ...
+     SendMessage(to="runner-N", message={"type": "shutdown_request"})
+
+6. TeamDelete()
+
+Full reference (with build_* prompt wiring) is available via:
+    advisor pipeline
+"""
+
+
+def cmd_protocol(_args: argparse.Namespace) -> int:
+    """Print the strict team-lifecycle protocol as an ad-hoc reference."""
+    print(_PROTOCOL_TEXT)
     return 0
 
 
@@ -352,7 +499,21 @@ def build_parser() -> argparse.ArgumentParser:
         action="version",
         version=f"%(prog)s {_get_version()}",
     )
-    sub = parser.add_subparsers(dest="command", required=True)
+    # Optional shell-completion (shtab) — ships as an extras dep so the
+    # core tool stays dependency-free. When shtab is installed, users can
+    # generate bash/zsh completions with `advisor --print-completion bash`.
+    try:
+        import shtab
+
+        shtab.add_argument_to(parser, "--print-completion")
+    except ImportError:
+        parser.add_argument(
+            "--print-completion",
+            choices=["bash", "zsh", "tcsh"],
+            default=None,
+            help="Print a shell completion script (requires the `shtab` extra)",
+        )
+    sub = parser.add_subparsers(dest="command", required=False)
 
     p_pipeline = sub.add_parser("pipeline", help="Print the full pipeline reference")
     _add_common(p_pipeline)
@@ -360,6 +521,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_plan = sub.add_parser("plan", help="Rank files locally and print a dispatch plan")
     _add_common(p_plan)
+
     def _nonneg_int(value: str) -> int:
         n = int(value)
         if n < 0:
@@ -370,7 +532,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--batch-size",
         type=_nonneg_int,
         default=0,
-        help="Group tasks into batches of this size (0 = flat dispatch plan)",
+        help="Group tasks into batches of this size (0 = flat dispatch plan, try 5 to start)",
+    )
+    p_plan.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the ranked plan as JSON for scripting (no colors, no CTA)",
     )
     p_plan.set_defaults(func=cmd_plan)
 
@@ -410,6 +577,16 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Exit {_STRICT_NOOP_EXIT} on no-op (unchanged) so scripts can distinguish",
     )
     p_install.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress per-component status lines (errors still go to stderr)",
+    )
+    p_install.add_argument(
+        "--json",
+        action="store_true",
+        help="When used with --check, emit status as JSON",
+    )
+    p_install.add_argument(
         "--check",
         action="store_true",
         help=(
@@ -426,7 +603,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_status.add_argument("--path", default="", help="Override target CLAUDE.md path")
     p_status.add_argument(
-        "--skill-path", default="", help="Override target SKILL.md path",
+        "--skill-path",
+        default="",
+        help="Override target SKILL.md path",
+    )
+    p_status.add_argument(
+        "--strict",
+        action="store_true",
+        help=f"Exit {_STRICT_NOOP_EXIT} if anything is missing or outdated",
+    )
+    p_status.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit status as JSON for scripting (no colors, no CTA)",
     )
     p_status.set_defaults(func=cmd_status)
 
@@ -450,7 +639,18 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=f"Exit {_STRICT_NOOP_EXIT} on no-op (absent) so scripts can distinguish",
     )
+    p_uninstall.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress per-component status lines (errors still go to stderr)",
+    )
     p_uninstall.set_defaults(func=cmd_uninstall)
+
+    p_protocol = sub.add_parser(
+        "protocol",
+        help="Print the strict team-lifecycle protocol (TeamCreate → shutdowns → TeamDelete)",
+    )
+    p_protocol.set_defaults(func=cmd_protocol)
 
     return parser
 
@@ -468,16 +668,35 @@ _NUDGE_SKIP_COMMANDS = {
     "plan",
     "pipeline",
     "prompt",
+    "protocol",
 }
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.print_completion:
+        try:
+            import shtab
+        except ImportError:
+            print(
+                _style.error_box(
+                    "Shell completion requires the `shtab` extra.\n"
+                    "Install with: pip install 'advisor[completion]'",
+                    stream=sys.stderr,
+                ),
+                file=sys.stderr,
+            )
+            return 1
+        print(shtab.complete(parser, shell=args.print_completion))
+        return 0
+    if not args.command:
+        parser.error("a subcommand is required (try `advisor --help`)")
     if args.command not in _NUDGE_SKIP_COMMANDS:
         ensure_nudge()
     try:
-        return args.func(args)
+        rc = args.func(args)
+        return int(rc) if rc is not None else 0
     except BrokenPipeError:
         # Downstream pipe closed (e.g. `| head`); exit quietly.
         try:

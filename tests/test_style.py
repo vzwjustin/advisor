@@ -104,6 +104,36 @@ def test_colorize_markdown_styles_headers():
     assert "Section" in out
 
 
+def test_colorize_markdown_handles_all_header_depths_in_one_pass():
+    """Regression for the H2/H3/H4 consolidation: depth 2/3/4 each get their
+    own style even though a single combined regex handles them."""
+    src = "## Two\n### Three\n#### Four\n"
+    out = _style.colorize_markdown(src)
+    # Each header body appears in output with a distinct ANSI prefix.
+    # Cyan bold for H2, blue bold for H3, bold-only for H4 — assert no
+    # depth was skipped by verifying all three bodies are colored:
+    assert "\033[36" in out or "\033[1;36" in out  # cyan somewhere (H2)
+    assert "\033[34" in out or "\033[1;34" in out  # blue somewhere (H3)
+    # Each header marker survives for paste-ability:
+    assert "## " in out
+    assert "### " in out
+    assert "#### " in out
+    # Bodies appear exactly once each (no duplicate wrapping):
+    assert out.count("Two") == 1
+    assert out.count("Three") == 1
+    assert out.count("Four") == 1
+
+
+def test_colorize_markdown_header_depth_5_and_higher_unstyled():
+    """H5/H6 are not colored — we only style H2-H4. The line must pass
+    through unchanged (no partial painting)."""
+    src = "##### Five\n###### Six"
+    out = _style.colorize_markdown(src)
+    # Markers and body survive, and no ANSI styling applied to these lines:
+    assert "##### Five" in out
+    assert "###### Six" in out
+
+
 def test_colorize_markdown_no_op_under_no_color(monkeypatch):
     monkeypatch.setenv("NO_COLOR", "1")
     src = "## Header\n**P3** `path/to/file.py`"

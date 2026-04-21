@@ -1,0 +1,32 @@
+version: 2
+# Keep dev-tool pins fresh with weekly PRs. The runtime package itself has
+# zero dependencies, so the surface area here is just GitHub Actions (for CI)
+# and the Python dev extras. Grouped PRs reduce review noise.
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      dev-deps:
+        patterns:
+          - "pytest*"
+          - "ruff"
+          - "mypy"
+          - "hypothesis"
+          - "pre-commit"
+          - "shtab"
+    allow:
+      # Only care about optional-dependencies (`[dev]`, `[completion]`) —
+      # the core package has no runtime deps.
+      - dependency-type: direct
