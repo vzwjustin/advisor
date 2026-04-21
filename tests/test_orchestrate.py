@@ -5,6 +5,7 @@ import pytest
 from advisor.focus import FocusBatch, FocusTask
 from advisor.orchestrate import (
     build_advisor_prompt,
+    build_fix_assignment_message,
     build_runner_agents,
     build_runner_batch_message,
     build_runner_dispatch_messages,
@@ -13,6 +14,7 @@ from advisor.orchestrate import (
     build_runner_pool_prompt,
     build_runner_prompt,
     build_verify_message,
+    check_batch_fix_budget,
     default_team_config,
     render_pipeline,
 )
@@ -628,3 +630,143 @@ class TestIsKnownModel:
         assert is_known_model("gpt-4") is False
         assert is_known_model("unknown-model") is False
         assert is_known_model("") is False
+
+
+class TestBuildFixAssignmentMessage:
+    """Budget-stamped fix dispatcher — every message carries current cap state."""
+
+    def _kwargs(self, **over):
+        base = dict(
+            runner_id=2,
+            file_path="advisor/auth.py",
+            problem="hardcoded token",
+            change="read from os.environ",
+            acceptance="no literal secret remains",
+            fix_number=1,
+            max_fixes=5,
+        )
+        base.update(over)
+        return base
+
+    def test_returns_sendmessage_spec_shape(self):
+        msg = build_fix_assignment_message(**self._kwargs())
+        assert msg["to"] == "runner-2"
+        assert "## Fix assignment" in msg["message"]
+        assert "advisor/auth.py" in msg["message"]
+        assert "hardcoded token" in msg["message"]
+
+    def test_budget_stamp_mid_wave(self):
+        msg = build_fix_assignment_message(**self._kwargs(fix_number=3, max_fixes=5))
+        # Mid-wave fix shows plain "fix N of M" status in header
+        assert "fix 3 of 5" in msg["message"]
+
+    def test_preemptive_reminder_at_cap_minus_one(self):
+        """Fix N-1 of N must include the explicit 'send CONTEXT_PRESSURE before next' reminder."""
+        msg = build_fix_assignment_message(**self._kwargs(fix_number=4, max_fixes=5))
+        assert "fix 4 of 5" in msg["message"]
+        assert "CONTEXT_PRESSURE" in msg["message"]
+        assert "BEFORE accepting the next" in msg["message"]
+
+    def test_last_fix_banner_at_cap(self):
+        """Fix N of N must include the 'LAST FIX — stand by for rotation' banner."""
+        msg = build_fix_assignment_message(**self._kwargs(fix_number=5, max_fixes=5))
+        assert "LAST FIX" in msg["message"]
+        assert "rotation" in msg["message"].lower()
+
+    def test_over_cap_raises_value_error(self):
+        """Advisor cannot dispatch an over-cap fix — hard invariant, not a warning."""
+        with pytest.raises(ValueError) as excinfo:
+            build_fix_assignment_message(**self._kwargs(fix_number=6, max_fixes=5))
+        msg = str(excinfo.value)
+        assert "6" in msg
+        assert "5" in msg
+        assert "rotate" in msg.lower()
+
+    def test_zero_or_negative_fix_number_raises(self):
+        """1-indexed: fix_number=0 is always a bug in the caller's ledger."""
+        with pytest.raises(ValueError):
+            build_fix_assignment_message(**self._kwargs(fix_number=0, max_fixes=5))
+        with pytest.raises(ValueError):
+            build_fix_assignment_message(**self._kwargs(fix_number=-1, max_fixes=5))
+
+    def test_large_file_cap_applies_when_flagged(self):
+        """When is_large_file=True, the tighter cap takes effect."""
+        msg = build_fix_assignment_message(
+            **self._kwargs(fix_number=3, max_fixes=5, is_large_file=True, large_file_max_fixes=3)
+        )
+        assert "LAST FIX" in msg["message"]
+        assert "3 of 3" in msg["message"]
+
+    def test_large_file_cap_overrun_raises(self):
+        """fix_number=4 against a large-file cap of 3 must raise ValueError."""
+        with pytest.raises(ValueError) as excinfo:
+            build_fix_assignment_message(
+                **self._kwargs(
+                    fix_number=4, max_fixes=5, is_large_file=True, large_file_max_fixes=3
+                )
+            )
+        assert "large-file" in str(excinfo.value).lower()
+
+
+class TestCheckBatchFixBudget:
+    """Pre-flight validator for dispatch plans."""
+
+    def _config(self, **over):
+        return default_team_config("/src", **over)
+
+    def _batch(self, batch_id, file_paths, complexity="medium"):
+        tasks = tuple(FocusTask(file_path=p, priority=3, prompt="") for p in file_paths)
+        return FocusBatch(batch_id=batch_id, tasks=tasks, complexity=complexity)
+
+    def test_all_batches_within_cap_returns_empty(self):
+        cfg = self._config(max_fixes_per_runner=5)
+        batches = [
+            self._batch(1, ["a.py", "b.py", "c.py"]),
+            self._batch(2, ["d.py", "e.py"]),
+        ]
+        assert check_batch_fix_budget(batches, cfg) == []
+
+    def test_oversize_batch_warns(self):
+        cfg = self._config(max_fixes_per_runner=3)
+        batches = [self._batch(1, ["a.py", "b.py", "c.py", "d.py", "e.py"])]
+        warnings = check_batch_fix_budget(batches, cfg)
+        assert len(warnings) == 1
+        assert "batch 1" in warnings[0]
+        assert "5" in warnings[0]
+        assert "3" in warnings[0]
+
+    def test_large_file_cap_triggers_tighter_limit(self):
+        cfg = self._config(
+            max_fixes_per_runner=5,
+            large_file_line_threshold=500,
+            large_file_max_fixes=2,
+        )
+        batches = [self._batch(1, ["small.py", "BIG.py", "also_small.py"])]
+        counts = {"small.py": 100, "BIG.py": 900, "also_small.py": 50}
+        warnings = check_batch_fix_budget(batches, cfg, file_line_counts=counts)
+        assert len(warnings) == 1
+        # Cap was 5 but large-file trigger drops it to 2 — 3 > 2 ⇒ warn
+        assert "large_file_max_fixes" in warnings[0]
+        assert "BIG.py" in warnings[0]
+
+    def test_large_file_cap_not_triggered_when_all_files_small(self):
+        cfg = self._config(
+            max_fixes_per_runner=5,
+            large_file_line_threshold=500,
+            large_file_max_fixes=2,
+        )
+        batches = [self._batch(1, ["a.py", "b.py", "c.py"])]
+        counts = {"a.py": 10, "b.py": 20, "c.py": 30}
+        assert check_batch_fix_budget(batches, cfg, file_line_counts=counts) == []
+
+    def test_missing_line_counts_falls_back_to_general_cap(self):
+        """Without file_line_counts, large-file cap is not applied."""
+        cfg = self._config(
+            max_fixes_per_runner=5,
+            large_file_line_threshold=500,
+            large_file_max_fixes=2,
+        )
+        batches = [self._batch(1, ["a.py", "b.py", "c.py"])]
+        # 3 tasks fits general cap (5); large-file cap would fail but we
+        # can't know without counts — expect no warnings.
+        assert check_batch_fix_budget(batches, cfg) == []

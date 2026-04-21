@@ -110,6 +110,18 @@ Runners implement the change and report back with the diff. Review each diff —
 
 **Rotate runners on long fix waves — HARD CAP: {max_fixes_per_runner} fixes per runner.** A runner's context degrades after ~{max_fixes_per_runner} sequential fix round-trips — they stop acknowledging messages and stall. Track a fix-count per runner explicitly (a simple mental ledger: `runner-1: 3 fixes, runner-2: 5 fixes, runner-3: 1 fix`). Runners are instructed to ping `CONTEXT_PRESSURE` one fix BEFORE hitting the cap, not at the cap — treat that early ping as the normal rotation trigger, not an exception. The instant a runner pings `CONTEXT_PRESSURE` OR completes its {max_fixes_per_runner}-th fix (whichever comes first), stop queueing to it. Ask the team-lead to spawn a fresh `runner-N+1` with a handoff brief covering: files touched so far (with one-line invariants each), the remaining fix list, and any cross-file context the outgoing runner built up. Then send the saturated runner `shutdown_request`. Rotation is cheaper than pivoting mid-stall.
 
+**Protocol invariant — named violation over silent drift.** Before you construct ANY fix-assignment SendMessage, verify three things against your ledger:
+
+1. The target runner's fix count is strictly less than `{max_fixes_per_runner}` (or `{large_file_max_fixes}` if the file is ≥ `{large_file_line_threshold}` lines).
+2. The file is inside the batch that runner was assigned.
+3. The runner has not already emitted `CONTEXT_PRESSURE` without a subsequent rotation.
+
+If any of these would be violated, **do not send the message**. Output, verbatim and as a top-level line in your reply:
+
+    PROTOCOL_VIOLATION: <one-line reason — e.g. "runner-2 at cap=5, fix #6 queued for auth.py">
+
+Then rotate (`build_runner_handoff_message` → new runner) OR narrow scope, and re-plan. A named `PROTOCOL_VIOLATION` in the transcript is cheap — a silent drift is expensive. The team-lead and the post-hoc audit (`advisor audit <run_id>`) both grep for that exact string, so it's also how you flag the near-miss for later review.
+
 ## Step 6 — Verify and report
 When all assignments are complete, read the cited file:line for anything you're not certain about. For review tasks, CONFIRM findings worth acting on and REJECT false positives, theoretical issues, duplicates, and nits. For fix tasks, confirm the diffs address the findings and don't introduce regressions.
 

@@ -7,6 +7,7 @@ from advisor.verify import (
     build_verify_prompt,
     format_findings_block,
     parse_findings_from_text,
+    parse_findings_with_drift,
 )
 
 
@@ -268,3 +269,82 @@ def test_parse_findings_never_crashes(text):
     result = parse_findings_from_text(text)
     assert isinstance(result, list)
     assert all(isinstance(f, Finding) for f in result)
+
+
+class TestScopeDriftFilter:
+    """`parse_findings_with_drift` — structural out-of-batch filter.
+
+    A runner assigned to ``{auth.py, session.py}`` must not be able to
+    land findings against ``crypto.py`` in the final report. The filter
+    is applied at parse time so drift is dropped before any downstream
+    consumer sees it.
+    """
+
+    def _text(self, *paths):
+        blocks = []
+        for i, p in enumerate(paths, 1):
+            blocks.append(
+                f"### Finding {i}\n"
+                f"- **File**: {p}\n"
+                f"- **Severity**: HIGH\n"
+                f"- **Description**: d{i}\n"
+                f"- **Evidence**: e{i}\n"
+                f"- **Fix**: f{i}\n"
+            )
+        return "\n".join(blocks)
+
+    def test_none_batch_is_identity(self):
+        """batch_files=None (default) preserves every well-formed finding."""
+        text = self._text("auth.py", "crypto.py", "session.py")
+        kept, dropped = parse_findings_with_drift(text, None)
+        assert len(kept) == 3
+        assert dropped == []
+
+    def test_in_batch_paths_kept(self):
+        text = self._text("auth.py", "session.py")
+        kept, dropped = parse_findings_with_drift(text, {"auth.py", "session.py"})
+        assert [f.file_path for f in kept] == ["auth.py", "session.py"]
+        assert dropped == []
+
+    def test_out_of_batch_paths_dropped_and_surfaced(self):
+        text = self._text("auth.py", "crypto.py", "session.py")
+        kept, dropped = parse_findings_with_drift(text, {"auth.py", "session.py"})
+        assert sorted(f.file_path for f in kept) == ["auth.py", "session.py"]
+        assert [f.file_path for f in dropped] == ["crypto.py"]
+
+    def test_empty_batch_drops_everything(self):
+        """An empty set is distinct from None — drops every finding."""
+        text = self._text("auth.py")
+        kept, dropped = parse_findings_with_drift(text, set())
+        assert kept == []
+        assert len(dropped) == 1
+
+    def test_path_normalization_strips_leading_dot_slash(self):
+        """Findings with ``./auth.py`` match batch entry ``auth.py``."""
+        text = self._text("./auth.py")
+        kept, dropped = parse_findings_with_drift(text, {"auth.py"})
+        assert len(kept) == 1
+        assert dropped == []
+
+    def test_path_normalization_handles_backslashes(self):
+        """Windows-style paths normalize to POSIX for comparison."""
+        text = self._text("dir\\file.py")
+        kept, dropped = parse_findings_with_drift(text, {"dir/file.py"})
+        assert len(kept) == 1
+        assert dropped == []
+
+    def test_parse_findings_from_text_accepts_batch_arg(self):
+        """The public `parse_findings_from_text` entry point gains the parameter too."""
+        text = self._text("auth.py", "crypto.py")
+        kept = parse_findings_from_text(text, {"auth.py"})
+        assert [f.file_path for f in kept] == ["auth.py"]
+
+    def test_drop_warning_emitted_to_logger(self, caplog):
+        import logging
+
+        text = self._text("crypto.py")
+        with caplog.at_level(logging.WARNING, logger="advisor.verify"):
+            kept, dropped = parse_findings_with_drift(text, {"auth.py"})
+        assert kept == []
+        assert len(dropped) == 1
+        assert any("scope-drift" in r.message for r in caplog.records)

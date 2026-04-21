@@ -22,6 +22,12 @@ try:
 except PackageNotFoundError:  # pragma: no cover — editable, not-installed fallback
     __version__ = "0+unknown"
 
+from .audit import (
+    AuditReport,
+    audit_to_dict,
+    audit_transcript,
+    format_audit_report,
+)
 from .checkpoint import (
     CHECKPOINT_SCHEMA_VERSION,
     Checkpoint,
@@ -73,6 +79,7 @@ from .orchestrate import (
     TeamConfig,
     build_advisor_agent,
     build_advisor_prompt,
+    build_fix_assignment_message,
     build_runner_agents,
     build_runner_batch_message,
     build_runner_dispatch_messages,
@@ -82,6 +89,7 @@ from .orchestrate import (
     build_runner_prompt,
     build_verify_dispatch_prompt,
     build_verify_message,
+    check_batch_fix_budget,
     default_team_config,
     is_known_model,
     render_pipeline,
@@ -102,6 +110,7 @@ from .verify import (
     build_verify_prompt,
     format_findings_block,
     parse_findings_from_text,
+    parse_findings_with_drift,
 )
 
 __all__ = [
@@ -128,12 +137,14 @@ __all__ = [
     "build_verify_prompt",
     "format_findings_block",
     "parse_findings_from_text",
+    "parse_findings_with_drift",
     # orchestrate
     "TeamConfig",
     "default_team_config",
     "is_known_model",
     "build_advisor_agent",
     "build_advisor_prompt",
+    "build_fix_assignment_message",
     "build_runner_agents",
     "build_runner_batch_message",
     "build_runner_dispatch_messages",
@@ -143,6 +154,7 @@ __all__ = [
     "build_runner_prompt",
     "build_verify_dispatch_prompt",
     "build_verify_message",
+    "check_batch_fix_budget",
     "render_pipeline",
     # install
     "ComponentStatus",
@@ -187,6 +199,11 @@ __all__ = [
     "list_checkpoints",
     "load_checkpoint",
     "save_checkpoint",
+    # audit
+    "AuditReport",
+    "audit_to_dict",
+    "audit_transcript",
+    "format_audit_report",
     # skill asset
     "SKILL_MD",
 ]

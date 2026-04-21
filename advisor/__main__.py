@@ -18,6 +18,7 @@ from pathlib import Path
 
 from . import _style
 from ._fs import read_head as _read_head
+from .audit import audit_to_dict, audit_transcript, format_audit_report
 from .checkpoint import (
     Checkpoint,
     checkpoint_path,
@@ -62,6 +63,7 @@ from .orchestrate import (
     build_advisor_prompt,
     build_runner_pool_prompt,
     build_verify_dispatch_prompt,
+    check_batch_fix_budget,
     default_team_config,
     render_pipeline,
 )
@@ -533,6 +535,22 @@ def _batches_from_checkpoint(cp: Checkpoint) -> list[FocusBatch]:
     return out
 
 
+def _count_lines(target: Path, file_path: str) -> int:
+    """Return the line count for a file under ``target``, or 0 on error.
+
+    Used by the pre-flight budget validator to decide which files trip
+    the ``large_file_line_threshold``. Failing reads return 0 (i.e. the
+    file isn't treated as large) rather than raising — a missing file
+    count is a soft signal, not a hard block.
+    """
+    try:
+        p = (target / file_path) if not Path(file_path).is_absolute() else Path(file_path)
+        with p.open("r", encoding="utf-8", errors="replace") as fh:
+            return sum(1 for _ in fh)
+    except OSError:
+        return 0
+
+
 def _emit_plan(
     args: argparse.Namespace,
     target: Path,
@@ -552,6 +570,19 @@ def _emit_plan(
 
     def _cfg() -> TeamConfig:
         return resolved_config if resolved_config is not None else _config_from_args(args)
+
+    def _budget_warnings() -> list[str]:
+        """Pre-flight: flag batches that could over-run the per-runner fix cap.
+
+        Only runs when we actually have batches — a raw task list has no
+        per-batch cap to check against. Reads line counts lazily so the
+        large-file cap is honored too.
+        """
+        if not batches:
+            return []
+        cfg = _cfg()
+        counts = {t.file_path: _count_lines(target, t.file_path) for t in tasks}
+        return check_batch_fix_budget(batches, cfg, file_line_counts=counts)
 
     # ``--pricing FILE`` overrides the default per-family pricing table
     # for cost estimates. Loaded once so both the JSON and pretty branches
@@ -578,6 +609,9 @@ def _emit_plan(
                 pricing=pricing_override,
             )
         payload = _plan_to_dict(target, tasks, batches, estimate=estimate, run_id=run_id)
+        warnings = _budget_warnings()
+        if warnings:
+            payload["budget_warnings"] = warnings
         rendered = json.dumps(payload, indent=2)
         output_file = getattr(args, "output", None)
         if output_file:
@@ -607,6 +641,11 @@ def _emit_plan(
         print(_style.colorize_markdown(format_batch_plan(batches)))
     else:
         print(_style.colorize_markdown(format_dispatch_plan(tasks)))
+
+    # Budget warnings print on stderr (so they don't pollute pipes) but
+    # are also included in --json output for programmatic consumers.
+    for warning in _budget_warnings():
+        print(_style.warning_box(f"budget: {warning}"), file=sys.stderr)
 
     if getattr(args, "estimate", False):
         cfg = _cfg()
@@ -1173,6 +1212,64 @@ def cmd_checkpoints(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_audit(args: argparse.Namespace) -> int:
+    """Analyze a transcript against a checkpoint and print an audit report.
+
+    The transcript is opaque text read from ``--transcript FILE`` or stdin
+    when ``--transcript -`` (the default). Binary transcripts are decoded
+    with ``errors='replace'`` so pasted logs containing unprintable bytes
+    don't kill the audit.
+    """
+    target = Path(args.target)
+    try:
+        cp = load_checkpoint(target, args.run_id)
+    except (FileNotFoundError, ValueError) as exc:
+        print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
+        return 2
+
+    transcript_arg = args.transcript or "-"
+    if transcript_arg == "-":
+        if sys.stdin.isatty():
+            print(
+                _style.warning_box(
+                    "audit: no transcript on stdin; pipe the Claude Code "
+                    f"conversation in, e.g. `pbpaste | advisor audit {args.run_id} .`",
+                    stream=sys.stderr,
+                ),
+                file=sys.stderr,
+            )
+        transcript = sys.stdin.read()
+    else:
+        try:
+            transcript = Path(transcript_arg).read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
+            return 2
+
+    report = audit_transcript(transcript, cp)
+
+    if getattr(args, "json", False):
+        payload: dict[str, object] = {
+            "schema_version": JSON_SCHEMA_VERSION,
+            **audit_to_dict(report),
+        }
+        print(json.dumps(payload, indent=2))
+        return 0
+
+    print(_style.colorize_markdown(format_audit_report(report)))
+    if not getattr(args, "quiet", False) and (
+        report.cap_overruns or report.protocol_violations or report.findings_out_of_batch
+    ):
+        print()
+        print(
+            _style.tip(
+                "tighten caps with: advisor plan --max-fixes-per-runner N "
+                "--large-file-max-fixes M"
+            )
+        )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="advisor",
@@ -1557,6 +1654,45 @@ def build_parser() -> argparse.ArgumentParser:
         help="Suppress informational lines (errors still go to stderr)",
     )
     p_checkpoints.set_defaults(func=cmd_checkpoints)
+
+    p_audit = sub.add_parser(
+        "audit",
+        help=(
+            "Post-hoc audit of an advisor run — loads a checkpoint and a "
+            "transcript, reports fix counts, CONTEXT_PRESSURE pings, "
+            "rotations, PROTOCOL_VIOLATION strings, and scope drift."
+        ),
+    )
+    p_audit.add_argument(
+        "run_id",
+        help="Checkpoint run_id (see `advisor checkpoints`)",
+    )
+    p_audit.add_argument(
+        "target",
+        nargs="?",
+        default=".",
+        help="Target directory containing the .advisor/ tree (default: current directory)",
+    )
+    p_audit.add_argument(
+        "--transcript",
+        default="-",
+        metavar="FILE",
+        help=(
+            "Transcript file to analyze (default: `-` reads from stdin). "
+            "Pipe the Claude Code conversation log in via `<` or `|`."
+        ),
+    )
+    p_audit.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the audit report as JSON for scripting",
+    )
+    p_audit.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress CTA/tip lines",
+    )
+    p_audit.set_defaults(func=cmd_audit)
 
     return parser
 

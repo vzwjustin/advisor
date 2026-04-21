@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — structural drift enforcement
+- **`build_fix_assignment_message`** (`advisor.orchestrate`): new helper
+  for building fix-assignment SendMessage specs with the runner's
+  current fix-count budget stamped into every message header (e.g.
+  `## Fix assignment (fix 4 of 5 — send CONTEXT_PRESSURE BEFORE
+  accepting the next assignment)`). Raises `ValueError` if
+  `fix_number > max_fixes_per_runner` (or `large_file_max_fixes` when
+  `is_large_file=True`) — the advisor literally cannot dispatch an
+  over-cap fix without the builder failing. Runners see the budget on
+  every turn, not just once in their spawn prompt.
+- **`check_batch_fix_budget`** (`advisor.orchestrate`): pre-flight
+  validator that warns when a dispatch plan has batches whose size could
+  over-run per-runner fix caps (including the tighter `large_file_max_fixes`
+  cap when file line counts are provided). `advisor plan` now surfaces
+  these warnings on stderr during pretty output and in the `budget_warnings`
+  key of the JSON payload, so users see structural issues at plan time
+  rather than mid-run.
+- **PROTOCOL_VIOLATION named-stop clause** in the advisor prompt: before
+  constructing any fix-assignment SendMessage, the advisor is told to
+  verify three protocol invariants (fix count < cap, file in-batch,
+  runner has not already pinged `CONTEXT_PRESSURE` without a rotation).
+  If any would be violated, it must output the exact string
+  `PROTOCOL_VIOLATION: <reason>` and rotate or re-plan. Named violations
+  survive LLM pattern-matching where "don't do X" instructions do not.
+- **Scope-drift filter** on `parse_findings_from_text` /
+  `parse_findings_with_drift` (`advisor.verify`): accepts an optional
+  `batch_files: set[str]` parameter. Findings whose `file_path` is not in
+  the batch are dropped with a warning logged to `advisor.verify`. A
+  runner assigned to `{auth.py, session.py}` that wanders into
+  `crypto.py` cannot land findings against `crypto.py` in the final
+  report — structural, not procedural.
+- **`advisor audit RUN_ID [TARGET]`**: new post-hoc diagnostic. Loads a
+  checkpoint and a transcript (from `--transcript FILE` or stdin) and
+  reports fix counts per runner, cap overruns, `CONTEXT_PRESSURE` ping
+  attribution + total count, rotation count (handoff messages),
+  `PROTOCOL_VIOLATION` strings emitted, and findings on out-of-batch
+  files. Supports `--json` for scripting. Turns "I feel like runners
+  drifted" into a concrete evidence-backed report.
+
 ### Added — context-pressure knobs on the CLI
 - `advisor plan --max-fixes-per-runner N` (and `pipeline`, `prompt`, `ui`):
   lower the hard cap on sequential fixes per runner when runners are

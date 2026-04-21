@@ -23,6 +23,7 @@ from .advisor_prompt import build_advisor_agent, build_advisor_prompt
 from .config import KNOWN_MODEL_SHORTCUTS, TeamConfig, default_team_config, is_known_model
 from .pipeline import render_pipeline
 from .runner_prompts import (
+    build_fix_assignment_message,
     build_runner_agents,
     build_runner_batch_message,
     build_runner_dispatch_messages,
@@ -30,6 +31,7 @@ from .runner_prompts import (
     build_runner_pool_agents,
     build_runner_pool_prompt,
     build_runner_prompt,
+    check_batch_fix_budget,
 )
 from .verify_dispatch import build_verify_dispatch_prompt, build_verify_message
 
@@ -43,6 +45,7 @@ __all__ = [
     "build_advisor_agent",
     "build_advisor_prompt",
     # runners
+    "build_fix_assignment_message",
     "build_runner_agents",
     "build_runner_batch_message",
     "build_runner_dispatch_messages",
@@ -50,6 +53,7 @@ __all__ = [
     "build_runner_pool_agents",
     "build_runner_pool_prompt",
     "build_runner_prompt",
+    "check_batch_fix_budget",
     # verify
     "build_verify_dispatch_prompt",
     "build_verify_message",

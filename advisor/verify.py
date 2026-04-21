@@ -17,7 +17,10 @@ Relationship with `orchestrate.build_verify_message`:
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,7 +106,10 @@ def build_verify_prompt(findings: list[Finding]) -> str:
     return VERIFY_PROMPT_TEMPLATE.format(findings_block=block)
 
 
-def parse_findings_from_text(text: str) -> list[Finding]:
+def parse_findings_from_text(
+    text: str,
+    batch_files: set[str] | None = None,
+) -> list[Finding]:
     """Best-effort parse of agent output into Finding objects.
 
     Blocks missing any of the five required fields are dropped rather than
@@ -121,7 +127,78 @@ def parse_findings_from_text(text: str) -> list[Finding]:
     labels that appear inside description/evidence/fix bodies (e.g. a
     description containing "Fix: use parameterized queries") from corrupting
     the block.
+
+    If ``batch_files`` is provided, findings whose ``file_path`` is not in
+    the batch are **dropped** with a warning emitted via the module logger.
+    This is the structural scope-drift filter: a runner assigned to
+    ``{auth.py, session.py}`` that wanders into ``crypto.py`` cannot land
+    findings against ``crypto.py`` in the final report. Path matching
+    normalizes leading ``./`` and backslashes; callers should pass
+    repo-relative POSIX paths.
+
+    Use :func:`parse_findings_with_drift` if you need the list of dropped
+    findings as well (e.g. for the ``advisor audit`` subcommand).
     """
+    kept, _dropped = parse_findings_with_drift(text, batch_files)
+    return kept
+
+
+def parse_findings_with_drift(
+    text: str,
+    batch_files: set[str] | None = None,
+) -> tuple[list[Finding], list[Finding]]:
+    """Parse findings, returning ``(kept, dropped_out_of_batch)``.
+
+    When ``batch_files`` is ``None``, the second list is always empty and
+    every well-formed finding is kept — identical behavior to the original
+    parser before the scope filter was introduced.
+
+    When ``batch_files`` is a (possibly empty) set, findings whose
+    normalized ``file_path`` is absent from the set are moved to the
+    ``dropped`` list and a warning is logged. An empty set drops every
+    finding — callers should decide whether to pass ``None`` or ``set()``.
+    """
+    normalized_batch: set[str] | None
+    if batch_files is None:
+        normalized_batch = None
+    else:
+        normalized_batch = {_normalize_path(p) for p in batch_files}
+
+    raw = _parse_blocks(text)
+    if normalized_batch is None:
+        return raw, []
+
+    kept: list[Finding] = []
+    dropped: list[Finding] = []
+    for f in raw:
+        if _normalize_path(f.file_path) in normalized_batch:
+            kept.append(f)
+        else:
+            dropped.append(f)
+            _log.warning(
+                "scope-drift: dropped finding on %r (not in batch of %d files)",
+                f.file_path,
+                len(normalized_batch),
+            )
+    return kept, dropped
+
+
+def _normalize_path(path: str) -> str:
+    """Normalize a file path for batch-membership comparison.
+
+    Strips surrounding whitespace, backticks, leading ``./``, and converts
+    backslashes to forward slashes. Does NOT resolve symlinks or make the
+    path absolute — batch filters operate on repo-relative POSIX paths as
+    emitted by the explore phase and echoed back in findings.
+    """
+    p = path.strip().strip("`").replace("\\", "/")
+    if p.startswith("./"):
+        p = p[2:]
+    return p
+
+
+def _parse_blocks(text: str) -> list[Finding]:
+    """Inner parser shared by the scoped and unscoped public entry points."""
     findings: list[Finding] = []
     current: dict[str, str] = {}
     active_key: str | None = None

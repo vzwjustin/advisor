@@ -372,6 +372,112 @@ def build_runner_agents(
     return agents
 
 
+# ── Fix assignment message (budget-stamped, mechanically capped) ─
+
+
+def build_fix_assignment_message(
+    *,
+    runner_id: int,
+    file_path: str,
+    problem: str,
+    change: str,
+    acceptance: str,
+    fix_number: int,
+    max_fixes: int,
+    is_large_file: bool = False,
+    large_file_max_fixes: int = 3,
+) -> dict[str, str]:
+    """SendMessage spec for a fix assignment with the budget stamped in-band.
+
+    The **effective cap** for this runner is ``large_file_max_fixes`` if
+    ``is_large_file`` is True, else ``max_fixes``. When a batch mixes file
+    sizes, the caller is responsible for passing the *lowest* applicable
+    cap — this function does not try to guess.
+
+    Budget enforcement:
+
+    * ``fix_number < 1`` raises :class:`ValueError` — fix numbering is
+      1-indexed, and ``0`` is almost always a bug in the caller's ledger.
+    * ``fix_number > effective_cap`` raises :class:`ValueError` with an
+      explicit rotation hint. This is a **hard invariant** — the advisor
+      cannot dispatch an over-cap fix without the builder failing, so
+      rotation decisions cannot be accidentally skipped.
+
+    Budget messaging embedded in the message body:
+
+    * ``fix_number == effective_cap - 1`` — explicit reminder that the
+      runner must ping ``CONTEXT_PRESSURE`` BEFORE accepting the next
+      assignment.
+    * ``fix_number == effective_cap`` — 'this is your last fix; stand by
+      for rotation after reporting' banner.
+
+    Every dispatched fix carries the current budget state so the runner
+    sees it on every turn, not just once in its spawn prompt.
+
+    Args:
+        runner_id: Destination runner (``runner-{runner_id}``).
+        file_path: File to edit.
+        problem: One-line description of the issue being fixed.
+        change: Exactly what edit / behavior change is required.
+        acceptance: How the runner will know the fix is correct.
+        fix_number: 1-indexed fix count for this runner's session.
+        max_fixes: Hard cap from :class:`TeamConfig.max_fixes_per_runner`.
+        is_large_file: Whether any file in this runner's current batch is
+            at or above the large-file threshold. When True, the tighter
+            ``large_file_max_fixes`` cap applies.
+        large_file_max_fixes: Cap from
+            :class:`TeamConfig.large_file_max_fixes`.
+
+    Returns:
+        ``{"to": "runner-N", "message": <budget-stamped body>}``.
+    """
+    if fix_number < 1:
+        raise ValueError(
+            f"fix_number must be >= 1 (got {fix_number}); fix numbering is 1-indexed"
+        )
+
+    effective_cap = large_file_max_fixes if is_large_file else max_fixes
+    cap_label = "large-file cap" if is_large_file else "cap"
+
+    if fix_number > effective_cap:
+        raise ValueError(
+            f"fix_number={fix_number} exceeds {cap_label}={effective_cap} "
+            f"for runner-{runner_id}: rotate to a fresh runner before "
+            f"dispatching this fix. Use build_runner_handoff_message to "
+            f"hand off the remaining fix queue."
+        )
+
+    # Budget status line baked into the header so the runner sees it on
+    # every single message, not just in its spawn prompt. By the time a
+    # runner is three fixes deep, the spawn prompt is far behind — the
+    # reminder has to travel with each assignment.
+    if fix_number == effective_cap:
+        budget_note = (
+            f"**LAST FIX** ({fix_number} of {effective_cap}). Report the "
+            "diff, then stand by for rotation — do not accept further "
+            "fix assignments."
+        )
+    elif fix_number == effective_cap - 1:
+        budget_note = (
+            f"fix {fix_number} of {effective_cap} — after this one, send "
+            "`CONTEXT_PRESSURE` BEFORE accepting the next assignment "
+            "(not after). The advisor needs one fix of runway to rotate."
+        )
+    else:
+        budget_note = f"fix {fix_number} of {effective_cap}"
+
+    body = (
+        f"## Fix assignment ({budget_note})\n\n"
+        f"File: `{file_path}`\n"
+        f"Problem: {problem.strip()}\n"
+        f"Change: {change.strip()}\n"
+        f"Acceptance: {acceptance.strip()}\n\n"
+        "Make the edit, send the draft diff back for review, and await "
+        "CONFIRM / REVISE. Do not drift into unrelated refactors."
+    )
+    return {"to": f"runner-{runner_id}", "message": body}
+
+
 # ── Handoff message (saturated runner → fresh runner) ────────────
 
 
@@ -409,3 +515,70 @@ def build_runner_handoff_message(
         "Acknowledge and wait for the first fix assignment."
     )
     return {"to": f"runner-{new_runner_id}", "message": body}
+
+
+# ── Pre-flight budget validator ──────────────────────────────────
+
+
+def check_batch_fix_budget(
+    batches: list[FocusBatch],
+    config: TeamConfig,
+    file_line_counts: dict[str, int] | None = None,
+) -> list[str]:
+    """Warn about batches whose size could over-run per-runner fix caps.
+
+    Not every file in a batch will require a fix — explore produces
+    findings, and only a subset become fix assignments. So this is a
+    *warning*, not a hard error: it flags dispatch plans where the
+    worst-case fix load (every file → a fix) would exceed the cap
+    without a mid-batch rotation.
+
+    Checks performed per batch:
+
+    * ``len(batch.tasks) > max_fixes_per_runner`` — worst-case overrun.
+      Suggests either splitting the batch or planning a rotation.
+    * If ``file_line_counts`` is provided and any file in the batch is
+      at/above ``large_file_line_threshold``, the tighter
+      ``large_file_max_fixes`` cap applies — the check compares
+      ``len(batch.tasks)`` against that lower number instead.
+
+    Args:
+        batches: Planned batches from :func:`create_focus_batches`.
+        config: Team configuration with the two caps and the threshold.
+        file_line_counts: Optional mapping of file_path → line count.
+            When absent, only the general cap is checked; large-file
+            caps are not applied because we cannot know which files
+            trip the threshold without reading them.
+
+    Returns:
+        A list of human-readable warning strings (one per over-cap
+        batch). Empty list means every batch is within budget.
+    """
+    warnings: list[str] = []
+    for batch in batches:
+        file_count = len(batch.tasks)
+        effective_cap = config.max_fixes_per_runner
+        cap_reason = "max_fixes_per_runner"
+
+        if file_line_counts is not None:
+            large_paths = [
+                t.file_path
+                for t in batch.tasks
+                if file_line_counts.get(t.file_path, 0) >= config.large_file_line_threshold
+            ]
+            if large_paths and config.large_file_max_fixes < effective_cap:
+                effective_cap = config.large_file_max_fixes
+                cap_reason = (
+                    f"large_file_max_fixes (triggered by {large_paths[0]}"
+                    + (f" +{len(large_paths) - 1} more" if len(large_paths) > 1 else "")
+                    + ")"
+                )
+
+        if file_count > effective_cap:
+            warnings.append(
+                f"batch {batch.batch_id}: {file_count} tasks exceeds "
+                f"{cap_reason}={effective_cap}. Worst-case (every file "
+                f"needs a fix) would require mid-batch rotation. Consider "
+                f"--batch-size {effective_cap} or splitting this batch."
+            )
+    return warnings
