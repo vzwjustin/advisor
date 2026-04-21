@@ -383,7 +383,10 @@ def _double_star_to_regex(pattern: str) -> re.Pattern[str]:
                 parts.append(re.escape(c))
                 i += 1
             else:
-                parts.append(pattern[i : end + 1])
+                body = pattern[i + 1 : end]
+                if body.startswith("!"):
+                    body = "^" + body[1:]
+                parts.append("[" + body + "]")
                 i = end + 1
         else:
             parts.append(re.escape(c))
