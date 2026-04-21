@@ -230,7 +230,9 @@ def format_report(report: DoctorReport) -> str:
     ]
     for check in report.checks:
         _label, fancy, plain, color = _style.STATE_GLYPHS[check.level]
-        mark = _style.paint(_style.glyph(fancy, plain), color)
+        mark = (
+            _style.paint(_style.glyph(fancy, plain), color) if color else _style.glyph(fancy, plain)
+        )
         name_col = _style.paint(f"{check.name:<16}", "cyan", "bold")
         lines.append(f"  {mark} {name_col} {check.message}")
     if report.env_overrides:
