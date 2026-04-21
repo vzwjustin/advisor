@@ -232,7 +232,12 @@ def _matches_any_pattern(file_path: str, patterns: list[str]) -> bool:
     if not patterns:
         return False
     path = PurePath(file_path)
-    path_str = str(path)
+    # Normalize path separators: glob patterns always use ``/`` (including
+    # user-authored ``.advisorignore`` entries), but ``str(PurePath)`` uses
+    # the OS separator — ``\`` on Windows. Without normalization,
+    # ``src/**/*.py`` compiled to a regex using ``/`` would never match
+    # ``src\a\b\c.py``. Normalize once, apply everywhere.
+    path_str = path.as_posix()
     name = path.name
     for pattern in patterns:
         # Pattern ending with / matches directories only

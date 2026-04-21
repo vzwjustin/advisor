@@ -100,3 +100,12 @@ show_error_codes = true
 [[tool.mypy.overrides]]
 module = "tests.*"
 ignore_errors = true
+
+[[tool.mypy.overrides]]
+# ``shtab`` is an optional runtime dependency (see the ``completion`` extra).
+# It is imported behind a try/except in ``advisor/__main__.py`` so the CLI
+# continues to work without it. CI's lint job installs only the ``dev``
+# extra, so without this override mypy fails on an import-not-found error
+# that has no bearing on the actual type-safety of the code.
+module = "shtab"
+ignore_missing_imports = true

@@ -395,7 +395,10 @@ class TestInstallSkillUpdateAndUninstall:
         from advisor.install import SKILL_MD, install_skill
 
         target = tmp_path / "SKILL.md"
-        target.write_text(SKILL_MD)
+        # Windows default codepage is cp1252, which cannot encode the
+        # arrow characters used in SKILL.md — force UTF-8 so this test
+        # runs identically on every platform.
+        target.write_text(SKILL_MD, encoding="utf-8")
         result = install_skill(path=target)
         assert result.action == "unchanged"
 
