@@ -92,6 +92,20 @@ class TestRemoveNudge:
         assert action == "absent"
         assert new == "# just a file\n"
 
+    def test_removes_orphan_start_marker(self):
+        existing = "# CLAUDE.md\n\n" + START_MARKER + "\nleftover\n"
+        removed, action = remove_nudge(existing)
+        assert action == "removed"
+        assert START_MARKER not in removed
+        assert "leftover" in removed
+
+    def test_removes_orphan_end_marker(self):
+        existing = "# CLAUDE.md\n\nleftover\n" + END_MARKER + "\n"
+        removed, action = remove_nudge(existing)
+        assert action == "removed"
+        assert END_MARKER not in removed
+        assert "leftover" in removed
+
     def test_remove_then_install_is_stable(self):
         installed, _ = apply_nudge("# CLAUDE.md\n")
         removed, _ = remove_nudge(installed)

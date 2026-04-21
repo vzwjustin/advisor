@@ -250,8 +250,13 @@ def apply_nudge(existing: str, body: str = NUDGE_BODY) -> tuple[str, str]:
 
 
 def remove_nudge(existing: str) -> tuple[str, str]:
-    """Return (new_contents, action) with every sentinel block removed."""
-    if START_MARKER not in existing or END_MARKER not in existing:
+    """Return (new_contents, action) with every sentinel marker/block removed.
+
+    Treat orphaned markers as removable corruption instead of reporting
+    ``absent``. This keeps uninstall resilient when prior partial writes or
+    manual edits left only one marker behind.
+    """
+    if START_MARKER not in existing and END_MARKER not in existing:
         return existing, InstallAction.ABSENT.value
     stripped = _strip_all_blocks(existing).strip()
     cleaned = f"{stripped}\n" if stripped else ""
