@@ -684,14 +684,20 @@ def _component_line(c: ComponentStatus) -> str:
     _, fancy, ascii_, color = _style.STATE_GLYPHS[key]
     # Use component-status vocabulary ("installed") rather than STATE_GLYPHS label ("ok").
     component_label = {"ok": "installed", "outdated": "outdated", "missing": "missing"}[key]
-    mark = _style.paint(_style.glyph(fancy, ascii_), color) if color else _style.glyph(fancy, ascii_)
+    mark = (
+        _style.paint(_style.glyph(fancy, ascii_), color) if color else _style.glyph(fancy, ascii_)
+    )
     state = _style.paint(component_label, color) if color else component_label
     name_col = _style.paint(f"{c.name:<6}", "cyan", "bold")
     return f"  {mark} {name_col} {state:<10} {_style.dim(str(c.path))}"
 
 
 def _format_status(s: Status, version: str) -> str:
-    lines = [_style.header_block(f"advisor {version}", [], width=52), _component_line(s.nudge), _component_line(s.skill)]
+    lines = [
+        _style.header_block(f"advisor {version}", [], width=52),
+        _component_line(s.nudge),
+        _component_line(s.skill),
+    ]
     if s.opt_out:
         warn = _style.paint(_style.glyph("⚠", "!"), "yellow")
         lines.append(f"  {warn} auto-install disabled ({OPT_OUT_ENV} set)")
@@ -1022,16 +1028,18 @@ def cmd_version(args: argparse.Namespace) -> int:
     if getattr(args, "json", False):
         print(json.dumps(info, indent=2))
         return 0
-    print(_style.header_block(
-        f"advisor {info['advisor_version']}",
-        [
-            ("python", f"{info['python_version']} ({info['python_implementation']})"),
-            ("platform", info["platform"]),
-            ("install", info["install_path"]),
-            ("schema", info["schema_version"]),
-        ],
-        width=52,
-    ))
+    print(
+        _style.header_block(
+            f"advisor {info['advisor_version']}",
+            [
+                ("python", f"{info['python_version']} ({info['python_implementation']})"),
+                ("platform", info["platform"]),
+                ("install", info["install_path"]),
+                ("schema", info["schema_version"]),
+            ],
+            width=52,
+        )
+    )
     if not getattr(args, "quiet", False):
         print()
         print(_style.cta("docs", "advisor protocol"))
@@ -1278,7 +1286,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip loading .advisor/history.jsonl into the advisor prompt",
     )
-    p_prompt.add_argument("--json", action="store_true", help="Emit prompt as JSON {\"text\": ...}")
+    p_prompt.add_argument("--json", action="store_true", help='Emit prompt as JSON {"text": ...}')
     p_prompt.add_argument("--quiet", action="store_true", help="Suppress frame/CTA lines")
     p_prompt.set_defaults(func=cmd_prompt)
 
@@ -1404,7 +1412,9 @@ def build_parser() -> argparse.ArgumentParser:
         "protocol",
         help="Print the strict team-lifecycle protocol (TeamCreate → shutdowns → TeamDelete)",
     )
-    p_protocol.add_argument("--json", action="store_true", help="Emit protocol as JSON {\"text\": ...}")
+    p_protocol.add_argument(
+        "--json", action="store_true", help='Emit protocol as JSON {"text": ...}'
+    )
     p_protocol.add_argument("--quiet", action="store_true", help="Suppress CTA line")
     p_protocol.set_defaults(func=cmd_protocol)
 

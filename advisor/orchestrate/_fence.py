@@ -1,4 +1,5 @@
 """Fence-escape helper for embedding untrusted payloads in prompts."""
+
 from __future__ import annotations
 
 
