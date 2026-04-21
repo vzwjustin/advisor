@@ -93,6 +93,17 @@ class TestPlanPayload:
         payload = _plan_payload(state, {"min_priority": ["not-a-number"]})
         assert payload["min_priority"] == 1
 
+    def test_respects_advisorignore(self, tmp_path):
+        """Files matched by ``.advisorignore`` must not appear in the plan."""
+        (tmp_path / "auth.py").write_text("password = 'x'")
+        (tmp_path / "secrets.py").write_text("api_key = 'y'")
+        (tmp_path / ".advisorignore").write_text("secrets.py\n")
+        state = build_app_state(tmp_path, min_priority=1)
+        payload = _plan_payload(state, {})
+        paths = [t["file_path"] for t in payload["tasks"]]
+        assert any("auth.py" in p for p in paths)
+        assert not any("secrets.py" in p for p in paths)
+
 
 class TestCostPayload:
     def test_returns_null_estimate_when_empty(self, tmp_path):
@@ -329,10 +340,60 @@ class TestUiCommand:
 class TestRunServerKeyboardInterrupt:
     """``run_server`` should trap Ctrl-C and exit cleanly (rc=None → 0)."""
 
+    def _fake_server_class(self, serve_exc=KeyboardInterrupt):
+        class _FakeServer:
+            server_address = ("127.0.0.1", 54321)
+
+            def __init__(self, *a, **kw):
+                pass
+
+            def serve_forever(self):
+                raise serve_exc
+
+            def server_close(self):
+                pass
+
+        return _FakeServer
+
     def test_keyboard_interrupt_is_caught(self, tmp_path, monkeypatch, capsys):
         state = build_app_state(tmp_path)
+        monkeypatch.setattr(
+            "advisor.web.server.ThreadingHTTPServer",
+            lambda *a, **kw: self._fake_server_class()(),
+        )
+        run_server(state, port=find_free_port(start=DEFAULT_PORT + 100))
+        assert "shutting down" in capsys.readouterr().out
 
-        class _FakeServer:
+
+class TestRunServerPortValidation:
+    """Port inputs that would normally crash deep in the socket layer should
+    surface as a clean :class:`OSError` from :func:`run_server`."""
+
+    @pytest.mark.parametrize("bad_port", [-1, 65536, 99999])
+    def test_rejects_out_of_range(self, tmp_path, bad_port):
+        state = build_app_state(tmp_path)
+        with pytest.raises(OSError, match="could not bind"):
+            run_server(state, port=bad_port)
+
+    def test_reports_actual_bound_port_when_zero(self, tmp_path, monkeypatch, capsys):
+        """When ``--port 0`` is used, the URL printed must reflect the port
+        the OS actually assigned, not the literal 0."""
+        state = build_app_state(tmp_path)
+
+        # Build a real ThreadingHTTPServer bound to port 0, then swap it in
+        # through a factory so run_server treats it as its server. We raise
+        # KeyboardInterrupt immediately so serve_forever returns.
+        from http.server import ThreadingHTTPServer
+
+        from advisor.web.server import _make_handler_class
+
+        real_handler = _make_handler_class(state, log_requests=False)
+        real_server = ThreadingHTTPServer(("127.0.0.1", 0), real_handler)
+        bound_port = real_server.server_address[1]
+
+        class _OneShot:
+            server_address = real_server.server_address
+
             def __init__(self, *a, **kw):
                 pass
 
@@ -340,10 +401,47 @@ class TestRunServerKeyboardInterrupt:
                 raise KeyboardInterrupt
 
             def server_close(self):
-                pass
+                real_server.server_close()
 
-        monkeypatch.setattr(
-            "advisor.web.server.ThreadingHTTPServer", lambda *a, **kw: _FakeServer()
-        )
-        run_server(state, port=find_free_port(start=DEFAULT_PORT + 100))
-        assert "shutting down" in capsys.readouterr().out
+        monkeypatch.setattr("advisor.web.server.ThreadingHTTPServer", lambda *a, **kw: _OneShot())
+        run_server(state, port=0)
+        out = capsys.readouterr().out
+        assert f":{bound_port}" in out
+        assert ":0\n" not in out
+
+
+class TestErrorHandler:
+    """Unhandled exceptions should log a traceback and return a generic 500."""
+
+    def test_generic_error_body(self, tmp_path, monkeypatch, caplog):
+        state = build_app_state(tmp_path)
+
+        # Force one of the handlers to blow up with a distinctive exception
+        # whose message should NOT leak into the response body.
+        def boom(*a, **kw):
+            raise RuntimeError("supersecret internal detail")
+
+        monkeypatch.setattr("advisor.web.server._target_payload", boom)
+
+        from http.server import ThreadingHTTPServer
+
+        from advisor.web.server import _make_handler_class
+
+        handler_cls = _make_handler_class(state, log_requests=False)
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler_cls)
+        port = server.server_address[1]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with caplog.at_level("ERROR", logger="advisor.web.server"):
+                status, _, body = _get("127.0.0.1", port, "/api/target")
+            assert status == 500
+            data = json.loads(body)
+            assert data["error"] == "internal server error"
+            assert "supersecret" not in body.decode()
+            # The traceback must still reach the server-side log so devs can debug.
+            assert any("supersecret" in rec.message for rec in caplog.records)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)

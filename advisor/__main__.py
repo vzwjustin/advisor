@@ -15,6 +15,7 @@ from importlib.metadata import version as pkg_version
 from pathlib import Path
 
 from . import _style
+from ._fs import read_head as _read_head
 from .checkpoint import (
     Checkpoint,
     load_checkpoint,
@@ -60,7 +61,7 @@ from .orchestrate import (
     default_team_config,
     render_pipeline,
 )
-from .rank import CONTENT_SCAN_LIMIT, rank_files
+from .rank import rank_files
 
 # Top-level schema version for JSON outputs. Bump when the shape of any
 # ``--json`` payload changes in a way that would break downstream parsers.
@@ -177,13 +178,6 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
     print()
     print(_style.cta(f"/advisor {args.target}", "run the live pipeline in Claude Code"))
     return 0
-
-
-def _read_head(path: str, limit: int = CONTENT_SCAN_LIMIT) -> str:
-    try:
-        return Path(path).read_text(errors="ignore")[:limit]
-    except OSError:
-        return ""
 
 
 def _safe_rglob(target: Path, pattern: str) -> tuple[list[str] | None, str | None]:

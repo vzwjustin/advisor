@@ -22,7 +22,9 @@ All responses are JSON (application/json) except static assets.
 from __future__ import annotations
 
 import json
+import logging
 import socket
+import traceback
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -30,11 +32,15 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from .._fs import read_head as _read_head
+from .._fs import safe_rglob_paths as _safe_rglob
 from ..cost import estimate_cost
-from ..focus import create_focus_tasks
+from ..focus import FocusTask, create_focus_tasks
 from ..history import HISTORY_SCHEMA_VERSION, load_recent
-from ..rank import CONTENT_SCAN_LIMIT, rank_files
+from ..rank import load_advisorignore, rank_files
 from .assets import APP_CSS, APP_JS, INDEX_HTML
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
@@ -79,20 +85,6 @@ def build_app_state(
     )
 
 
-def _read_head(path: str, limit: int = CONTENT_SCAN_LIMIT) -> str:
-    try:
-        return Path(path).read_text(errors="ignore")[:limit]
-    except OSError:
-        return ""
-
-
-def _safe_rglob(target: Path, pattern: str) -> list[str]:
-    try:
-        return [str(p) for p in target.rglob(pattern) if p.is_file()]
-    except (OSError, ValueError):
-        return []
-
-
 def _first(qs: dict[str, list[str]], key: str, default: str) -> str:
     vals = qs.get(key)
     if vals and vals[0]:
@@ -107,12 +99,22 @@ def _first_int(qs: dict[str, list[str]], key: str, default: int) -> int:
         return default
 
 
+def _rank_target(state: AppState, file_types: str, min_priority: int) -> list[FocusTask]:
+    """Discover + rank + filter files under the target, honoring ``.advisorignore``.
+
+    Shared by the ``/api/plan`` and ``/api/cost`` handlers so they can't
+    drift on which files are in scope.
+    """
+    paths = _safe_rglob(state.target, file_types)
+    ignore_patterns = load_advisorignore(state.target)
+    ranked = rank_files(paths, read_fn=_read_head, ignore_patterns=ignore_patterns)
+    return create_focus_tasks(ranked, max_tasks=None, min_priority=min_priority)
+
+
 def _plan_payload(state: AppState, qs: dict[str, list[str]]) -> dict[str, Any]:
     file_types = _first(qs, "file_types", state.default_file_types)
     min_priority = _first_int(qs, "min_priority", state.default_min_priority)
-    paths = _safe_rglob(state.target, file_types)
-    ranked = rank_files(paths, read_fn=_read_head)
-    tasks = create_focus_tasks(ranked, max_tasks=None, min_priority=min_priority)
+    tasks = _rank_target(state, file_types, min_priority)
     return {
         "target": str(state.target),
         "file_types": file_types,
@@ -128,9 +130,7 @@ def _cost_payload(state: AppState, qs: dict[str, list[str]]) -> dict[str, Any]:
     max_fixes = _first_int(qs, "max_fixes_per_runner", 5)
     file_types = _first(qs, "file_types", state.default_file_types)
     min_priority = _first_int(qs, "min_priority", state.default_min_priority)
-    paths = _safe_rglob(state.target, file_types)
-    ranked = rank_files(paths, read_fn=_read_head)
-    tasks = create_focus_tasks(ranked, max_tasks=None, min_priority=min_priority)
+    tasks = _rank_target(state, file_types, min_priority)
     if not tasks:
         return {
             "target": str(state.target),
@@ -207,7 +207,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     # --- response helpers -------------------------------------------------
     def _send_json(self, payload: dict[str, Any], status: int = 200) -> None:
-        body = json.dumps(payload).encode("utf-8")
+        # ``ensure_ascii=False`` keeps non-ASCII characters readable in the
+        # browser (UTF-8 is declared in the Content-Type) — matches the
+        # convention used by ``HistoryEntry.to_json_line``.
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -259,8 +262,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
             # Client hung up while we were writing — common when switching
             # tabs in the browser. Nothing actionable.
             return
-        except Exception as exc:
-            self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"{type(exc).__name__}: {exc}")
+        except Exception:
+            # Full traceback goes to the server log so developers can
+            # debug. The response body carries only a generic message —
+            # even on localhost, avoiding raw exception text keeps the
+            # surface narrow if someone tunnels the port.
+            logger.error("unhandled error serving %s\n%s", route, traceback.format_exc())
+            self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "internal server error")
 
 
 def _make_handler_class(state: AppState, log_requests: bool) -> type[DashboardHandler]:
@@ -288,17 +296,29 @@ def run_server(
 ) -> None:
     """Block and serve the dashboard until Ctrl-C.
 
-    Raises :class:`OSError` if the port is already bound — we refuse to
-    fall through to an alternate port silently because that would make the
-    user's ``advisor ui`` invocation non-reproducible.
+    Raises :class:`OSError` on bind failure — including when ``port`` is out
+    of the valid 0..65535 range. We intentionally do NOT fall through to an
+    alternate port on EADDRINUSE because that would make ``advisor ui``
+    invocations non-reproducible; passing ``port=0`` is the opt-in to let
+    the OS pick, and the bound port is printed after the fact.
     """
+    if not 0 <= port <= 65535:
+        raise OSError(f"could not bind {host}:{port} (port out of range 0..65535)")
+
     handler_cls = _make_handler_class(state, log_requests=log_requests)
     try:
         server = ThreadingHTTPServer((host, port), handler_cls)
-    except OSError as exc:
+    except (OSError, OverflowError) as exc:
+        # ``OverflowError`` is what ``socket.bind`` raises for ports that
+        # are integer-valid but outside the 0..65535 range — wrap it so
+        # the CLI's OSError-handling path catches it uniformly.
         raise OSError(f"could not bind {host}:{port} ({exc})") from exc
 
-    url = f"http://{host}:{port}"
+    # When the caller passed port=0 the OS picked an ephemeral port; the
+    # ``server_address`` tuple is the only reliable source for what we
+    # actually bound to, so report that instead of the request value.
+    actual_port = server.server_address[1]
+    url = f"http://{host}:{actual_port}"
     print(f"advisor dashboard serving {state.target} at {url}")
     print("press Ctrl-C to stop")
     try:
