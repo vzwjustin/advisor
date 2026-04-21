@@ -319,9 +319,7 @@ class TestUiCommand:
         busy_port = sock.getsockname()[1]
         try:
             parser = build_parser()
-            args = parser.parse_args(
-                ["ui", str(tmp_path), "--port", str(busy_port)]
-            )
+            args = parser.parse_args(["ui", str(tmp_path), "--port", str(busy_port)])
             assert cmd_ui(args) == 1
             assert "could not bind" in capsys.readouterr().err
         finally:
