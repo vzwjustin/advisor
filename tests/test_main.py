@@ -900,6 +900,93 @@ class TestCmdCheckpoints:
         err = capsys.readouterr().err
         assert "mutually exclusive" in err
 
+    def test_list_shows_relative_age(self, tmp_path, capsys, monkeypatch):
+        """The list gains an ``Xm ago`` column sourced from mtime.
+
+        Gives Claude Code users a cheap staleness cue so they can pick the
+        newest checkpoint without parsing the 20-char timestamp embedded
+        in the run_id itself.
+        """
+        import os
+
+        from advisor import __main__ as cli
+
+        # Write two checkpoints and backdate one by ~10 minutes so we
+        # exercise the "Xm ago" branch deterministically.
+        now_p = self._write_stub_checkpoint(tmp_path, "20260421T000000Z-new")
+        old_p = self._write_stub_checkpoint(tmp_path, "20260420T000000Z-old")
+        now = 1_700_000_000.0
+        os.utime(now_p, (now, now))
+        os.utime(old_p, (now - 600, now - 600))  # 10 min earlier
+        monkeypatch.setattr(cli.time, "time", lambda: now)
+
+        rc = cli.main(["checkpoints", str(tmp_path)])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "just now" in out
+        assert "10m ago" in out
+
+    def test_list_single_checkpoint_suppresses_resume_tip(self, tmp_path, capsys):
+        """With only one row the ``resume with…`` tip is redundant — the
+        run_id is already on the line above — so the CLI skips it.
+        """
+        from advisor import __main__ as cli
+
+        self._write_stub_checkpoint(tmp_path, "20260421T000000Z-only")
+        rc = cli.main(["checkpoints", str(tmp_path)])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "resume with" not in out
+
+    def test_list_multi_checkpoint_emits_resume_tip(self, tmp_path, capsys):
+        from advisor import __main__ as cli
+
+        self._write_stub_checkpoint(tmp_path, "20260421T000000Z-a")
+        self._write_stub_checkpoint(tmp_path, "20260421T000001Z-b")
+        rc = cli.main(["checkpoints", str(tmp_path)])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "resume with: advisor plan --resume <RUN_ID>" in out
+
+    def test_empty_list_suggests_checkpoint_flag(self, tmp_path, capsys):
+        """Empty-state message nudges towards ``--checkpoint``."""
+        from advisor import __main__ as cli
+
+        rc = cli.main(["checkpoints", str(tmp_path)])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "no checkpoints yet" in out
+        assert "advisor plan --checkpoint" in out
+
+
+class TestRelativeAge:
+    """Boundary coverage for the ``_relative_age`` formatter."""
+
+    def test_sub_second_is_just_now(self):
+        from advisor.__main__ import _relative_age
+
+        assert _relative_age(100.0, now_epoch=100.5) == "just now"
+
+    def test_seconds_and_minutes_and_hours_and_days(self):
+        from advisor.__main__ import _relative_age
+
+        base = 10_000.0
+        assert _relative_age(base, now_epoch=base + 5) == "5s ago"
+        assert _relative_age(base, now_epoch=base + 180) == "3m ago"
+        assert _relative_age(base, now_epoch=base + 7200) == "2h ago"
+        assert _relative_age(base, now_epoch=base + 3 * 86400) == "3d ago"
+
+    def test_future_mtime_clamped_to_just_now(self):
+        """Clock skew (mtime > now) should never render as a negative age."""
+        from advisor.__main__ import _relative_age
+
+        assert _relative_age(100.0, now_epoch=50.0) == "just now"
+
+    def test_extreme_age_caps_at_99_days(self):
+        from advisor.__main__ import _relative_age
+
+        assert _relative_age(0.0, now_epoch=1000 * 86400) == "99d ago"
+
 
 class TestCmdPlanExclude:
     """``--exclude`` filters paths before ranking."""
@@ -1023,3 +1110,38 @@ class TestCmdPlanGitignoreTip:
         assert rc == 0
         err = capsys.readouterr().err
         assert ".advisor/" not in err
+
+
+class TestCmdPlanCheckpointSaveCosmetics:
+    """The checkpoint-save success message is friendlier and actionable."""
+
+    def test_save_shows_success_and_resume_hint(self, tmp_path, capsys):
+        """Output includes the success glyph, the run_id, and the exact
+        ``advisor plan --resume <id>`` command so the next step is a copy.
+        """
+        from advisor import __main__ as cli
+
+        (tmp_path / "a.py").write_text("x = 1\n")
+        rc = cli.main(["plan", str(tmp_path), "--min-priority", "1", "--checkpoint"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        # Success glyph (or ASCII fallback) precedes the status line.
+        assert "checkpoint saved:" in out
+        # Resume hint must echo the actual run_id so copy/paste works.
+        assert "advisor plan --resume 2026" in out
+        # Legacy verbose key is gone in favour of the cleaner format.
+        assert "run_id=" not in out
+
+
+class TestCmdHistoryEmptyState:
+    """``advisor history`` on a fresh tree guides the reader."""
+
+    def test_empty_output_includes_tip(self, tmp_path, capsys):
+        from advisor import __main__ as cli
+
+        rc = cli.main(["history", str(tmp_path)])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "no history yet" in out
+        # Tip explains *when* entries appear so the command isn't a dead-end.
+        assert "when you confirm them" in out

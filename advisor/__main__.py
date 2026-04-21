@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from collections.abc import Callable
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
@@ -109,6 +110,30 @@ def _fmt_action(component: str, action: str, path: object) -> str:
         label_col = _style.paint(label_col, color)
     path_str = _style.dim(str(path))
     return f"{mark} {component_col} {label_col} {path_str}"
+
+
+def _relative_age(mtime_epoch: float, now_epoch: float | None = None) -> str:
+    """Render an approximate age like ``2m ago`` / ``3h ago`` / ``5d ago``.
+
+    Used by ``advisor checkpoints`` to surface staleness at a glance so a
+    reader can pick the most recent run_id without parsing the 20-char
+    ISO timestamp embedded in the id. Falls back to ``just now`` for
+    sub-second deltas and caps at ``99d ago`` for very old files.
+    ``now_epoch`` is an injection seam for tests — defaults to
+    :func:`time.time` when omitted.
+    """
+    now = time.time() if now_epoch is None else now_epoch
+    delta = max(0.0, now - mtime_epoch)
+    if delta < 1.0:
+        return "just now"
+    if delta < 60:
+        return f"{int(delta)}s ago"
+    if delta < 3600:
+        return f"{int(delta // 60)}m ago"
+    if delta < 86400:
+        return f"{int(delta // 3600)}h ago"
+    days = int(delta // 86400)
+    return f"{min(days, 99)}d ago"
 
 
 def _config_from_args(args: argparse.Namespace) -> TeamConfig:
@@ -555,7 +580,11 @@ def _emit_plan(
 
     if run_id:
         print()
-        print(_style.dim(f"checkpoint saved: run_id={run_id}"))
+        # Green success glyph + bold run_id for fast scanning in Claude
+        # Code transcripts, with an immediate hint for the next step so
+        # users don't have to guess the exact ``--resume`` flag name.
+        print(_style.success_box(f"checkpoint saved: {run_id}"))
+        print(_style.tip(f"resume with: advisor plan --resume {run_id}"))
 
     print()
     print(_style.cta(f"/advisor {target}", "run the live pipeline in Claude Code"))
@@ -933,7 +962,12 @@ def cmd_history(args: argparse.Namespace) -> int:
         print(json.dumps(payload, indent=2))
         return 0
     if not entries:
-        print(_style.dim(f"no history at {target}/.advisor/history.jsonl"))
+        # Friendlier empty state — readers landing here for the first time
+        # often don't know that history is written lazily as findings get
+        # confirmed during a live run. The dim tip keeps the CTA discoverable
+        # without competing visually with the primary message.
+        print(_style.dim(f"no history yet at {target}/.advisor/history.jsonl"))
+        print(_style.tip("findings are logged when you confirm them during a run"))
         return 0
     print(_style.colorize_markdown(format_history_block(entries)))
     return 0
@@ -1000,7 +1034,7 @@ def cmd_checkpoints(args: argparse.Namespace) -> int:
                 print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
                 return 2
             if not getattr(args, "quiet", False):
-                print(_style.dim(f"removed checkpoint {rm_id}"))
+                print(_style.success_box(f"removed checkpoint {rm_id}"))
         elif not getattr(args, "quiet", False):
             print(_style.dim(f"no checkpoint {rm_id} at {path}"))
         return 0
@@ -1016,7 +1050,11 @@ def cmd_checkpoints(args: argparse.Namespace) -> int:
             except OSError:
                 pass
         if not getattr(args, "quiet", False):
-            print(_style.dim(f"removed {removed} checkpoint(s)"))
+            if removed:
+                noun = "checkpoint" if removed == 1 else "checkpoints"
+                print(_style.success_box(f"removed {removed} {noun}"))
+            else:
+                print(_style.dim("no checkpoints to remove"))
         return 0
 
     ids = list_checkpoints(target)
@@ -1030,14 +1068,34 @@ def cmd_checkpoints(args: argparse.Namespace) -> int:
         print(json.dumps(payload, indent=2))
         return 0
     if not ids:
-        print(_style.dim(f"no checkpoints at {target}/.advisor/"))
+        # Empty state: point the reader at the flag that populates this
+        # directory so the command isn't a dead-end when run on a fresh
+        # checkout. Matches the tone of the history empty-state above.
+        print(_style.dim(f"no checkpoints yet at {target}/.advisor/"))
+        print(_style.tip("save one with: advisor plan --checkpoint"))
         return 0
     print(_style.colorize_markdown(f"## Checkpoints ({len(ids)})"))
+    # Widest run_id + the backtick quotes, so the age/path columns line up
+    # regardless of suffix length variations across checkpoints. Aligning
+    # in Python space (not with a Markdown table) keeps the output
+    # pipe-friendly while still reading as columns in Claude Code.
+    id_col_width = max(len(rid) for rid in ids) + 2  # +2 for the backticks
+    age_col_width = 10  # fits "just now" / "99d ago"
     for rid in ids:
         path = checkpoint_path(target, rid)
-        print(f"- `{rid}` — {path}")
-    print()
-    print(_style.tip("resume with: advisor plan --resume <RUN_ID>"))
+        try:
+            age = _relative_age(path.stat().st_mtime)
+        except OSError:
+            age = ""
+        id_cell = f"`{rid}`".ljust(id_col_width)
+        age_cell = _style.dim(age.ljust(age_col_width))
+        print(f"- {id_cell}  {age_cell}  {path}")
+    # Only nudge towards --resume when there's more than one checkpoint;
+    # with a single row the run_id is right there on the only line above
+    # and the tip just repeats information already on screen.
+    if len(ids) > 1:
+        print()
+        print(_style.tip("resume with: advisor plan --resume <RUN_ID>"))
     return 0
 
 

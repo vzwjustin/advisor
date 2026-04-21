@@ -9,6 +9,7 @@ driven by the advisor, not hard-coded caps.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass
 
 from .rank import RankedFile
@@ -190,14 +191,40 @@ def create_focus_batches(
     return batches
 
 
+def _priority_mix(priorities: list[int]) -> str:
+    """Compact priority histogram — e.g. ``P5 ×11  P4 ×5  P3 ×5``.
+
+    Rendered inline on the dispatch-plan header so a reader in
+    Claude Code gets an at-a-glance sense of the work shape before
+    scrolling the full list. The bare ``P<n>`` tokens are picked up
+    by :func:`advisor._style.colorize_markdown` and rendered with the
+    same priority palette as the numbered list below.
+    """
+    if not priorities:
+        return ""
+    counts = Counter(priorities)
+    return "  ".join(f"P{p} ×{counts[p]}" for p in sorted(counts, reverse=True))
+
+
 def format_dispatch_plan(tasks: list[FocusTask]) -> str:
     """Format tasks into a readable dispatch plan."""
     if not tasks:
         return "## Dispatch Plan\nNo files matched — nothing to dispatch.\n"
 
+    # Singular/plural grammar for a single-file plan — "1 focused agent"
+    # reads cleaner than "1 focused agents" in the CLI and in README
+    # screenshots. The full-word substring "focused agent" remains a
+    # subset of "focused agents", so assertion-based tests stay green.
+    agent_word = "agent" if len(tasks) == 1 else "agents"
+    mix = _priority_mix([t.priority for t in tasks])
+    header = f"Dispatching {len(tasks)} focused {agent_word} in parallel"
+    if mix:
+        header = f"{header} ({mix}):"
+    else:
+        header = f"{header}:"
     lines = [
         "## Dispatch Plan",
-        f"Dispatching {len(tasks)} focused agents in parallel:",
+        header,
         "",
     ]
     for i, t in enumerate(tasks, 1):
@@ -212,9 +239,17 @@ def format_batch_plan(batches: list[FocusBatch]) -> str:
         return "## Batch Dispatch Plan\nNo files matched — nothing to dispatch.\n"
 
     total_files = sum(len(b.tasks) for b in batches)
+    runner_word = "runner" if len(batches) == 1 else "runners"
+    file_word = "file" if total_files == 1 else "files"
+    mix = _priority_mix([t.priority for b in batches for t in b.tasks])
+    header = f"Dispatching {len(batches)} {runner_word} across {total_files} {file_word}"
+    if mix:
+        header = f"{header} ({mix}):"
+    else:
+        header = f"{header}:"
     lines = [
         "## Batch Dispatch Plan",
-        f"Dispatching {len(batches)} runners across {total_files} files:",
+        header,
         "",
     ]
     for b in batches:

@@ -182,3 +182,59 @@ class TestFormatBatchPlan:
         assert "Batch 1" in plan
         assert "complexity: medium" in plan
         assert "src/a.py" in plan
+
+
+class TestDispatchPlanCosmetics:
+    """Cosmetic polish on the dispatch-plan header."""
+
+    def test_priority_mix_in_header(self):
+        """Header summarises priority distribution in a compact P<n> ×N form.
+
+        Renders inline on the ``Dispatching…`` line so a reader scanning the
+        output in Claude Code can see the work shape before the full list.
+        Each token uses the bare ``P<n>`` form the priority-coloriser
+        recognises, so the summary is auto-painted alongside the numbered
+        list below.
+        """
+        tasks = [
+            FocusTask(file_path="a.py", priority=5, prompt="..."),
+            FocusTask(file_path="b.py", priority=5, prompt="..."),
+            FocusTask(file_path="c.py", priority=3, prompt="..."),
+        ]
+        plan = format_dispatch_plan(tasks)
+
+        # Distribution is rendered highest-priority-first on a single line.
+        assert "(P5 ×2  P3 ×1)" in plan
+
+    def test_singular_agent_label(self):
+        """Single-task plan uses ``agent`` (not ``agents``) for grammar."""
+        tasks = [FocusTask(file_path="only.py", priority=4, prompt="...")]
+        plan = format_dispatch_plan(tasks)
+
+        assert "1 focused agent " in plan
+        # Never say "1 focused agents" — ungrammatical in the CLI and in
+        # README screenshots.
+        assert "1 focused agents" not in plan
+
+    def test_plural_agents_label_preserved(self):
+        """Multi-task plan still reads ``agents`` (regression guard)."""
+        tasks = [
+            FocusTask(file_path="a.py", priority=4, prompt="..."),
+            FocusTask(file_path="b.py", priority=4, prompt="..."),
+        ]
+        plan = format_dispatch_plan(tasks)
+
+        assert "2 focused agents" in plan
+
+    def test_batch_plan_priority_mix_and_grammar(self):
+        """Batch-plan header gains the same distribution + grammar polish."""
+        tasks = [
+            FocusTask(file_path="a.py", priority=5, prompt="..."),
+            FocusTask(file_path="b.py", priority=3, prompt="..."),
+        ]
+        batches = create_focus_batches(tasks, files_per_batch=5)
+        plan = format_batch_plan(batches)
+
+        assert "(P5 ×1  P3 ×1)" in plan
+        # Single batch = singular "runner"; two files = plural "files".
+        assert "1 runner across 2 files" in plan
