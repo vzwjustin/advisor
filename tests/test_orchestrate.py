@@ -74,6 +74,24 @@ class TestBuildAdvisorPrompt:
 
         assert "*.{py,js}" in prompt
 
+    def test_team_name_is_templated(self):
+        """Custom team names must flow into the advisor's per-runner-prompt
+        guidance so every runner is briefed about the correct team. The
+        template previously hardcoded ``team review``."""
+        config = default_team_config("/src", team_name="audit-squad")
+        prompt = build_advisor_prompt(config)
+
+        assert "team audit-squad" in prompt
+        assert "team review" not in prompt
+
+    def test_default_team_name_still_rendered(self):
+        """The default team name (``review``) must still appear so the
+        template keeps working when the user does not customize it."""
+        config = default_team_config("/src")
+        prompt = build_advisor_prompt(config)
+
+        assert "team review" in prompt
+
 
 class TestBuildRunnerAgents:
     def test_creates_one_per_task(self):

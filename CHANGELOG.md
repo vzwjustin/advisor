@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `advisor --print-completion` error hint now points at the correct PyPI
+  distribution name (`advisor-agent[completion]`) instead of the non-existent
+  `advisor[completion]`, so users who copy-paste the suggested install command
+  don't hit "No matching distribution found"
+- `advisor doctor` now surfaces `ADVISOR_NO_NUDGE` in its `env_overrides`
+  report (previously it tracked a phantom `ADVISOR_NO_AUTO_INSTALL` that is
+  not read anywhere in the codebase)
+- `advisor protocol` reference now matches the current defaults
+  (`TeamCreate(name="review")`, `model="opus"` / `model="sonnet"`) instead of
+  the stale `advisor-review` / `opus-4` / `sonnet-4` strings that would no
+  longer work if pasted verbatim
+- Advisor prompt template now threads `TeamConfig.team_name` through to the
+  runner-identity briefing line; runners invoked under a custom `--team` no
+  longer get told they are on `team review`
+- `advisor plan --resume --estimate` now uses the checkpoint's recorded
+  models / `test_command` when computing the cost estimate, instead of
+  silently falling back to whatever CLI defaults the resuming invocation
+  happens to have
+- `advisor history --limit` now rejects zero / negative integers via
+  argparse (was previously accepted and produced surprising slice results
+  because `entries[-(-N):]` is not "last N")
+- Dashboard JS no longer sends a dead `target` query param to `/api/plan`
+  and `/api/cost` — the server has always ignored it (target is fixed when
+  the server starts) and shipping it just hinted at multi-root support
+  that does not exist
+
 ### Added — E1–E12 enhancement pack
 - **E1 — Git-incremental scoping**: `advisor plan --since REF`, `--staged`,
   `--branch BASE` to scope reviews to changed files only. Turns advisor

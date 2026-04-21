@@ -21,6 +21,7 @@ from .config import TeamConfig
 # Placeholders filled from TeamConfig. ``goal_block`` is rendered separately
 # because it conditionally fences the (untrusted) user goal as data.
 _PLACEHOLDERS = (
+    "team_name",
     "target_dir",
     "file_types",
     "goal_block",
@@ -77,6 +78,7 @@ def build_advisor_prompt(config: TeamConfig, *, history_block: str = "") -> str:
     return _render(
         _load_template(),
         {
+            "team_name": config.team_name,
             "target_dir": config.target_dir,
             "file_types": config.file_types,
             "goal_block": goal_block,

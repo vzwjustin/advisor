@@ -659,3 +659,117 @@ class TestCmdPromptHappyPaths:
         assert rc == 0
         out = capsys.readouterr().out
         assert "/advisor" in out
+
+
+class TestCompletionHintPackageName:
+    """`--print-completion` error must reference the real PyPI distribution."""
+
+    def test_install_hint_uses_advisor_agent(self, monkeypatch, capsys):
+        import builtins
+
+        from advisor import __main__ as cli
+
+        real_import = builtins.__import__
+
+        def _no_shtab(name, *args, **kwargs):
+            if name == "shtab":
+                raise ImportError("shtab not installed")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", _no_shtab)
+        rc = cli.main(["--print-completion", "bash"])
+        assert rc == 1
+        err = capsys.readouterr().err
+        # The distribution on PyPI is `advisor-agent`, not `advisor`.
+        # The old hint (``'advisor[completion]'``) would fail with
+        # ``No matching distribution found`` when a user copy-pasted it.
+        assert "advisor-agent[completion]" in err
+        assert "'advisor[completion]'" not in err
+
+
+class TestCmdProtocolDefaults:
+    """The `advisor protocol` text must match current defaults."""
+
+    def test_protocol_uses_current_defaults(self, capsys):
+        from advisor import __main__ as cli
+
+        rc = cli.main(["protocol"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        # Default team name is ``review``; stale ``advisor-review`` would
+        # mislead anyone copy-pasting the protocol into a session.
+        assert 'TeamCreate(name="review")' in out
+        assert "advisor-review" not in out
+        # Default models are the short aliases ``opus``/``sonnet``; the
+        # old text hardcoded ``opus-4``/``sonnet-4`` which drift every
+        # time the alias set changes.
+        assert 'model="opus"' in out
+        assert 'model="sonnet"' in out
+
+
+class TestCmdPlanResumeConfig:
+    """`--resume` must use the checkpointed run config for cost estimates."""
+
+    def test_resume_uses_checkpointed_models_for_estimate(self, tmp_path, capsys):
+        import json as _json
+
+        from advisor import __main__ as cli
+        from advisor.checkpoint import save_checkpoint
+        from advisor.focus import FocusTask
+
+        (tmp_path / "auth.py").write_text("def login(password): ...\n", encoding="utf-8")
+        run_id = "resume-test"
+        save_checkpoint(
+            tmp_path,
+            run_id=run_id,
+            tasks=[FocusTask(file_path=str(tmp_path / "auth.py"), priority=5, prompt="p")],
+            batches=None,
+            team_name="review",
+            file_types="*.py",
+            min_priority=3,
+            max_runners=5,
+            advisor_model="haiku",  # non-default; current CLI args would say ``opus``
+            runner_model="haiku",
+            max_fixes_per_runner=5,
+            test_command="",
+            context="",
+        )
+
+        rc = cli.main(
+            [
+                "plan",
+                str(tmp_path),
+                "--resume",
+                run_id,
+                "--estimate",
+                "--json",
+            ]
+        )
+        assert rc == 0
+        out = capsys.readouterr().out
+        payload = _json.loads(out)
+        est = payload["estimate"]
+        # Before the fix, cost estimation grabbed models from the current
+        # CLI args (``opus``/``sonnet``) rather than from the checkpoint.
+        assert est["advisor_model"] == "haiku"
+        assert est["runner_model"] == "haiku"
+
+
+class TestHistoryLimitValidation:
+    """`--limit` must reject values that would break the slice semantics."""
+
+    def test_negative_limit_rejected(self, capsys):
+        from advisor import __main__ as cli
+
+        with pytest.raises(SystemExit) as exc:
+            cli.main(["history", ".", "--limit", "-5"])
+        assert exc.value.code == 2  # argparse error
+        err = capsys.readouterr().err
+        assert "--limit" in err
+
+    def test_zero_limit_rejected(self, capsys):
+        from advisor import __main__ as cli
+
+        with pytest.raises(SystemExit) as exc:
+            cli.main(["history", ".", "--limit", "0"])
+        assert exc.value.code == 2

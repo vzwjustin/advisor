@@ -285,7 +285,31 @@ def cmd_plan(args: argparse.Namespace) -> int:
             for t in cp.tasks
         ]
         batches_from_cp = _batches_from_checkpoint(cp) if cp.batches else None
-        return _emit_plan(args, target, tasks, batches_from_cp, run_id=cp.run_id, context="resumed")
+        # Rebuild the TeamConfig from the checkpoint so downstream surfaces
+        # (cost estimation, test_command) reflect the run being resumed
+        # rather than whatever defaults happen to be on the current invocation.
+        checkpoint_cfg = default_team_config(
+            target_dir=str(target),
+            team_name=cp.team_name,
+            file_types=cp.file_types,
+            max_runners=cp.max_runners,
+            min_priority=cp.min_priority,
+            context=cp.context,
+            advisor_model=cp.advisor_model,
+            runner_model=cp.runner_model,
+            max_fixes_per_runner=cp.max_fixes_per_runner,
+            test_command=cp.test_command,
+            warn_unknown_model=False,
+        )
+        return _emit_plan(
+            args,
+            target,
+            tasks,
+            batches_from_cp,
+            run_id=cp.run_id,
+            context="resumed",
+            resolved_config=checkpoint_cfg,
+        )
 
     paths, glob_err = _resolve_plan_files(target, args)
     if glob_err is not None:
@@ -362,12 +386,22 @@ def _emit_plan(
     *,
     run_id: str | None = None,
     context: str = "",
+    resolved_config: TeamConfig | None = None,
 ) -> int:
-    """Shared rendering logic — JSON or pretty, optional --output FILE."""
+    """Shared rendering logic — JSON or pretty, optional --output FILE.
+
+    ``resolved_config`` lets resume paths hand in the checkpoint's config so
+    cost estimates (and anything else that derives from the run config) use
+    the resumed-run values rather than the current CLI defaults.
+    """
+
+    def _cfg() -> TeamConfig:
+        return resolved_config if resolved_config is not None else _config_from_args(args)
+
     if getattr(args, "json", False):
         estimate = None
         if getattr(args, "estimate", False):
-            cfg = _config_from_args(args)
+            cfg = _cfg()
             estimate = estimate_cost(
                 tasks,
                 batches,
@@ -406,7 +440,7 @@ def _emit_plan(
         print(_style.colorize_markdown(format_dispatch_plan(tasks)))
 
     if getattr(args, "estimate", False):
-        cfg = _config_from_args(args)
+        cfg = _cfg()
         est = estimate_cost(
             tasks,
             batches,
@@ -662,16 +696,16 @@ Strict sequence for any Claude Code session using the /advisor skill.
 Deviating (e.g. shutting down with broadcast `"*"`, forgetting TeamDelete,
 or spawning runners before the advisor) breaks the pipeline.
 
-1. TeamCreate(name="advisor-review")
+1. TeamCreate(name="review")
 
 2. Spawn advisor FIRST (no runners yet):
-   Agent(name="advisor", model="opus-4", subagent_type="deep-reasoning",
-         team_name="advisor-review", prompt=<build_advisor_prompt(config)>)
+   Agent(name="advisor", model="opus", subagent_type="deep-reasoning",
+         team_name="review", prompt=<build_advisor_prompt(config)>)
 
 3. Advisor does Glob+Grep discovery, ranks P1–P5, decides runner pool size,
    THEN tells you to spawn N runners:
-   Agent(name="runner-<i>", model="sonnet-4", subagent_type="code-review",
-         team_name="advisor-review", run_in_background=true,
+   Agent(name="runner-<i>", model="sonnet", subagent_type="code-review",
+         team_name="review", run_in_background=true,
          prompt=<build_runner_pool_prompt(i, config)>)
 
 4. Advisor dispatches explore assignments, verifies each runner reply as it
@@ -687,8 +721,10 @@ or spawning runners before the advisor) breaks the pipeline.
 
 6. TeamDelete()
 
-Full reference (with build_* prompt wiring) is available via:
-    advisor pipeline
+Names and models shown here are the defaults (team "review", models
+"opus" / "sonnet"). Override them via `--team`, `--advisor-model`,
+`--runner-model` on the CLI; `advisor pipeline <dir>` renders the
+concrete call sites for a given config.
 """
 
 
@@ -1083,9 +1119,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=".",
         help="Target directory containing the .advisor/ tree (default: current directory)",
     )
+
+    def _pos_int(value: str) -> int:
+        n = int(value)
+        if n < 1:
+            raise argparse.ArgumentTypeError(f"--limit must be >= 1, got {n}")
+        return n
+
     p_history.add_argument(
         "--limit",
-        type=int,
+        type=_pos_int,
         default=20,
         help="Maximum number of recent entries to show (default: %(default)s)",
     )
@@ -1128,7 +1171,7 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 _style.error_box(
                     "Shell completion requires the `shtab` extra.\n"
-                    "Install with: pip install 'advisor[completion]'",
+                    "Install with: pip install 'advisor-agent[completion]'",
                     stream=sys.stderr,
                 ),
                 file=sys.stderr,

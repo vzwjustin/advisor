@@ -51,3 +51,20 @@ class TestRunDoctor:
         r = run_doctor(nudge_path=nudge, skill_path=skill)
         fails = [c for c in r.checks if c.level == "fail"]
         assert r.healthy == (len(fails) == 0)
+
+    def test_opt_out_env_var_is_tracked(self, tmp_path: Path) -> None:
+        """``ADVISOR_NO_NUDGE`` is the real opt-out env var (see
+        ``install.OPT_OUT_ENV``). Doctor must surface it in
+        ``env_overrides`` — the previous list tracked the phantom
+        ``ADVISOR_NO_AUTO_INSTALL`` instead.
+        """
+        from advisor.install import OPT_OUT_ENV
+
+        nudge = tmp_path / "CLAUDE.md"
+        skill = tmp_path / "skills" / "advisor" / "SKILL.md"
+        os.environ[OPT_OUT_ENV] = "1"
+        try:
+            r = run_doctor(nudge_path=nudge, skill_path=skill)
+            assert r.env_overrides.get(OPT_OUT_ENV) == "1"
+        finally:
+            os.environ.pop(OPT_OUT_ENV, None)
