@@ -1119,6 +1119,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=".",
         help="Target directory containing the .advisor/ tree (default: current directory)",
     )
+
     def _pos_int(value: str) -> int:
         n = int(value)
         if n < 1:
