@@ -191,7 +191,9 @@ def run_doctor(
     """
     quiet = os.environ.get("ADVISOR_QUIET") == "1"
     if not quiet and sys.stderr.isatty():
-        sys.stderr.write("\033[2m" + "running checks…" + "\033[0m\r")
+        from . import _style
+
+        sys.stderr.write(_style.dim("running checks…") + "\r")
         sys.stderr.flush()
     status = install_status(nudge_path=nudge_path, skill_path=skill_path)
     installed = get_installed_skill_version(path=skill_path)
