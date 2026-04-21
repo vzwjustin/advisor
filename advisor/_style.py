@@ -228,10 +228,7 @@ _PRIORITY_STYLES: dict[str, tuple[str, ...]] = {
 # Group 1 = bold digit; Group 2 = bare digit. Exactly one of the two is
 # populated per match. Collapsing the two patterns into one alternation
 # eliminates a full-text scan without changing semantics.
-_PRIORITY_RE = re.compile(
-    r"\*\*P([1-5])\*\*"
-    r"|(?<![A-Za-z0-9*\x1b])P([1-5])(?![A-Za-z0-9*])"
-)
+_PRIORITY_RE = re.compile(r"\*\*P([1-5])\*\*" r"|(?<![A-Za-z0-9*\x1b])P([1-5])(?![A-Za-z0-9*])")
 # Matches an SGR escape sequence ending just before the match position,
 # used to detect (and skip) priority matches that sit INSIDE already-
 # colorized text (e.g. a colored header body). Re-painting them would
