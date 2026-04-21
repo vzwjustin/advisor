@@ -367,7 +367,9 @@ class TestCmdProtocol:
         """
         from advisor import __main__ as cli
 
-        monkeypatch.setenv("HOME", str(tmp_path))
+        from .conftest import isolate_home
+
+        isolate_home(monkeypatch, tmp_path)
         claude_md = tmp_path / ".claude" / "CLAUDE.md"
         assert not claude_md.exists()
         rc = cli.main(["protocol"])
@@ -553,7 +555,9 @@ class TestStatusJsonFlag:
         """`--strict` exits 3 when the install is incomplete."""
         from advisor import __main__ as cli
 
-        monkeypatch.setenv("HOME", str(tmp_path))
+        from .conftest import isolate_home
+
+        isolate_home(monkeypatch, tmp_path)
         monkeypatch.setenv("ADVISOR_NO_NUDGE", "1")
         rc = cli.main(["status", "--strict"])
         # Install is missing → non-zero
@@ -866,17 +870,13 @@ class TestCmdCheckpoints:
 
         keep = self._write_stub_checkpoint(tmp_path, "20260101T000000Z-keepme")
         gone = self._write_stub_checkpoint(tmp_path, "20260101T000001Z-nukeme")
-        rc = cli.main(
-            ["checkpoints", str(tmp_path), "--rm", "20260101T000001Z-nukeme", "--quiet"]
-        )
+        rc = cli.main(["checkpoints", str(tmp_path), "--rm", "20260101T000001Z-nukeme", "--quiet"])
         assert rc == 0
         assert keep.exists()
         assert not gone.exists()
         # idempotent: removing again returns 0
         assert (
-            cli.main(
-                ["checkpoints", str(tmp_path), "--rm", "20260101T000001Z-nukeme", "--quiet"]
-            )
+            cli.main(["checkpoints", str(tmp_path), "--rm", "20260101T000001Z-nukeme", "--quiet"])
             == 0
         )
         # sanity: path helper agrees with our stub layout
