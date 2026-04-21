@@ -26,6 +26,11 @@ from typing import Literal
 from .install import OPT_OUT_ENV, Status, get_installed_skill_version
 from .install import status as install_status
 
+# Env vars scanned by ``default_team_config`` + other advisor surfaces.
+# ``OPT_OUT_ENV`` (currently ``ADVISOR_NO_NUDGE``) is appended below so this
+# list stays in sync with :mod:`advisor.install` even if the opt-out env var
+# is ever renamed.
+
 HealthLevel = Literal["ok", "warn", "fail"]
 
 
@@ -64,6 +69,7 @@ class DoctorReport:
 
 
 # ENV VARS scanned by default_team_config + other advisor surfaces.
+# Keep ``OPT_OUT_ENV`` in the tuple so doctor auto-follows any rename.
 _KNOWN_ENV_VARS = (
     "ADVISOR_MODEL",
     "ADVISOR_RUNNER_MODEL",
@@ -71,7 +77,7 @@ _KNOWN_ENV_VARS = (
     "ADVISOR_FILE_TYPES",
     "ADVISOR_MIN_PRIORITY",
     "ADVISOR_TEST_COMMAND",
-    "ADVISOR_NO_AUTO_INSTALL",
+    OPT_OUT_ENV,
 )
 
 
