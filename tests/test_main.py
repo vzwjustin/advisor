@@ -516,7 +516,7 @@ class TestCmdPlanErrorPaths:
         rc = cli.main(["plan", str(tmp_path), "--min-priority", "5"])
         assert rc == 0
         out = capsys.readouterr().out
-        assert "No files" in out or "Try --min-priority" in out
+        assert "no files" in out or "try --min-priority" in out
 
     def test_bad_file_types_glob_errors_cleanly(self, tmp_path, capsys):
         """A malformed glob exits non-zero with a visible error, not a trace."""
@@ -946,7 +946,7 @@ class TestCmdCheckpoints:
         rc = cli.main(["checkpoints", str(tmp_path)])
         assert rc == 0
         out = capsys.readouterr().out
-        assert "resume with: advisor plan --resume <RUN_ID>" in out
+        assert "resume" in out and "advisor plan --resume <RUN_ID>" in out
 
     def test_empty_list_suggests_checkpoint_flag(self, tmp_path, capsys):
         """Empty-state message nudges towards ``--checkpoint``."""
@@ -1145,3 +1145,29 @@ class TestCmdHistoryEmptyState:
         assert "no history yet" in out
         # Tip explains *when* entries appear so the command isn't a dead-end.
         assert "when you confirm them" in out
+
+
+class TestNoColorFlag:
+    """``--no-color`` flag disables ANSI output and is honored before dispatch."""
+
+    def test_no_color_flag_disables_ansi(self, tmp_path, capsys, monkeypatch):
+        from advisor import __main__ as cli
+        from advisor import _style
+
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        _style.reset_color_cache()
+        rc = cli.main(["--no-color", "status"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "\033[" not in out
+
+    def test_no_color_flag_sets_no_color_env(self, monkeypatch):
+        import os
+        from advisor import __main__ as cli
+        from advisor import _style
+
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        _style.reset_color_cache()
+        cli.main(["--no-color", "status"])
+        assert os.environ.get("NO_COLOR") == "1"
+        assert _style.supports_color() is False

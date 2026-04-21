@@ -159,7 +159,7 @@ class TestBuildVerifyMessage:
         msg = build_verify_message("finding1\nfinding2", 3, 2)
 
         assert msg["to"] == "advisor"
-        assert "2 analysis agents" in msg["message"] or "2 runners" in msg["message"]
+        assert "2 runners" in msg["message"]
         assert "CONFIRMED" in msg["message"]
         assert "REJECTED" in msg["message"]
 
@@ -338,6 +338,45 @@ class TestRenderPipeline:
         assert "haiku" not in output
 
 
+class TestLargeFileConfig:
+    def test_large_file_line_threshold_default(self):
+        config = default_team_config("/src")
+        assert config.large_file_line_threshold == 800
+
+    def test_large_file_max_fixes_default(self):
+        config = default_team_config("/src")
+        assert config.large_file_max_fixes == 3
+
+    def test_large_file_line_threshold_explicit(self):
+        config = default_team_config("/src", large_file_line_threshold=500)
+        assert config.large_file_line_threshold == 500
+
+    def test_large_file_max_fixes_explicit(self):
+        config = default_team_config("/src", large_file_max_fixes=1)
+        assert config.large_file_max_fixes == 1
+
+    def test_default_team_config_wires_both_fields(self):
+        config = default_team_config("/src", large_file_line_threshold=600, large_file_max_fixes=2)
+        assert config.large_file_line_threshold == 600
+        assert config.large_file_max_fixes == 2
+
+    def test_advisor_prompt_contains_large_file_threshold(self):
+        config = default_team_config("/src", large_file_line_threshold=600)
+        prompt = build_advisor_prompt(config)
+        assert "600" in prompt
+
+    def test_advisor_prompt_contains_large_file_max_fixes(self):
+        config = default_team_config("/src", large_file_max_fixes=2)
+        prompt = build_advisor_prompt(config)
+        assert "2" in prompt
+
+    def test_advisor_prompt_large_file_cap_rule_present(self):
+        config = default_team_config("/src", large_file_line_threshold=800, large_file_max_fixes=3)
+        prompt = build_advisor_prompt(config)
+        assert "800" in prompt
+        assert "lowest applicable cap" in prompt
+
+
 class TestMaxFixesPerRunner:
     def test_default_is_five(self):
         config = default_team_config("/src")
@@ -487,6 +526,22 @@ class TestTeamConfigEnhancements:
         monkeypatch.setenv("ADVISOR_MAX_RUNNERS", "8")
         config = default_team_config("/src")
         assert config.max_runners == 8
+
+    def test_explicit_max_runners_wins_over_env(self, monkeypatch):
+        """Explicit int arg bypasses ADVISOR_MAX_RUNNERS entirely."""
+        from advisor.orchestrate import default_team_config
+
+        monkeypatch.setenv("ADVISOR_MAX_RUNNERS", "10")
+        config = default_team_config("/src", max_runners=5)
+        assert config.max_runners == 5
+
+    def test_max_runners_none_no_env_defaults_to_five(self, monkeypatch):
+        """None + no env var → default of 5."""
+        from advisor.orchestrate import default_team_config
+
+        monkeypatch.delenv("ADVISOR_MAX_RUNNERS", raising=False)
+        config = default_team_config("/src", max_runners=None)
+        assert config.max_runners == 5
 
     def test_env_var_file_types(self, monkeypatch):
         from advisor.orchestrate import default_team_config

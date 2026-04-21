@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from .. import _style
 from .._fs import read_head as _read_head
 from .._fs import safe_rglob_paths as _safe_rglob
 from ..cost import estimate_cost
@@ -319,13 +320,14 @@ def run_server(
     # actually bound to, so report that instead of the request value.
     actual_port = server.server_address[1]
     url = f"http://{host}:{actual_port}"
-    print(f"advisor dashboard serving {state.target} at {url}")
-    print("press Ctrl-C to stop")
+    print(_style.success_box(f"advisor dashboard serving {state.target} at {url}"))
+    print(_style.tip("press Ctrl-C to stop"))
+    print(_style.cta("open in browser", url))
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print()
-        print("shutting down")
+        print(_style.info_box("shutting down"))
     finally:
         server.server_close()
 

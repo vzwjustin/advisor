@@ -291,3 +291,26 @@ def test_banner_auto_expands_for_overlong_text():
     bot_plain = _style._ANSI_SGR_RE.sub("", lines[2])
     assert top_plain.count("━") >= 60
     assert bot_plain.count("━") >= 60
+
+
+def test_header_block_contains_title_and_rows():
+    out = _style.header_block("advisor 1.0", [("python", "3.12"), ("platform", "darwin")])
+    assert "advisor 1.0" in out
+    assert "python" in out
+    assert "3.12" in out
+    assert "platform" in out
+    assert "darwin" in out
+
+
+def test_header_block_empty_rows_is_just_banner():
+    out = _style.header_block("advisor 1.0", [])
+    assert "advisor 1.0" in out
+
+
+def test_header_block_no_color_plain_output(monkeypatch):
+    monkeypatch.setenv("NO_COLOR", "1")
+    out = _style.header_block("advisor 1.0", [("python", "3.12")])
+    assert "\033[" not in out
+    assert "advisor 1.0" in out
+    assert "python" in out
+    assert "3.12" in out

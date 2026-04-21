@@ -336,8 +336,7 @@ def ensure_nudge(
         # who misses the warning once will still see it on the next run.
         msg = f"nudge write failed ({target}): {exc}"
         errors.append(msg)
-        glyph = _style.glyph("⚠", "!", stream=out)
-        print(_style.paint(f"  {glyph} {msg}", "yellow", stream=out), file=out)
+        print(_style.warning_box(msg), file=out)
 
     try:
         if not skill_target.exists() or skill_target.read_text(encoding="utf-8") != SKILL_MD:
@@ -346,8 +345,7 @@ def ensure_nudge(
     except (OSError, UnicodeDecodeError) as exc:
         msg = f"skill write failed ({skill_target}): {exc}"
         errors.append(msg)
-        glyph = _style.glyph("⚠", "!", stream=out)
-        print(_style.paint(f"  {glyph} {msg}", "yellow", stream=out), file=out)
+        print(_style.warning_box(msg), file=out)
         skill_result_action = InstallAction.UNCHANGED.value
 
     _updated = {InstallAction.INSTALLED.value, InstallAction.UPDATED.value}

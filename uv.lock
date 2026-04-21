@@ -30,7 +30,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
     { name = "shtab", marker = "extra == 'completion'", specifier = ">=1.6" },
 ]
-provides-extras = ["dev", "completion"]
+provides-extras = ["dev", "completion", "ui"]
 
 [[package]]
 name = "cfgv"

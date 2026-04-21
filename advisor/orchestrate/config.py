@@ -7,6 +7,8 @@ import re
 import sys
 from dataclasses import dataclass
 
+from .. import _style
+
 # Known Claude Code model shortcuts (the strings actually accepted by the
 # Agent() tool). Long-form IDs like ``claude-opus-4-5-20250929`` are also
 # valid — we only warn on something that fails both the shortcut set and
@@ -68,6 +70,8 @@ class TeamConfig:
     advisor_model: str
     runner_model: str
     max_fixes_per_runner: int = 5
+    large_file_line_threshold: int = 800
+    large_file_max_fixes: int = 3
     test_command: str = ""
 
 
@@ -96,12 +100,14 @@ def default_team_config(
     target_dir: str,
     team_name: str = "review",
     file_types: str = "*.py",
-    max_runners: int = 5,
+    max_runners: int | None = None,
     min_priority: int = 3,
     context: str = "",
     advisor_model: str = "opus",
     runner_model: str = "sonnet",
     max_fixes_per_runner: int = 5,
+    large_file_line_threshold: int = 800,
+    large_file_max_fixes: int = 3,
     test_command: str = "",
     warn_unknown_model: bool = True,
 ) -> TeamConfig:
@@ -116,8 +122,9 @@ def default_team_config(
     * ``ADVISOR_MIN_PRIORITY`` → ``min_priority``
     * ``ADVISOR_TEST_COMMAND`` → ``test_command``
 
-    Env vars are only consulted when the explicit argument matches the
-    function default — callers can always override env by passing a value.
+    Env vars are only consulted when the argument is the default sentinel.
+    For ``max_runners``, pass ``None`` (the default) to read from env,
+    or pass an explicit int to bypass env entirely — explicit always wins.
 
     ``warn_unknown_model=True`` (default) prints a one-line warning on
     stderr when either model name fails :func:`is_known_model`. The
@@ -128,8 +135,8 @@ def default_team_config(
         advisor_model = _env_or("ADVISOR_MODEL", advisor_model)
     if runner_model == "sonnet":
         runner_model = _env_or("ADVISOR_RUNNER_MODEL", runner_model)
-    if max_runners == 5:
-        max_runners = _env_int_or("ADVISOR_MAX_RUNNERS", max_runners)
+    if max_runners is None:
+        max_runners = _env_int_or("ADVISOR_MAX_RUNNERS", 5)
     if file_types == "*.py":
         file_types = _env_or("ADVISOR_FILE_TYPES", file_types)
     if min_priority == 3:
@@ -140,12 +147,11 @@ def default_team_config(
     if warn_unknown_model:
         for label, model in (("advisor_model", advisor_model), ("runner_model", runner_model)):
             if not is_known_model(model):
-                print(
-                    f"advisor: warning: {label}={model!r} does not look like a "
-                    f"known Claude Code model shortcut or long-form ID; "
-                    f"Claude Code may reject it",
-                    file=sys.stderr,
+                msg = (
+                    f"{label}={model!r} does not look like a known Claude Code model "
+                    f"shortcut or long-form ID; Claude Code may reject it"
                 )
+                print(_style.warning_box(msg), file=sys.stderr)
 
     return TeamConfig(
         team_name=team_name,
@@ -157,5 +163,7 @@ def default_team_config(
         advisor_model=advisor_model,
         runner_model=runner_model,
         max_fixes_per_runner=max_fixes_per_runner,
+        large_file_line_threshold=large_file_line_threshold,
+        large_file_max_fixes=large_file_max_fixes,
         test_command=test_command,
     )

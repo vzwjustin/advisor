@@ -24,6 +24,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO
 
+from advisor.orchestrate._fence import fence
+
 UTC = timezone.utc
 
 HISTORY_DIR_NAME = ".advisor"
@@ -185,7 +187,8 @@ def format_history_block(entries: list[HistoryEntry]) -> str:
         return ""
     lines = ["## Recent findings from prior runs", ""]
     for e in entries:
-        lines.append(f"- `{e.file_path}` [{e.severity}] — {e.description} ({e.status})")
+        lines.append(f"- `{e.file_path}` [{e.severity}] ({e.status}):")
+        lines.append(fence(e.description))
     return "\n".join(lines)
 
 

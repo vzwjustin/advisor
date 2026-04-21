@@ -1,8 +1,9 @@
-"""Runner (Sonnet) prompts, agent specs, and dispatch message builders."""
+"""Runner prompts, agent specs, and dispatch message builders."""
 
 from __future__ import annotations
 
 from ..focus import FocusBatch, FocusTask
+from ._schema import FINDING_SCHEMA
 from .config import TeamConfig
 
 # ── Helpers ──────────────────────────────────────────────────────
@@ -32,7 +33,7 @@ def build_runner_prompt(
     target: FocusBatch | FocusTask,
     guidance: dict[str, str] | None = None,
 ) -> str:
-    """Sonnet runner prompt — focused on one batch of files, mid-flight checkpoint.
+    """Runner prompt — focused on one batch of files, mid-flight checkpoint.
 
     Accepts either a :class:`FocusBatch` (new pipeline) or a single
     :class:`FocusTask` (legacy — auto-wrapped into a single-file batch).
@@ -40,7 +41,7 @@ def build_runner_prompt(
     batch = _coerce_batch(target)
     files_block = _format_batch_files(batch, guidance)
     return (
-        "You are a focused analysis agent. Review ONLY these files:\n\n"
+        "You are a runner. Review ONLY these files:\n\n"
         f"{files_block}\n\n"
         f"Batch complexity: **{batch.complexity}**. "
         "The advisor grouped these together because it judged them reviewable "
@@ -54,12 +55,7 @@ def build_runner_prompt(
         "   candidate finding as `file:line — confidence (HIGH|MED|LOW) — one-line reason`.\n"
         "   Wait for the advisor's reply (CONFIRM / NARROW / REDIRECT) and\n"
         "   incorporate it before finalizing.\n"
-        "5. For each confirmed issue, report:\n"
-        "   - **File**: path:line_number\n"
-        "   - **Severity**: CRITICAL / HIGH / MEDIUM / LOW\n"
-        "   - **Description**: what the issue is\n"
-        "   - **Evidence**: the code path or proof\n"
-        "   - **Fix**: suggested remediation\n"
+        f"5. For each confirmed issue, report:\n{FINDING_SCHEMA}\n"
         "6. If a file is clean, say so explicitly for that file\n\n"
         "Do NOT review other files. Do NOT review files outside this batch. "
         "If you hit a cross-reference, note it but stay scoped.\n\n"
@@ -72,14 +68,14 @@ def build_runner_prompt(
 
 
 def build_runner_pool_prompt(runner_id: int, config: TeamConfig) -> str:
-    """Spawn prompt for a pool runner — live dialogue with Opus advisor."""
+    """Spawn prompt for a pool runner — live dialogue with the advisor."""
     return (
-        f"You are `runner-{runner_id}`, a Sonnet engineer on team "
-        f"`{config.team_name}`. The advisor (Opus) runs the review — you are "
+        f"You are `runner-{runner_id}`, a runner on team "
+        f"`{config.team_name}`. The advisor runs the review — you are "
         "their hands. They think and plan; you read, find, and fix. And "
         "while you work, you are in constant conversation with them — they "
         "are watching you live and expect you to talk.\n\n"
-        "# This is a live dialogue, not batch work\n\n"
+        "## This is a live dialogue, not batch work\n\n"
         "The advisor is online the whole time you are working. Talk to them "
         "continuously, not just at the end:\n\n"
         "- **Ask when you are stuck or confused.** Hit something ambiguous? "
@@ -105,13 +101,13 @@ def build_runner_pool_prompt(runner_id: int, config: TeamConfig) -> str:
         "  between tool calls. Incorporate and keep going.\n\n"
         "Treat this like pair-programming with a senior engineer watching "
         "your screen. Chatty is correct.\n\n"
-        "# You work ONLY on what the advisor hands you\n\n"
+        "## You work ONLY on what the advisor hands you\n\n"
         "This is strict. You do not go looking at files outside your "
         "assignment. You do not expand scope because something looks "
         "interesting. If you notice something beyond your batch, flag it "
         "to the advisor and let them decide — do not chase it. The advisor "
         "sees the whole codebase and makes the scope calls.\n\n"
-        "# You live across multiple assignments\n\n"
+        "## You live across multiple assignments\n\n"
         "You are long-lived on purpose. As you handle assignment after "
         "assignment, you build a working mental model of this codebase — "
         "which modules import which, which invariants hold, what patterns "
@@ -119,7 +115,7 @@ def build_runner_pool_prompt(runner_id: int, config: TeamConfig) -> str:
         "When a later assignment touches something you have already seen, "
         "**use what you know**. Don't re-derive. Bring it up when it helps "
         "the advisor see the whole picture.\n\n"
-        "# Your loop\n\n"
+        "## Your loop\n\n"
         "Right now, announce yourself:\n"
         f"    SendMessage(to='advisor', message='runner-{runner_id} ready')\n"
         "Then idle until your first assignment arrives. The advisor will "
@@ -149,7 +145,7 @@ def build_runner_pool_prompt(runner_id: int, config: TeamConfig) -> str:
         "6. **Send the final report to the advisor** (the advisor "
         "   verifies and relays to team-lead):\n"
         "       SendMessage(to='advisor', message=<structured findings>)\n"
-        "   Each issue: File, Severity, Description, Evidence, Fix.\n\n"
+        f"   Each issue:\n{FINDING_SCHEMA}\n\n"
         "## Fix assignment\n"
         "A specific file, the problem, the required change, and an "
         "acceptance criterion. Your job:\n\n"
@@ -177,7 +173,7 @@ def build_runner_pool_prompt(runner_id: int, config: TeamConfig) -> str:
         "deep, recommend rotation')`. The advisor will spawn a fresh "
         "runner and hand off. Flagging early is cheaper than stalling "
         "silently mid-fix.\n\n"
-        "# Rules\n\n"
+        "## Rules\n\n"
         "- Talk to the advisor constantly. Silence looks like drift.\n"
         "- Work only on what the advisor hands you. Notice but do not "
         "  chase anything outside your assignment.\n"
@@ -246,8 +242,7 @@ def build_runner_batch_message(
         "4. Checkpoint draft findings with the advisor via "
         "`SendMessage(to='advisor')` before finalizing\n"
         "5. Wait for CONFIRM / NARROW / REDIRECT and incorporate\n"
-        "6. For each confirmed issue, report File/Severity/Description/"
-        "Evidence/Fix\n"
+        f"6. For each confirmed issue, report:\n{FINDING_SCHEMA}\n"
         "7. Send your complete output to the advisor via "
         "`SendMessage(to='advisor')`\n"
         "8. Then wait for your next batch\n\n"

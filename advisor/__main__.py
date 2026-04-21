@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from collections.abc import Callable
@@ -86,19 +87,8 @@ def _get_version() -> str:
         return __version__
 
 
-# (action_label, fancy_glyph, ascii_glyph, color)
-_ACTION_DISPLAY: dict[str, tuple[str, str, str, str | None]] = {
-    "installed": ("installed", "✓", "+", "green"),
-    "updated": ("updated", "↻", "~", "cyan"),
-    "unchanged": ("unchanged", "·", "-", "dim"),
-    "removed": ("removed", "✗", "x", "yellow"),
-    "absent": ("not found", "·", "-", "dim"),
-    "skipped": ("skipped", "·", "-", "dim"),
-}
-
-
 def _fmt_action(component: str, action: str, path: object) -> str:
-    label, fancy, plain, color = _ACTION_DISPLAY.get(action, (action, "?", "?", None))
+    label, fancy, plain, color = _style.ACTION_GLYPHS.get(action, (action, "?", "?", None))
     mark = _style.glyph(fancy, plain)
     if color:
         mark = _style.paint(mark, color)
@@ -201,9 +191,14 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
 
 def cmd_pipeline(args: argparse.Namespace) -> int:
     """Print the full pipeline reference for the given target."""
-    print(_style.colorize_markdown(render_pipeline(_config_from_args(args))))
-    print()
-    print(_style.cta(f"/advisor {args.target}", "run the live pipeline in Claude Code"))
+    text = render_pipeline(_config_from_args(args))
+    if getattr(args, "json", False):
+        print(json.dumps({"schema_version": JSON_SCHEMA_VERSION, "text": text}))
+        return 0
+    print(_style.colorize_markdown(text))
+    if not getattr(args, "quiet", False):
+        print()
+        print(_style.cta(f"/advisor {args.target}", "run the live pipeline in Claude Code"))
     return 0
 
 
@@ -404,7 +399,17 @@ def cmd_plan(args: argparse.Namespace) -> int:
             resolved_config=checkpoint_cfg,
         )
 
+    _quiet = getattr(args, "quiet", False)
+    if not _quiet and sys.stderr.isatty():
+        sys.stderr.write(_style.dim(f"scanning {target}…") + "\r")
+        sys.stderr.flush()
+
     paths, glob_err = _resolve_plan_files(target, args)
+
+    if not _quiet and sys.stderr.isatty():
+        sys.stderr.write("\033[2K\r")
+        sys.stderr.flush()
+
     if glob_err is not None:
         print(_style.error_box(glob_err, stream=sys.stderr), file=sys.stderr)
         return 2
@@ -553,11 +558,12 @@ def _emit_plan(
             else None
         )
         if hint:
-            print(_style.warning_box(f"No files matched the {hint}"))
+            print(_style.dim(f"no files matched the {hint}"))
+            print(_style.tip("try a broader git scope or remove the filter"))
         else:
-            print(_style.warning_box(f"No files at priority P{args.min_priority}+ in {target}"))
-            print(_style.tip("Try --min-priority 1 to include all files"))
-            print(_style.tip("Or adjust --file-types to match your file extensions"))
+            print(_style.dim(f"no files at priority P{args.min_priority}+ in {target}"))
+            print(_style.tip("try --min-priority 1 to include all files"))
+            print(_style.tip("or adjust --file-types to match your file extensions"))
         return 0
 
     if batches:
@@ -602,10 +608,12 @@ def _is_git_scoped(args: argparse.Namespace) -> bool:
 def cmd_prompt(args: argparse.Namespace) -> int:
     """Print a specific step's prompt so it can be pasted into Claude Code."""
     config = _config_from_args(args)
+    quiet = getattr(args, "quiet", False)
+    as_json = getattr(args, "json", False)
     # TTY-only framing: interactive users see a dim banner announcing what
     # they're looking at; piped output (curl, redirect, pbcopy) stays clean
     # so the prompt can be consumed programmatically.
-    show_frame = sys.stdout.isatty()
+    show_frame = sys.stdout.isatty() and not quiet and not as_json
     if args.step == "advisor":
         if show_frame:
             print(_style.dim(f"# advisor prompt — paste into Claude Code (target: {args.target})"))
@@ -620,14 +628,14 @@ def cmd_prompt(args: argparse.Namespace) -> int:
                     history_block = "\n\n" + format_history_block(entries)
             except (OSError, ValueError):
                 history_block = ""
-        print(build_advisor_prompt(config, history_block=history_block))
+        text = build_advisor_prompt(config, history_block=history_block)
     elif args.step == "runner":
         runner_id = getattr(args, "runner_id", 1) or 1
         if show_frame:
             print(_style.dim(f"# runner-{runner_id} prompt — paste into Claude Code"))
             print()
-        print(build_runner_pool_prompt(runner_id, config))
-    elif args.step == "verify":
+        text = build_runner_pool_prompt(runner_id, config)
+    else:  # verify
         # Consistent no-findings behavior: whether stdin is a TTY (no data
         # piped) or an empty pipe, fall back to the same placeholder string
         # so the rendered prompt is always a valid template. Only emit the
@@ -648,13 +656,18 @@ def cmd_prompt(args: argparse.Namespace) -> int:
                 findings = "<paste findings here>"
             else:
                 findings = piped
-        print(
-            build_verify_dispatch_prompt(
-                findings,
-                file_count=args.file_count or args.max_runners,
-                runner_count=args.max_runners,
-            )
+        text = build_verify_dispatch_prompt(
+            findings,
+            file_count=args.file_count or args.max_runners,
+            runner_count=args.max_runners,
         )
+    if as_json:
+        print(json.dumps({"schema_version": JSON_SCHEMA_VERSION, "step": args.step, "text": text}))
+        return 0
+    print(text)
+    if show_frame:
+        print()
+        print(_style.cta("next", "paste into Claude Code"))
     return 0
 
 
@@ -667,29 +680,25 @@ _NOOP_ACTIONS = frozenset({InstallAction.UNCHANGED.value, InstallAction.ABSENT.v
 
 
 def _component_line(c: ComponentStatus) -> str:
-    if c.present and c.current:
-        mark = _style.paint(_style.glyph("✓", "+"), "green")
-        state = _style.paint("installed", "green")
-    elif c.present and not c.current:
-        mark = _style.paint(_style.glyph("↻", "~"), "yellow")
-        state = _style.paint("outdated", "yellow")
-    else:
-        mark = _style.paint(_style.glyph("✗", "x"), "red")
-        state = _style.paint("missing", "red")
+    key = "ok" if c.present and c.current else "outdated" if c.present else "missing"
+    _, fancy, ascii_, color = _style.STATE_GLYPHS[key]
+    # Use component-status vocabulary ("installed") rather than STATE_GLYPHS label ("ok").
+    component_label = {"ok": "installed", "outdated": "outdated", "missing": "missing"}[key]
+    mark = _style.paint(_style.glyph(fancy, ascii_), color) if color else _style.glyph(fancy, ascii_)
+    state = _style.paint(component_label, color) if color else component_label
     name_col = _style.paint(f"{c.name:<6}", "cyan", "bold")
     return f"  {mark} {name_col} {state:<10} {_style.dim(str(c.path))}"
 
 
 def _format_status(s: Status, version: str) -> str:
-    header = _style.banner(f"advisor {version}", width=40)
-    lines = [header, "", _component_line(s.nudge), _component_line(s.skill)]
+    lines = [_style.header_block(f"advisor {version}", [], width=52), _component_line(s.nudge), _component_line(s.skill)]
     if s.opt_out:
         warn = _style.paint(_style.glyph("⚠", "!"), "yellow")
         lines.append(f"  {warn} auto-install disabled ({OPT_OUT_ENV} set)")
     if not (s.nudge.present and s.skill.present):
-        lines.append(_style.dim("  fix: advisor install"))
+        lines.append(_style.cta("fix", "advisor install"))
     elif not (s.nudge.current and s.skill.current):
-        lines.append(_style.dim("  fix: advisor install   (refresh outdated bits)"))
+        lines.append(_style.cta("fix", "advisor install  (refresh outdated bits)"))
     return "\n".join(lines)
 
 
@@ -859,9 +868,14 @@ concrete call sites for a given config.
 """
 
 
-def cmd_protocol(_args: argparse.Namespace) -> int:
+def cmd_protocol(args: argparse.Namespace) -> int:
     """Print the strict team-lifecycle protocol as an ad-hoc reference."""
-    print(_PROTOCOL_TEXT)
+    if getattr(args, "json", False):
+        print(json.dumps({"schema_version": JSON_SCHEMA_VERSION, "text": _PROTOCOL_TEXT}))
+        return 0
+    print(_style.colorize_markdown(_PROTOCOL_TEXT))
+    if not getattr(args, "quiet", False):
+        print(_style.cta("next", "advisor pipeline ."))
     return 0
 
 
@@ -879,6 +893,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         print(json.dumps(payload, indent=2))
     else:
         print(format_report(report))
+        if not getattr(args, "quiet", False):
+            print()
+            if report.healthy:
+                print(_style.cta("run", "advisor pipeline ."))
+            else:
+                print(_style.cta("fix", "advisor install"))
     strict = getattr(args, "strict", False)
     if strict and not report.healthy:
         return _STRICT_NOOP_EXIT
@@ -917,6 +937,11 @@ def cmd_ui(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
+
+    if getattr(args, "json", False):
+        url = f"http://{args.host}:{args.port}"
+        print(json.dumps({"schema_version": JSON_SCHEMA_VERSION, "url": url}))
+        return 0
 
     state = build_app_state(
         target,
@@ -970,6 +995,9 @@ def cmd_history(args: argparse.Namespace) -> int:
         print(_style.tip("findings are logged when you confirm them during a run"))
         return 0
     print(_style.colorize_markdown(format_history_block(entries)))
+    if not getattr(args, "quiet", False):
+        print()
+        print(_style.cta("next", "advisor pipeline ."))
     return 0
 
 
@@ -994,15 +1022,19 @@ def cmd_version(args: argparse.Namespace) -> int:
     if getattr(args, "json", False):
         print(json.dumps(info, indent=2))
         return 0
-    header = _style.banner(f"advisor {info['advisor_version']}", width=40)
-    lines = [
-        header,
-        f"  python     {info['python_version']} ({info['python_implementation']})",
-        f"  platform   {info['platform']}",
-        f"  install    {info['install_path']}",
-        f"  schema     {info['schema_version']}",
-    ]
-    print("\n".join(lines))
+    print(_style.header_block(
+        f"advisor {info['advisor_version']}",
+        [
+            ("python", f"{info['python_version']} ({info['python_implementation']})"),
+            ("platform", info["platform"]),
+            ("install", info["install_path"]),
+            ("schema", info["schema_version"]),
+        ],
+        width=52,
+    ))
+    if not getattr(args, "quiet", False):
+        print()
+        print(_style.cta("docs", "advisor protocol"))
     return 0
 
 
@@ -1089,13 +1121,10 @@ def cmd_checkpoints(args: argparse.Namespace) -> int:
             age = ""
         id_cell = f"`{rid}`".ljust(id_col_width)
         age_cell = _style.dim(age.ljust(age_col_width))
-        print(f"- {id_cell}  {age_cell}  {path}")
-    # Only nudge towards --resume when there's more than one checkpoint;
-    # with a single row the run_id is right there on the only line above
-    # and the tip just repeats information already on screen.
-    if len(ids) > 1:
+        print(f"- {id_cell}  {age_cell}  {_style.dim(str(path))}")
+    if not getattr(args, "quiet", False):
         print()
-        print(_style.tip("resume with: advisor plan --resume <RUN_ID>"))
+        print(_style.cta("resume", "advisor plan --resume <RUN_ID>"))
     return 0
 
 
@@ -1108,6 +1137,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--version",
         action="version",
         version=f"%(prog)s {_get_version()}",
+    )
+    parser.add_argument(
+        "--no-color",
+        action="store_true",
+        default=False,
+        help="Disable ANSI color output (also honored via NO_COLOR env var)",
     )
     # Optional shell-completion (shtab) — ships as an extras dep so the
     # core tool stays dependency-free. When shtab is installed, users can
@@ -1127,6 +1162,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_pipeline = sub.add_parser("pipeline", help="Print the full pipeline reference")
     _add_common(p_pipeline)
+    p_pipeline.add_argument("--json", action="store_true", help="Emit pipeline as JSON")
+    p_pipeline.add_argument("--quiet", action="store_true", help="Suppress decorations (CTA/tips)")
     p_pipeline.set_defaults(func=cmd_pipeline)
 
     p_plan = sub.add_parser("plan", help="Rank files locally and print a dispatch plan")
@@ -1241,6 +1278,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip loading .advisor/history.jsonl into the advisor prompt",
     )
+    p_prompt.add_argument("--json", action="store_true", help="Emit prompt as JSON {\"text\": ...}")
+    p_prompt.add_argument("--quiet", action="store_true", help="Suppress frame/CTA lines")
     p_prompt.set_defaults(func=cmd_prompt)
 
     p_install = sub.add_parser(
@@ -1306,6 +1345,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Emit status as JSON for scripting (no colors, no CTA)",
     )
+    p_status.add_argument("--quiet", action="store_true", help="Suppress CTA/tip lines")
     p_status.set_defaults(func=cmd_status)
 
     p_doctor = sub.add_parser(
@@ -1330,6 +1370,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Emit the doctor report as JSON for scripting (no colors)",
     )
+    p_doctor.add_argument("--quiet", action="store_true", help="Suppress CTA/tip lines")
     p_doctor.set_defaults(func=cmd_doctor)
 
     p_uninstall = sub.add_parser(
@@ -1363,6 +1404,8 @@ def build_parser() -> argparse.ArgumentParser:
         "protocol",
         help="Print the strict team-lifecycle protocol (TeamCreate → shutdowns → TeamDelete)",
     )
+    p_protocol.add_argument("--json", action="store_true", help="Emit protocol as JSON {\"text\": ...}")
+    p_protocol.add_argument("--quiet", action="store_true", help="Suppress CTA line")
     p_protocol.set_defaults(func=cmd_protocol)
 
     p_ui = sub.add_parser(
@@ -1389,6 +1432,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Log every HTTP request to stderr (off by default)",
     )
+    p_ui.add_argument("--json", action="store_true", help="Print server URL as JSON and exit")
     p_ui.set_defaults(func=cmd_ui)
 
     p_history = sub.add_parser(
@@ -1419,6 +1463,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Emit entries as JSON for scripting",
     )
+    p_history.add_argument("--quiet", action="store_true", help="Suppress CTA/tip lines")
     p_history.set_defaults(func=cmd_history)
 
     p_version = sub.add_parser(
@@ -1430,6 +1475,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Emit version info as JSON for scripting",
     )
+    p_version.add_argument("--quiet", action="store_true", help="Suppress CTA line")
     p_version.set_defaults(func=cmd_version)
 
     p_checkpoints = sub.add_parser(
@@ -1487,6 +1533,9 @@ _NUDGE_SKIP_COMMANDS = {
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if getattr(args, "no_color", False):
+        os.environ["NO_COLOR"] = "1"
+        _style.reset_color_cache()
     if args.print_completion:
         try:
             import shtab

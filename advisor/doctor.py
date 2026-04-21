@@ -189,6 +189,10 @@ def run_doctor(
     block the rest. The returned report is ``healthy=False`` if any check
     is ``fail``; warnings do not flip it.
     """
+    quiet = os.environ.get("ADVISOR_QUIET") == "1"
+    if not quiet and sys.stderr.isatty():
+        sys.stderr.write("\033[2m" + "running checks…" + "\033[0m\r")
+        sys.stderr.flush()
     status = install_status(nudge_path=nudge_path, skill_path=skill_path)
     installed = get_installed_skill_version(path=skill_path)
     checks: list[Check] = [
@@ -198,6 +202,9 @@ def run_doctor(
         _check_claude_home(),
         *_check_install(status, installed, version),
     ]
+    if not quiet and sys.stderr.isatty():
+        sys.stderr.write("\033[2K\r")
+        sys.stderr.flush()
     healthy = not any(c.level == "fail" for c in checks)
     return DoctorReport(
         healthy=healthy,
@@ -213,16 +220,16 @@ def format_report(report: DoctorReport) -> str:
     """Human-readable (color-free) rendering of a :class:`DoctorReport`."""
     from . import _style
 
-    symbols = {"ok": ("✓", "+", "green"), "warn": ("⚠", "!", "yellow"), "fail": ("✗", "x", "red")}
     lines = [
-        _style.banner(f"advisor doctor — {report.advisor_version}", width=52),
-        "",
-        _style.dim(f"  python   {report.python_version}"),
-        _style.dim(f"  platform {report.platform}"),
+        _style.header_block(
+            f"advisor doctor — {report.advisor_version}",
+            [("python", report.python_version), ("platform", report.platform)],
+            width=52,
+        ),
         "",
     ]
     for check in report.checks:
-        fancy, plain, color = symbols[check.level]
+        _label, fancy, plain, color = _style.STATE_GLYPHS[check.level]
         mark = _style.paint(_style.glyph(fancy, plain), color)
         name_col = _style.paint(f"{check.name:<16}", "cyan", "bold")
         lines.append(f"  {mark} {name_col} {check.message}")

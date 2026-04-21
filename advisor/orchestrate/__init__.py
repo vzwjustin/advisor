@@ -3,8 +3,8 @@
 Split into focused submodules for maintainability:
 
 - :mod:`advisor.orchestrate.config` — :class:`TeamConfig`, :func:`default_team_config`
-- :mod:`advisor.orchestrate.advisor_prompt` — Opus advisor prompt + agent spec
-- :mod:`advisor.orchestrate.runner_prompts` — Sonnet runner prompts, pool
+- :mod:`advisor.orchestrate.advisor_prompt` — advisor prompt + agent spec
+- :mod:`advisor.orchestrate.runner_prompts` — runner prompts, pool
   agent specs, batch/dispatch/handoff message builders
 - :mod:`advisor.orchestrate.verify_dispatch` — verification prompt + message
 - :mod:`advisor.orchestrate.pipeline` — human-readable pipeline reference
@@ -14,7 +14,7 @@ All public symbols are re-exported here for backwards compatibility with
 
 Deprecated APIs (``build_explore_*``, ``build_rank_*``) were removed in
 v0.4.0. Use :func:`build_advisor_prompt` / :func:`build_advisor_agent`
-instead — Opus now handles discovery directly.
+instead — the advisor now handles discovery directly.
 """
 
 from __future__ import annotations

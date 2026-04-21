@@ -180,6 +180,41 @@ def cta(action: str, description: str = "", stream: IO[str] | None = None) -> st
     return f"  {lead} {act}  {dim(description, stream=stream)}"
 
 
+def header_block(
+    title: str,
+    rows: list[tuple[str, str]],
+    *,
+    width: int = 52,
+    stream: IO[str] | None = None,
+) -> str:
+    """Banner + dim-label / value rows for multi-row command summaries."""
+    lines = [banner(title, width=width, stream=stream), ""]
+    for label, value in rows:
+        dim_label = dim(f"{label:<10}", stream=stream)
+        lines.append(f"  {dim_label} {value}")
+    return "\n".join(lines)
+
+
+# (label, fancy_glyph, ascii_glyph, color) — canonical glyph tables shared
+# across CLI surfaces. "dim" is a valid color key handled by paint().
+ACTION_GLYPHS: dict[str, tuple[str, str, str, str | None]] = {
+    "installed": ("installed", "✓", "+", "green"),
+    "updated": ("updated", "↻", "~", "cyan"),
+    "unchanged": ("unchanged", "·", "-", "dim"),
+    "removed": ("removed", "✗", "x", "yellow"),
+    "absent": ("not found", "·", "-", "dim"),
+    "skipped": ("skipped", "·", "-", "dim"),
+}
+
+STATE_GLYPHS: dict[str, tuple[str, str, str, str | None]] = {
+    "ok": ("ok", "✓", "+", "green"),
+    "outdated": ("outdated", "↻", "~", "yellow"),
+    "warn": ("warn", "⚠", "!", "yellow"),
+    "fail": ("fail", "✗", "x", "red"),
+    "missing": ("missing", "✗", "x", "red"),
+}
+
+
 # Priority badge colors — high-contrast on both light and dark terminals.
 _PRIORITY_STYLES: dict[str, tuple[str, ...]] = {
     "5": ("red", "bold"),

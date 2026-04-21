@@ -12,8 +12,8 @@ Target: {config.target_dir} ({config.file_types})
 Models: advisor={config.advisor_model}, runners={config.runner_model}
 Suggested runners: ~{config.max_runners} | Min priority: P{config.min_priority}
 
-> **TL;DR** — Spawn the advisor (Opus) first; it sizes the runner pool from
-> its own Glob+Grep pass. Spawn that many runners (Sonnet). Advisor dispatches
+> **TL;DR** — Spawn the advisor first; it sizes the runner pool from
+> its own Glob+Grep pass. Spawn that many runners. Advisor dispatches
 > explore (and optionally fix) batches over a live SendMessage dialogue,
 > verifying each output as it lands. End by shutting down each teammate
 > individually, then `TeamDelete()`.
