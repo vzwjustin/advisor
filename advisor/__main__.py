@@ -15,6 +15,7 @@ from importlib.metadata import version as pkg_version
 from pathlib import Path
 
 from . import _style
+from ._fs import read_head as _read_head
 from .checkpoint import (
     Checkpoint,
     load_checkpoint,
@@ -60,7 +61,7 @@ from .orchestrate import (
     default_team_config,
     render_pipeline,
 )
-from .rank import CONTENT_SCAN_LIMIT, rank_files
+from .rank import rank_files
 
 # Top-level schema version for JSON outputs. Bump when the shape of any
 # ``--json`` payload changes in a way that would break downstream parsers.
@@ -73,7 +74,13 @@ def _get_version() -> str:
     try:
         return pkg_version("advisor-agent")
     except PackageNotFoundError:
-        return "dev"
+        # Keep in sync with ``advisor/__init__.py`` so ``advisor --version``,
+        # ``advisor status --json`` and ``advisor.__version__`` all agree when
+        # the wheel isn't installed (e.g. running from an editable checkout
+        # without metadata). Tests compare the two and will flag any drift.
+        from . import __version__
+
+        return __version__
 
 
 # (action_label, fancy_glyph, ascii_glyph, color)
@@ -171,13 +178,6 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
     print()
     print(_style.cta(f"/advisor {args.target}", "run the live pipeline in Claude Code"))
     return 0
-
-
-def _read_head(path: str, limit: int = CONTENT_SCAN_LIMIT) -> str:
-    try:
-        return Path(path).read_text(errors="ignore")[:limit]
-    except OSError:
-        return ""
 
 
 def _safe_rglob(target: Path, pattern: str) -> tuple[list[str] | None, str | None]:
@@ -718,6 +718,59 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ui(args: argparse.Namespace) -> int:
+    """Launch the optional local web dashboard on 127.0.0.1.
+
+    The web module is imported lazily — users who never run ``advisor ui``
+    pay no import cost. Since the dashboard is built on stdlib
+    :mod:`http.server`, it works out of the box with no extra install. If a
+    future, heavier dashboard implementation requires a third-party package
+    we surface the missing-extras hint here.
+    """
+    target = Path(args.target)
+    if not target.exists():
+        print(_style.error_box(f"target not found: {target}", stream=sys.stderr), file=sys.stderr)
+        return 2
+    if not target.is_dir():
+        print(
+            _style.error_box(f"target is not a directory: {target}", stream=sys.stderr),
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        from .web import build_app_state, run_server
+    except ImportError as exc:
+        print(
+            _style.error_box(
+                "advisor ui requires the optional `ui` extra.\n"
+                f"Install with: pip install 'advisor-agent[ui]'\n\n(detail: {exc})",
+                stream=sys.stderr,
+            ),
+            file=sys.stderr,
+        )
+        return 1
+
+    state = build_app_state(
+        target,
+        file_types=args.file_types,
+        min_priority=args.min_priority,
+        advisor_model=args.advisor_model,
+        runner_model=args.runner_model,
+    )
+    try:
+        run_server(
+            state,
+            host=args.host,
+            port=args.port,
+            log_requests=args.verbose,
+        )
+    except OSError as exc:
+        print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_history(args: argparse.Namespace) -> int:
     """Show recent CONFIRMED findings from ``.advisor/history.jsonl``."""
     target = Path(args.target)
@@ -994,6 +1047,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_protocol.set_defaults(func=cmd_protocol)
 
+    p_ui = sub.add_parser(
+        "ui",
+        help=(
+            "Launch the optional local web dashboard "
+            "(findings / plan / config / cost). Writes nothing."
+        ),
+    )
+    _add_common(p_ui)
+    p_ui.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Host to bind (default: 127.0.0.1 — loopback only)",
+    )
+    p_ui.add_argument(
+        "--port",
+        type=int,
+        default=8765,
+        help="Port to bind (default: %(default)s)",
+    )
+    p_ui.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Log every HTTP request to stderr (off by default)",
+    )
+    p_ui.set_defaults(func=cmd_ui)
+
     p_history = sub.add_parser(
         "history",
         help="Show recent CONFIRMED findings logged under <target>/.advisor/history.jsonl",
@@ -1035,6 +1114,7 @@ _NUDGE_SKIP_COMMANDS = {
     "prompt",
     "protocol",
     "history",
+    "ui",
 }
 
 

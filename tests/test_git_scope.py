@@ -20,6 +20,12 @@ def git_repo(tmp_path: Path) -> Path:
     _run(["git", "init", "-q", "-b", "main"], tmp_path)
     _run(["git", "config", "user.email", "t@t"], tmp_path)
     _run(["git", "config", "user.name", "t"], tmp_path)
+    # Disable GPG/SSH commit signing locally — some CI environments have
+    # ``commit.gpgsign = true`` set globally, which would make our test
+    # commits fail with "signing failed". Tests must be self-contained
+    # and never depend on the host's signing keys.
+    _run(["git", "config", "commit.gpgsign", "false"], tmp_path)
+    _run(["git", "config", "tag.gpgsign", "false"], tmp_path)
     (tmp_path / "a.py").write_text("a\n")
     (tmp_path / "b.py").write_text("b\n")
     _run(["git", "add", "."], tmp_path)

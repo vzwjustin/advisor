@@ -37,6 +37,12 @@ dev = [
     "pre-commit>=3",
 ]
 completion = ["shtab>=1.6"]
+# The optional web dashboard (`advisor ui`) is built on stdlib
+# http.server, so no runtime deps are strictly required. The extra exists
+# as a forward-compatible hook: if a future dashboard implementation needs
+# a heavier stack (Flask, FastAPI, etc.) it can be added here without
+# changing the CLI's install path.
+ui = []
 
 [project.urls]
 Homepage = "https://github.com/vzwjustin/advisor"
