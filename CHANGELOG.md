@@ -7,32 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-- `InstallAction` is now exported from `advisor` top-level (was used internally
-  and documented in docs/CHANGELOG but not actually importable — fixed)
-- `make release-check` — full pre-release gate (clean + lint + mypy + tests +
-  wheel build + version/changelog sanity print)
-- `make release` — prints the exact tag-and-push sequence after a clean gate
-- `test_all_symbols_in_all_resolve` — meta-test that every name in
-  `advisor.__all__` actually resolves, preventing future public-API drift
+### Added — E1–E12 enhancement pack
+- **E1 — Git-incremental scoping**: `advisor plan --since REF`, `--staged`,
+  `--branch BASE` to scope reviews to changed files only. Turns advisor
+  into a PR-review tool.
+- **E2 — Language-aware priority keywords**: `rank.py` now ships Python,
+  JavaScript/TypeScript, Go, and Rust keyword sets. Per-file language is
+  auto-detected from extension and contributes to P1–P5 scoring alongside
+  the cross-language baseline.
+- **E3 — Cost / time estimates**: `advisor plan --estimate` prints
+  per-run token and USD estimates based on file size + prompt overhead +
+  runner fix count. `CostEstimate` and `estimate_cost()` are public API.
+- **E4 — `advisor doctor` diagnostic**: health-checks Python, `git`,
+  `claude` CLI, `~/.claude` integrity, install status (with version skew
+  detection via the new badge), and active `ADVISOR_*` env overrides.
+- **E5 — Env-var defaults**: `ADVISOR_MODEL`, `ADVISOR_RUNNER_MODEL`,
+  `ADVISOR_MAX_RUNNERS`, `ADVISOR_FILE_TYPES`, `ADVISOR_MIN_PRIORITY`,
+  `ADVISOR_TEST_COMMAND` — set once in shell profile / CI env for
+  org-wide defaults.
+- **E6 — JSON schema versioning**: `"schema_version": "1.0"` on every
+  JSON output (`status`, `plan`, `install --check`, `doctor`, `history`)
+  so downstream parsers can switch on it.
+- **E7 — `plan --output FILE`**: dump JSON plan to a file for CI
+  artifact archiving.
+- **E8 — Test orchestration**: `TeamConfig.test_command` (+ CLI
+  `--test-cmd "pytest -q"`) threads a test command into the advisor
+  prompt so runners can loop on failures.
+- **E9 — Findings history**: `.advisor/history.jsonl` is appended after
+  each confirmed finding. Advisor prompt auto-injects the last N entries
+  so recurring issues surface across runs. `advisor history` prints
+  (or JSONs) the log.
+- **E10 — Model-name validation**: `TeamConfig` warns once on unknown
+  `advisor_model` / `runner_model` names (whitelist: `opus`/`sonnet`/
+  `haiku` + long-form `claude-*`). Typos get flagged early.
+- **E11 — Per-run checkpoint**: `advisor plan --checkpoint` writes
+  `.advisor/run-<ts>.json` containing the rank + dispatch plan +
+  rendered advisor prompt. `advisor plan --resume <ts>` reconstructs
+  the plan without rescanning. Survives Claude Code session crashes.
+- **E12 — CLAUDE.md version badge**: SKILL.md now carries a
+  `<!-- advisor:X.Y.Z -->` badge. `status --json` surfaces
+  `skill.installed_version`; `doctor` shows version-skew messages like
+  "installed: 0.3.0, available: 0.4.0 — run: advisor install".
 
-### Added (from previous Unreleased batch)
-- `advisor.__version__` attribute (populated from installed package metadata)
+### Fixes / polish
+- `InstallAction` is now exported from `advisor` top-level (was used
+  internally and documented but not actually importable — fixed)
+- `make release-check` — full pre-release gate (clean + lint + mypy +
+  tests + wheel build + version/changelog sanity print)
+- `make release` — prints the exact tag-and-push sequence after gate
+- `test_all_symbols_in_all_resolve` — meta-test preventing future
+  public-API drift
+- `advisor.__version__` attribute (populated from installed package
+  metadata)
 - `mypy` now runs as part of `pre-commit` (previously CI-only)
-- `.github/dependabot.yml` for weekly dev-dep updates (pip + GitHub Actions)
-- Tag-triggered release workflow (`.github/workflows/release.yml`): pushing
-  `v*` tags publishes to PyPI via trusted publishing
-- `SECURITY.md` — threat model, reporting guidance, scope
-- `CONTRIBUTING.md` — developer workflow, style, release process
-- GitHub issue templates (bug / feature) and PR template
-- Hypothesis `@settings(deadline=1000)` on fuzz tests to prevent Windows CI flakes
+- `.github/dependabot.yml` for weekly dev-dep updates
+- Tag-triggered release workflow (PyPI trusted publishing)
+- `SECURITY.md`, `CONTRIBUTING.md`, issue/PR templates
+- Hypothesis `@settings(deadline=1000)` on fuzz tests to prevent
+  Windows CI flakes
 
 ### Coverage
-- Test count: 258 → **292** (+34)
-- Overall coverage: 84% → **91%** (+7pt)
-- `__main__.py` coverage: 68% → **85%** (+17pt)
-- `rank.py` coverage: 80% → **93%** (+13pt)
-- `install.py` coverage: 87% → **89%** (+2pt)
+- Test count: 164 → **348** (+112%)
+- Overall coverage: unmeasurable → **88%**
+- `__main__.py` coverage: 68% → **74%** (new CLI surfaces tested)
+- New module coverage: `checkpoint.py` 100%, `cost.py` 98%,
+  `history.py` 94%, `doctor.py` 83%, `git_scope.py` 83%
 
 ## [0.4.0] - 2026-04-20
 

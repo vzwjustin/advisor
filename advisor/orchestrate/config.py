@@ -2,12 +2,62 @@
 
 from __future__ import annotations
 
+import os
+import re
+import sys
 from dataclasses import dataclass
+
+# Known Claude Code model shortcuts (the strings actually accepted by the
+# Agent() tool). Long-form IDs like ``claude-opus-4-5-20250929`` are also
+# valid — we only warn on something that fails both the shortcut set and
+# the long-form shape.
+KNOWN_MODEL_SHORTCUTS = frozenset(
+    {
+        "opus",
+        "opus-4",
+        "opus-4-5",
+        "sonnet",
+        "sonnet-4",
+        "sonnet-4-5",
+        "haiku",
+        "haiku-4",
+        "haiku-4-5",
+    }
+)
+
+# Long-form Claude model IDs follow ``claude-<family>-<version>-YYYYMMDD``
+_LONG_FORM_MODEL_RE = re.compile(
+    r"^claude-(opus|sonnet|haiku)-[\d.-]+(-\d{8})?$",
+    re.IGNORECASE,
+)
+
+
+def is_known_model(name: str) -> bool:
+    """Return True if ``name`` looks like a valid Claude Code model string.
+
+    Accepts both the short aliases (``opus``, ``sonnet``, …) and the
+    long-form ``claude-<family>-<version>-YYYYMMDD`` IDs Anthropic ships
+    for API calls. Unknown names are not fatal — the caller decides
+    whether to warn.
+    """
+    if name in KNOWN_MODEL_SHORTCUTS:
+        return True
+    return bool(_LONG_FORM_MODEL_RE.match(name))
 
 
 @dataclass(frozen=True, slots=True)
 class TeamConfig:
-    """Configuration for the advisor review team."""
+    """Configuration for the advisor review team.
+
+    ``max_fixes_per_runner`` caps sequential fix assignments per runner
+    conversation before the advisor rotates to a fresh runner. Prevents
+    context-pressure stalls on long fix waves.
+
+    ``test_command`` is an optional shell command (e.g. ``"pytest -q"``)
+    that the advisor runs after each fix wave. When set, the advisor
+    prompt instructs the team to re-dispatch the failing fix to the
+    runner that produced it. An empty string disables test orchestration.
+    """
 
     team_name: str
     target_dir: str
@@ -18,6 +68,28 @@ class TeamConfig:
     advisor_model: str
     runner_model: str
     max_fixes_per_runner: int = 5
+    test_command: str = ""
+
+
+def _env_or(env_key: str, default: str) -> str:
+    """Return ``os.environ[env_key]`` if set (and non-empty), else default."""
+    val = os.environ.get(env_key)
+    return val if val else default
+
+
+def _env_int_or(env_key: str, default: int) -> int:
+    """Return ``int(os.environ[env_key])`` if valid, else default.
+
+    An invalid integer (e.g. ``ADVISOR_MAX_RUNNERS=xyz``) is silently
+    ignored — we treat env vars as soft defaults, not hard inputs.
+    """
+    raw = os.environ.get(env_key)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
 
 
 def default_team_config(
@@ -30,13 +102,51 @@ def default_team_config(
     advisor_model: str = "opus",
     runner_model: str = "sonnet",
     max_fixes_per_runner: int = 5,
+    test_command: str = "",
+    warn_unknown_model: bool = True,
 ) -> TeamConfig:
     """Create a default team configuration.
 
-    ``max_fixes_per_runner`` caps sequential fix assignments per runner
-    conversation before the advisor rotates to a fresh runner. Prevents
-    context-pressure stalls on long fix waves.
+    Env-var fallbacks (checked only when the argument is the default):
+
+    * ``ADVISOR_MODEL`` → ``advisor_model``
+    * ``ADVISOR_RUNNER_MODEL`` → ``runner_model``
+    * ``ADVISOR_MAX_RUNNERS`` → ``max_runners``
+    * ``ADVISOR_FILE_TYPES`` → ``file_types``
+    * ``ADVISOR_MIN_PRIORITY`` → ``min_priority``
+    * ``ADVISOR_TEST_COMMAND`` → ``test_command``
+
+    Env vars are only consulted when the explicit argument matches the
+    function default — callers can always override env by passing a value.
+
+    ``warn_unknown_model=True`` (default) prints a one-line warning on
+    stderr when either model name fails :func:`is_known_model`. The
+    config is still constructed — the warning is advisory so callers
+    aren't locked out when Anthropic ships a new model ID.
     """
+    if advisor_model == "opus":
+        advisor_model = _env_or("ADVISOR_MODEL", advisor_model)
+    if runner_model == "sonnet":
+        runner_model = _env_or("ADVISOR_RUNNER_MODEL", runner_model)
+    if max_runners == 5:
+        max_runners = _env_int_or("ADVISOR_MAX_RUNNERS", max_runners)
+    if file_types == "*.py":
+        file_types = _env_or("ADVISOR_FILE_TYPES", file_types)
+    if min_priority == 3:
+        min_priority = _env_int_or("ADVISOR_MIN_PRIORITY", min_priority)
+    if test_command == "":
+        test_command = _env_or("ADVISOR_TEST_COMMAND", test_command)
+
+    if warn_unknown_model:
+        for label, model in (("advisor_model", advisor_model), ("runner_model", runner_model)):
+            if not is_known_model(model):
+                print(
+                    f"advisor: warning: {label}={model!r} does not look like a "
+                    f"known Claude Code model shortcut or long-form ID; "
+                    f"Claude Code may reject it",
+                    file=sys.stderr,
+                )
+
     return TeamConfig(
         team_name=team_name,
         target_dir=target_dir,
@@ -47,4 +157,5 @@ def default_team_config(
         advisor_model=advisor_model,
         runner_model=runner_model,
         max_fixes_per_runner=max_fixes_per_runner,
+        test_command=test_command,
     )

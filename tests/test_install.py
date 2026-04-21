@@ -443,3 +443,37 @@ class TestInstallSkillUpdateAndUninstall:
 
         result = uninstall_skill(path=tmp_path / "does-not-exist.md")
         assert result.action == "absent"
+
+
+class TestVersionBadge:
+    """Covers the E12 version-badge mechanism (SKILL.md self-identification)."""
+
+    def test_bundled_skill_contains_badge(self):
+        from advisor.install import parse_badge
+        from advisor.skill_asset import SKILL_MD, VERSION_BADGE
+
+        assert VERSION_BADGE in SKILL_MD
+        assert parse_badge(SKILL_MD) is not None
+
+    def test_parse_badge_returns_none_for_unbadged_text(self):
+        from advisor.install import parse_badge
+
+        assert parse_badge("# just a markdown file") is None
+        assert parse_badge("") is None
+
+    def test_parse_badge_extracts_version(self):
+        from advisor.install import parse_badge
+
+        assert parse_badge("prefix\n<!-- advisor:1.2.3 -->\nsuffix") == "1.2.3"
+
+    def test_get_installed_skill_version_reads_badge(self, tmp_path: Path):
+        from advisor.install import get_installed_skill_version
+
+        skill = tmp_path / "SKILL.md"
+        skill.write_text("<!-- advisor:9.9.9 -->\nbody\n", encoding="utf-8")
+        assert get_installed_skill_version(path=skill) == "9.9.9"
+
+    def test_get_installed_skill_version_missing_file(self, tmp_path: Path):
+        from advisor.install import get_installed_skill_version
+
+        assert get_installed_skill_version(path=tmp_path / "nope.md") is None

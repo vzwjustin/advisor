@@ -3,6 +3,17 @@
 Rank targets before diving in.
 Files handling user input, auth, external data, or crypto get highest priority.
 Work top-down so agents spend time where it matters most.
+
+## Language-aware scoring
+
+The base :data:`PRIORITY_KEYWORDS` table is language-agnostic (``auth``,
+``token``, ``sql``, etc. match in any codebase). Additional ecosystem-specific
+terms live in :data:`LANGUAGE_EXTRA_KEYWORDS` — keyed by canonical language name
+(``python``, ``javascript``, ``go``, ``rust``, ``java``, ``ruby``, ``php``).
+:func:`_score_file` looks up the language from the file extension via
+:data:`EXTENSION_LANGUAGE` and uses a combined regex that covers both the base
+terms and the language's extras. Files in unrecognized languages score against
+the base set only.
 """
 
 from __future__ import annotations
@@ -11,6 +22,7 @@ import fnmatch
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path, PurePath
 
 # Bytes scanned per file for keyword matching — covers typical import block + first function/class.
@@ -91,6 +103,100 @@ PRIORITY_KEYWORDS: dict[int, tuple[str, ...]] = {
     ),
 }
 
+# Language-specific additional keywords layered on top of ``PRIORITY_KEYWORDS``.
+# Keep each list tight: terms that are *diagnostic* of the language's risk
+# surface, not every ecosystem name. Adding too many low-value keywords
+# dilutes the ranking.
+LANGUAGE_EXTRA_KEYWORDS: dict[str, dict[int, tuple[str, ...]]] = {
+    "python": {
+        5: ("passlib", "pyjwt", "itsdangerous"),
+        4: ("pickle", "loads", "yaml.load", "marshal", "pydantic"),
+        3: ("flask", "django", "fastapi", "sqlalchemy", "psycopg", "pymongo"),
+        2: ("os.environ", "secrets"),
+    },
+    "javascript": {
+        5: ("passport", "next-auth", "nextauth", "firebase.auth"),
+        4: (
+            "innerhtml",
+            "dangerouslysetinnerhtml",
+            "eval",
+            "document.write",
+            "localstorage",
+            "sessionstorage",
+        ),
+        3: ("express", "fastify", "nextjs", "next.js", "graphql", "prisma", "mongoose"),
+        2: ("dotenv", "process.env"),
+    },
+    "go": {
+        5: ("crypto/tls", "crypto/x509", "golang.org/x/oauth2"),
+        4: ("encoding/json", "encoding/xml", "encoding/gob", "html/template"),
+        3: ("net/http", "database/sql", "os/exec", "context.background"),
+        2: ("os.getenv",),
+    },
+    "rust": {
+        5: ("jsonwebtoken", "argon2", "oauth2"),
+        4: ("serde_json", "serde_yaml", "unsafe", "transmute", "from_utf8_unchecked"),
+        3: ("reqwest", "actix_web", "axum", "rocket", "tokio", "sqlx", "diesel"),
+        2: ("std::env",),
+    },
+    "java": {
+        5: ("spring.security", "shiro", "jjwt", "keycloak"),
+        4: ("objectinputstream", "readobject", "xmldecoder", "jackson"),
+        3: (
+            "restcontroller",
+            "requestmapping",
+            "httpservletrequest",
+            "preparedstatement",
+            "runtime.getruntime",
+        ),
+        2: ("system.getenv",),
+    },
+    "ruby": {
+        5: ("devise", "omniauth", "warden"),
+        4: ("params", "marshal.load", "yaml.load"),
+        3: ("rails", "rack", "sinatra", "activerecord"),
+    },
+    "php": {
+        5: ("password_hash", "password_verify"),
+        4: ("$_get", "$_post", "$_request", "$_files", "unserialize"),
+        3: ("mysqli", "pdo", "wp_", "laravel", "symfony"),
+    },
+}
+
+# File-extension → canonical language name. The canonical name must appear
+# in :data:`LANGUAGE_EXTRA_KEYWORDS` to get ecosystem-specific scoring;
+# extensions mapped to an unknown language silently fall back to the base
+# set.
+EXTENSION_LANGUAGE: dict[str, str] = {
+    ".py": "python",
+    ".pyi": "python",
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
+    ".ts": "javascript",
+    ".tsx": "javascript",
+    ".go": "go",
+    ".rs": "rust",
+    ".java": "java",
+    ".kt": "java",
+    ".scala": "java",
+    ".rb": "ruby",
+    ".rake": "ruby",
+    ".php": "php",
+}
+
+
+def language_for_path(path: str) -> str | None:
+    """Return canonical language name for a file path, or ``None``.
+
+    Looks up the file extension (including multi-dot forms like ``.d.ts``
+    falling back to ``.ts``) in :data:`EXTENSION_LANGUAGE`.
+    """
+    suffix = Path(path).suffix.lower()
+    return EXTENSION_LANGUAGE.get(suffix)
+
+
 SKIP_DIRS = frozenset(
     {
         "__pycache__",
@@ -103,6 +209,17 @@ SKIP_DIRS = frozenset(
         ".tox",
         ".mypy_cache",
         ".pytest_cache",
+        ".next",
+        ".nuxt",
+        "target",  # rust/java
+        "vendor",  # go/ruby/php
+        ".bundle",
+        ".gradle",
+        ".idea",
+        ".vscode",
+        "coverage",
+        "htmlcov",
+        ".turbo",
     }
 )
 
@@ -122,6 +239,15 @@ SKIP_EXTENSIONS = frozenset(
         ".woff",
         ".woff2",
         ".ttf",
+        ".class",
+        ".jar",
+        ".o",
+        ".a",
+        ".dll",
+        ".exe",
+        ".min.js",
+        ".min.css",
+        ".map",
     }
 )
 
@@ -272,31 +398,59 @@ def _matches_any_pattern(file_path: str, patterns: list[str]) -> bool:
     return False
 
 
-# Pre-compiled word-boundary regexes per priority tier.
+# Pre-compiled word-boundary regexes per priority tier (base keywords only,
+# used by direct-lookup tests that want to introspect per-tier patterns).
 _COMPILED_KEYWORDS: dict[int, tuple[tuple[str, re.Pattern[str]], ...]] = {
     priority: tuple((kw, re.compile(rf"\b{re.escape(kw)}\b", re.IGNORECASE)) for kw in keywords)
     for priority, keywords in PRIORITY_KEYWORDS.items()
 }
 
 
-# Single combined regex spanning every keyword across every tier. Named
-# groups encode ``(priority, keyword_index)`` so one ``re.finditer`` pass
-# replaces ~50 separate ``pattern.search`` calls per file — a meaningful
-# speedup on large codebases (thousands of files scanned per run). The
-# per-tier dict above is still useful for unit tests that want to verify
-# individual keyword patterns compile correctly.
-def _build_combined() -> tuple[re.Pattern[str], dict[str, tuple[int, str]]]:
+def _merged_keywords_for(language: str | None) -> dict[int, tuple[str, ...]]:
+    """Return merged keyword table for a language (base + language extras)."""
+    if not language or language not in LANGUAGE_EXTRA_KEYWORDS:
+        return PRIORITY_KEYWORDS
+    extras = LANGUAGE_EXTRA_KEYWORDS[language]
+    merged: dict[int, tuple[str, ...]] = {}
+    for priority, kws in PRIORITY_KEYWORDS.items():
+        extra = extras.get(priority, ())
+        # Deduplicate while preserving order (base first, extras second)
+        seen: dict[str, None] = {}
+        for kw in (*kws, *extra):
+            seen.setdefault(kw, None)
+        merged[priority] = tuple(seen)
+    # Also include any priority the language added that wasn't in base
+    for priority, extra in extras.items():
+        if priority not in merged:
+            merged[priority] = tuple(dict.fromkeys(extra))
+    return merged
+
+
+@lru_cache(maxsize=16)
+def _combined_regex_for(language: str | None) -> tuple[re.Pattern[str], dict[str, tuple[int, str]]]:
+    """Build and cache a combined regex + group-map for a language.
+
+    Named groups encode ``(priority, keyword_index)`` so one
+    ``re.finditer`` pass replaces dozens of separate ``pattern.search``
+    calls per file. Cached per language — each language's keyword set is
+    built at most once per process.
+    """
+    keywords = _merged_keywords_for(language)
     parts: list[str] = []
     mapping: dict[str, tuple[int, str]] = {}
-    for priority, keywords in PRIORITY_KEYWORDS.items():
-        for idx, kw in enumerate(keywords):
+    for priority, kws in keywords.items():
+        for idx, kw in enumerate(kws):
             group = f"p{priority}_{idx}"
             parts.append(rf"(?P<{group}>\b{re.escape(kw)}\b)")
             mapping[group] = (priority, kw)
     return re.compile("|".join(parts), re.IGNORECASE), mapping
 
 
-_COMBINED_KEYWORD_RE, _COMBINED_GROUP_MAP = _build_combined()
+# Back-compat export: the module used to expose a precomputed base regex as
+# ``_COMBINED_KEYWORD_RE`` / ``_COMBINED_GROUP_MAP``. Some tests import these
+# directly to verify the wiring; keep the names alive as aliases for the
+# language-less (base) variant.
+_COMBINED_KEYWORD_RE, _COMBINED_GROUP_MAP = _combined_regex_for(None)
 
 
 def _score_file(path: str, content: str) -> tuple[int, tuple[str, ...]]:
@@ -307,15 +461,19 @@ def _score_file(path: str, content: str) -> tuple[int, tuple[str, ...]]:
     matches (e.g. "test" P1) are not mixed into a P5 file's reasons list.
 
     Only the first ``CONTENT_SCAN_LIMIT`` characters of content are scanned.
+    The language is detected from the file extension and augments the base
+    keyword set with ecosystem-specific terms when available.
     """
+    language = language_for_path(path)
+    regex, group_map = _combined_regex_for(language)
     combined = f"{path} {content[:CONTENT_SCAN_LIMIT]}"
     matches_per_tier: dict[int, list[str]] = {}
 
-    for m in _COMBINED_KEYWORD_RE.finditer(combined):
+    for m in regex.finditer(combined):
         group = m.lastgroup
         if group is None:
             continue
-        priority, kw = _COMBINED_GROUP_MAP[group]
+        priority, kw = group_map[group]
         matches_per_tier.setdefault(priority, []).append(kw)
 
     if not matches_per_tier:

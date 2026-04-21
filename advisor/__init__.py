@@ -22,6 +22,16 @@ try:
 except PackageNotFoundError:  # pragma: no cover — editable, not-installed fallback
     __version__ = "0+unknown"
 
+from .checkpoint import (
+    CHECKPOINT_SCHEMA_VERSION,
+    Checkpoint,
+    checkpoint_path,
+    list_checkpoints,
+    load_checkpoint,
+    save_checkpoint,
+)
+from .cost import CostEstimate, estimate_cost, format_estimate
+from .doctor import DoctorReport, run_doctor
 from .focus import (
     FocusBatch,
     FocusTask,
@@ -30,6 +40,17 @@ from .focus import (
     format_batch_plan,
     format_dispatch_plan,
 )
+from .git_scope import GitScopeError, resolve_git_scope
+from .history import (
+    HISTORY_SCHEMA_VERSION,
+    HistoryEntry,
+    append_entries,
+    entry_now,
+    format_history_block,
+    history_path,
+    load_recent,
+    new_run_id,
+)
 from .install import (
     ComponentStatus,
     InstallAction,
@@ -37,8 +58,10 @@ from .install import (
     Status,
     apply_nudge,
     ensure_nudge,
+    get_installed_skill_version,
     install,
     install_skill,
+    parse_badge,
     remove_nudge,
     render_block,
     should_auto_nudge,
@@ -60,9 +83,19 @@ from .orchestrate import (
     build_verify_dispatch_prompt,
     build_verify_message,
     default_team_config,
+    is_known_model,
     render_pipeline,
 )
-from .rank import CONTENT_SCAN_LIMIT, RankedFile, load_advisorignore, rank_files, rank_to_prompt
+from .rank import (
+    CONTENT_SCAN_LIMIT,
+    LANGUAGE_EXTRA_KEYWORDS,
+    PRIORITY_KEYWORDS,
+    RankedFile,
+    language_for_path,
+    load_advisorignore,
+    rank_files,
+    rank_to_prompt,
+)
 from .skill_asset import SKILL_MD
 from .verify import (
     Finding,
@@ -76,7 +109,10 @@ __all__ = [
     "__version__",
     # rank
     "CONTENT_SCAN_LIMIT",
+    "LANGUAGE_EXTRA_KEYWORDS",
+    "PRIORITY_KEYWORDS",
     "RankedFile",
+    "language_for_path",
     "load_advisorignore",
     "rank_files",
     "rank_to_prompt",
@@ -95,6 +131,7 @@ __all__ = [
     # orchestrate
     "TeamConfig",
     "default_team_config",
+    "is_known_model",
     "build_advisor_agent",
     "build_advisor_prompt",
     "build_runner_agents",
@@ -114,14 +151,42 @@ __all__ = [
     "Status",
     "apply_nudge",
     "ensure_nudge",
+    "get_installed_skill_version",
     "install",
     "install_skill",
+    "parse_badge",
     "remove_nudge",
     "render_block",
     "should_auto_nudge",
     "status",
     "uninstall",
     "uninstall_skill",
+    # git scope
+    "GitScopeError",
+    "resolve_git_scope",
+    # cost
+    "CostEstimate",
+    "estimate_cost",
+    "format_estimate",
+    # doctor
+    "DoctorReport",
+    "run_doctor",
+    # history
+    "HISTORY_SCHEMA_VERSION",
+    "HistoryEntry",
+    "append_entries",
+    "entry_now",
+    "format_history_block",
+    "history_path",
+    "load_recent",
+    "new_run_id",
+    # checkpoint
+    "CHECKPOINT_SCHEMA_VERSION",
+    "Checkpoint",
+    "checkpoint_path",
+    "list_checkpoints",
+    "load_checkpoint",
+    "save_checkpoint",
     # skill asset
     "SKILL_MD",
 ]

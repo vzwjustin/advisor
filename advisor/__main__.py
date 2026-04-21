@@ -15,6 +15,13 @@ from importlib.metadata import version as pkg_version
 from pathlib import Path
 
 from . import _style
+from .checkpoint import (
+    Checkpoint,
+    load_checkpoint,
+    save_checkpoint,
+)
+from .cost import estimate_cost, format_estimate
+from .doctor import format_report, run_doctor
 from .focus import (
     FocusBatch,
     FocusTask,
@@ -23,6 +30,8 @@ from .focus import (
     format_batch_plan,
     format_dispatch_plan,
 )
+from .git_scope import GitScopeError, resolve_git_scope
+from .history import HISTORY_SCHEMA_VERSION, format_history_block, load_recent, new_run_id
 from .install import (
     OPT_OUT_ENV,
     ComponentStatus,
@@ -30,6 +39,7 @@ from .install import (
     InstallResult,
     Status,
     ensure_nudge,
+    get_installed_skill_version,
     install_skill,
     uninstall_skill,
 )
@@ -51,6 +61,12 @@ from .orchestrate import (
     render_pipeline,
 )
 from .rank import CONTENT_SCAN_LIMIT, rank_files
+
+# Top-level schema version for JSON outputs. Bump when the shape of any
+# ``--json`` payload changes in a way that would break downstream parsers.
+# Individual payload modules (history, checkpoint) carry their own
+# schema_version fields for fine-grained evolution.
+JSON_SCHEMA_VERSION = "1.0"
 
 
 def _get_version() -> str:
@@ -103,6 +119,7 @@ def _config_from_args(args: argparse.Namespace) -> TeamConfig:
         context=context,
         advisor_model=args.advisor_model,
         runner_model=args.runner_model,
+        test_command=getattr(args, "test_cmd", "") or "",
     )
 
 
@@ -178,8 +195,15 @@ def _plan_to_dict(
     target: Path,
     tasks: list[FocusTask],
     batches: list[FocusBatch] | None = None,
+    estimate: object | None = None,
+    run_id: str | None = None,
 ) -> dict[str, object]:
-    """Serialize a ranking/plan to a JSON-friendly dict for ``--json`` output."""
+    """Serialize a ranking/plan to a JSON-friendly dict for ``--json`` output.
+
+    ``estimate`` should be a :class:`advisor.cost.CostEstimate` when cost
+    estimation is enabled, ``None`` otherwise. ``run_id`` is only emitted
+    when the plan was checkpointed so callers can pass it to ``--resume``.
+    """
     task_data = [
         {
             "file_path": t.file_path,
@@ -188,6 +212,7 @@ def _plan_to_dict(
         for t in tasks
     ]
     payload: dict[str, object] = {
+        "schema_version": JSON_SCHEMA_VERSION,
         "target": str(target),
         "task_count": len(tasks),
         "tasks": task_data,
@@ -202,7 +227,36 @@ def _plan_to_dict(
             }
             for b in batches
         ]
+    if estimate is not None and hasattr(estimate, "to_dict"):
+        payload["estimate"] = estimate.to_dict()
+    if run_id is not None:
+        payload["run_id"] = run_id
     return payload
+
+
+def _resolve_plan_files(
+    target: Path,
+    args: argparse.Namespace,
+) -> tuple[list[str] | None, str | None]:
+    """Resolve the file list for ``cmd_plan`` — git-scoped or full rglob.
+
+    Returns ``(paths, error_text)``. ``paths`` is None when an error
+    prevented resolution. Git-scope selectors (``--since``, ``--staged``,
+    ``--branch``) take precedence over the recursive scan and are mutually
+    exclusive with each other.
+    """
+    since = getattr(args, "since", None)
+    staged = getattr(args, "staged", False)
+    branch = getattr(args, "branch", None)
+    if any([since, staged, branch]):
+        try:
+            files = resolve_git_scope(target, since=since, staged=staged, branch=branch)
+        except GitScopeError as exc:
+            return None, str(exc)
+        if files is None:
+            return [], None
+        return files, None
+    return _safe_rglob(target, args.file_types)
 
 
 def cmd_plan(args: argparse.Namespace) -> int:
@@ -212,7 +266,28 @@ def cmd_plan(args: argparse.Namespace) -> int:
         print(_style.error_box(f"target not found: {target}", stream=sys.stderr), file=sys.stderr)
         return 2
 
-    paths, glob_err = _safe_rglob(target, args.file_types)
+    # Resume: load a previously-saved plan from .advisor/run-<id>.json and
+    # emit it verbatim. Skips discovery + ranking entirely — the whole
+    # point of checkpointing is to not redo that work.
+    resume_id = getattr(args, "resume", None)
+    if resume_id:
+        try:
+            cp = load_checkpoint(target, resume_id)
+        except (FileNotFoundError, ValueError) as exc:
+            print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
+            return 2
+        tasks = [
+            FocusTask(
+                file_path=str(t["file_path"]),
+                priority=int(str(t["priority"])),
+                prompt=str(t.get("prompt", "")),
+            )
+            for t in cp.tasks
+        ]
+        batches_from_cp = _batches_from_checkpoint(cp) if cp.batches else None
+        return _emit_plan(args, target, tasks, batches_from_cp, run_id=cp.run_id, context="resumed")
+
+    paths, glob_err = _resolve_plan_files(target, args)
     if glob_err is not None:
         print(_style.error_box(glob_err, stream=sys.stderr), file=sys.stderr)
         return 2
@@ -223,27 +298,140 @@ def cmd_plan(args: argparse.Namespace) -> int:
         max_tasks=None,  # no hard cap; advisor decides in the live pipeline
         min_priority=args.min_priority,
     )
+
+    batches: list[FocusBatch] | None = None
+    if args.batch_size and args.batch_size > 1:
+        batches = create_focus_batches(tasks, files_per_batch=args.batch_size)
+
+    # Optional persistence: ``--checkpoint`` writes the full plan to
+    # ``.advisor/run-<id>.json`` so a later invocation can ``--resume``.
+    saved_run_id: str | None = None
+    if getattr(args, "checkpoint", False):
+        cfg = _config_from_args(args)
+        saved_run_id = new_run_id()
+        save_checkpoint(
+            target,
+            run_id=saved_run_id,
+            tasks=tasks,
+            batches=batches,
+            team_name=cfg.team_name,
+            file_types=cfg.file_types,
+            min_priority=cfg.min_priority,
+            max_runners=cfg.max_runners,
+            advisor_model=cfg.advisor_model,
+            runner_model=cfg.runner_model,
+            max_fixes_per_runner=cfg.max_fixes_per_runner,
+            test_command=cfg.test_command,
+            context=cfg.context,
+        )
+
+    return _emit_plan(args, target, tasks, batches, run_id=saved_run_id)
+
+
+def _batches_from_checkpoint(cp: Checkpoint) -> list[FocusBatch]:
+    """Reconstruct :class:`FocusBatch` objects from a loaded checkpoint."""
+    out: list[FocusBatch] = []
+    for b in cp.batches:
+        raw_tasks = b.get("tasks", [])
+        if not isinstance(raw_tasks, list):
+            continue
+        batch_tasks = tuple(
+            FocusTask(
+                file_path=str(t["file_path"]),
+                priority=int(str(t["priority"])),
+                prompt=str(t.get("prompt", "")),
+            )
+            for t in raw_tasks
+            if isinstance(t, dict) and "file_path" in t and "priority" in t
+        )
+        out.append(
+            FocusBatch(
+                batch_id=int(str(b["batch_id"])),
+                tasks=batch_tasks,
+                complexity=str(b["complexity"]),
+            )
+        )
+    return out
+
+
+def _emit_plan(
+    args: argparse.Namespace,
+    target: Path,
+    tasks: list[FocusTask],
+    batches: list[FocusBatch] | None,
+    *,
+    run_id: str | None = None,
+    context: str = "",
+) -> int:
+    """Shared rendering logic — JSON or pretty, optional --output FILE."""
     if getattr(args, "json", False):
-        batches = None
-        if args.batch_size and args.batch_size > 1:
-            batches = create_focus_batches(tasks, files_per_batch=args.batch_size)
-        print(json.dumps(_plan_to_dict(target, tasks, batches), indent=2))
+        estimate = None
+        if getattr(args, "estimate", False):
+            cfg = _config_from_args(args)
+            estimate = estimate_cost(
+                tasks,
+                batches,
+                advisor_model=cfg.advisor_model,
+                runner_model=cfg.runner_model,
+                max_fixes_per_runner=cfg.max_fixes_per_runner,
+            )
+        payload = _plan_to_dict(target, tasks, batches, estimate=estimate, run_id=run_id)
+        rendered = json.dumps(payload, indent=2)
+        output_file = getattr(args, "output", None)
+        if output_file:
+            Path(output_file).write_text(rendered + "\n", encoding="utf-8")
+            if not getattr(args, "quiet", False):
+                print(_style.dim(f"wrote plan to {output_file}"))
+        else:
+            print(rendered)
         return 0
 
     if not tasks:
-        print(_style.warning_box(f"No files at priority P{args.min_priority}+ in {target}"))
-        print(_style.tip("Try --min-priority 1 to include all files"))
-        print(_style.tip("Or adjust --file-types to match your file extensions"))
+        hint = (
+            "--since/--staged/--branch selection"
+            if context == "" and _is_git_scoped(args)
+            else None
+        )
+        if hint:
+            print(_style.warning_box(f"No files matched the {hint}"))
+        else:
+            print(_style.warning_box(f"No files at priority P{args.min_priority}+ in {target}"))
+            print(_style.tip("Try --min-priority 1 to include all files"))
+            print(_style.tip("Or adjust --file-types to match your file extensions"))
         return 0
 
-    if args.batch_size and args.batch_size > 1:
-        batches = create_focus_batches(tasks, files_per_batch=args.batch_size)
+    if batches:
         print(_style.colorize_markdown(format_batch_plan(batches)))
     else:
         print(_style.colorize_markdown(format_dispatch_plan(tasks)))
+
+    if getattr(args, "estimate", False):
+        cfg = _config_from_args(args)
+        est = estimate_cost(
+            tasks,
+            batches,
+            advisor_model=cfg.advisor_model,
+            runner_model=cfg.runner_model,
+            max_fixes_per_runner=cfg.max_fixes_per_runner,
+        )
+        print()
+        print(_style.colorize_markdown(format_estimate(est)))
+
+    if run_id:
+        print()
+        print(_style.dim(f"checkpoint saved: run_id={run_id}"))
+
     print()
     print(_style.cta(f"/advisor {target}", "run the live pipeline in Claude Code"))
     return 0
+
+
+def _is_git_scoped(args: argparse.Namespace) -> bool:
+    return bool(
+        getattr(args, "since", None)
+        or getattr(args, "staged", False)
+        or getattr(args, "branch", None)
+    )
 
 
 def cmd_prompt(args: argparse.Namespace) -> int:
@@ -257,7 +445,17 @@ def cmd_prompt(args: argparse.Namespace) -> int:
         if show_frame:
             print(_style.dim(f"# advisor prompt — paste into Claude Code (target: {args.target})"))
             print()
-        print(build_advisor_prompt(config))
+        # Include recent history if available — gives the advisor longitudinal
+        # awareness of past findings. Disabled via --no-history.
+        history_block = ""
+        if not getattr(args, "no_history", False):
+            try:
+                entries = load_recent(args.target, limit=20)
+                if entries:
+                    history_block = "\n\n" + format_history_block(entries)
+            except (OSError, ValueError):
+                history_block = ""
+        print(build_advisor_prompt(config, history_block=history_block))
     elif args.step == "runner":
         runner_id = getattr(args, "runner_id", 1) or 1
         if show_frame:
@@ -330,7 +528,9 @@ def _format_status(s: Status, version: str) -> str:
     return "\n".join(lines)
 
 
-def _status_to_dict(s: Status, version: str) -> dict[str, object]:
+def _status_to_dict(
+    s: Status, version: str, installed_skill_version: str | None = None
+) -> dict[str, object]:
     """Serialize status to a JSON-friendly dict for ``--json`` output."""
 
     def _c(c: ComponentStatus) -> dict[str, object]:
@@ -341,10 +541,17 @@ def _status_to_dict(s: Status, version: str) -> dict[str, object]:
             "current": c.current,
         }
 
+    skill_block = _c(s.skill)
+    # Surface the version declared by the installed skill's badge (if any) so
+    # scripts can distinguish "outdated" from "brand new". None = predates
+    # the badge convention (<= 0.4.0) or file unreadable.
+    skill_block["installed_version"] = installed_skill_version
+
     return {
+        "schema_version": JSON_SCHEMA_VERSION,
         "version": version,
         "nudge": _c(s.nudge),
-        "skill": _c(s.skill),
+        "skill": skill_block,
         "opt_out": s.opt_out,
         "healthy": (s.nudge.present and s.nudge.current and s.skill.present and s.skill.current),
     }
@@ -355,10 +562,11 @@ def cmd_status(args: argparse.Namespace) -> int:
     nudge_target = Path(args.path) if args.path else None
     skill_target = Path(args.skill_path) if args.skill_path else None
     s = get_status(nudge_path=nudge_target, skill_path=skill_target)
+    installed = get_installed_skill_version(path=skill_target)
     healthy = s.nudge.present and s.nudge.current and s.skill.present and s.skill.current
 
     if getattr(args, "json", False):
-        print(json.dumps(_status_to_dict(s, _get_version()), indent=2))
+        print(json.dumps(_status_to_dict(s, _get_version(), installed), indent=2))
     else:
         print(_format_status(s, _get_version()))
         if healthy:
@@ -421,9 +629,10 @@ def cmd_install(args: argparse.Namespace) -> int:
         nudge_target = Path(args.path) if args.path else None
         skill_target = Path(args.skill_path) if args.skill_path else None
         s = get_status(nudge_path=nudge_target, skill_path=skill_target)
+        installed = get_installed_skill_version(path=skill_target)
         quiet = getattr(args, "quiet", False)
         if getattr(args, "json", False):
-            print(json.dumps(_status_to_dict(s, _get_version()), indent=2))
+            print(json.dumps(_status_to_dict(s, _get_version(), installed), indent=2))
         elif not quiet:
             print(_format_status(s, _get_version()))
         ok = s.nudge.present and s.nudge.current and s.skill.present and s.skill.current
@@ -489,6 +698,56 @@ def cmd_protocol(_args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """Extended diagnostic: status + git/claude/python/env checks."""
+    nudge_target = Path(args.path) if args.path else None
+    skill_target = Path(args.skill_path) if args.skill_path else None
+    report = run_doctor(
+        nudge_path=nudge_target,
+        skill_path=skill_target,
+        version=_get_version(),
+    )
+    if getattr(args, "json", False):
+        payload = {"schema_version": JSON_SCHEMA_VERSION, **report.to_dict()}
+        print(json.dumps(payload, indent=2))
+    else:
+        print(format_report(report))
+    strict = getattr(args, "strict", False)
+    if strict and not report.healthy:
+        return _STRICT_NOOP_EXIT
+    return 0
+
+
+def cmd_history(args: argparse.Namespace) -> int:
+    """Show recent CONFIRMED findings from ``.advisor/history.jsonl``."""
+    target = Path(args.target)
+    entries = load_recent(target, limit=args.limit)
+    if getattr(args, "json", False):
+        payload = {
+            "schema_version": HISTORY_SCHEMA_VERSION,
+            "target": str(target),
+            "count": len(entries),
+            "entries": [
+                {
+                    "timestamp": e.timestamp,
+                    "file_path": e.file_path,
+                    "severity": e.severity,
+                    "description": e.description,
+                    "status": e.status,
+                    "run_id": e.run_id,
+                }
+                for e in entries
+            ],
+        }
+        print(json.dumps(payload, indent=2))
+        return 0
+    if not entries:
+        print(_style.dim(f"no history at {target}/.advisor/history.jsonl"))
+        return 0
+    print(_style.colorize_markdown(format_history_block(entries)))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="advisor",
@@ -539,6 +798,61 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Emit the ranked plan as JSON for scripting (no colors, no CTA)",
     )
+    p_plan.add_argument(
+        "--output",
+        default="",
+        metavar="FILE",
+        help="Write the (JSON) plan to FILE instead of stdout",
+    )
+    p_plan.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress informational lines (errors still go to stderr)",
+    )
+    p_plan.add_argument(
+        "--estimate",
+        action="store_true",
+        help="Include a token/cost estimate for the planned run",
+    )
+    # Test orchestration — advisor will re-dispatch fix failures to the
+    # producing runner when this is set.
+    p_plan.add_argument(
+        "--test-cmd",
+        default="",
+        metavar="CMD",
+        help='Shell command to run after each fix wave (e.g. "pytest -q")',
+    )
+    # Git-incremental scope — mutually exclusive (enforced in the cmd
+    # function; argparse mutex groups interact poorly with nargs="?").
+    p_plan.add_argument(
+        "--since",
+        default=None,
+        metavar="REF",
+        help="Scope to files changed since git REF (e.g. HEAD~5, main)",
+    )
+    p_plan.add_argument(
+        "--staged",
+        action="store_true",
+        help="Scope to files currently staged for commit",
+    )
+    p_plan.add_argument(
+        "--branch",
+        default=None,
+        metavar="BASE",
+        help="Scope to files changed vs BASE ref (PR-style: BASE...HEAD)",
+    )
+    # Checkpoint + resume — for expensive runs that may be interrupted.
+    p_plan.add_argument(
+        "--checkpoint",
+        action="store_true",
+        help="Save the plan to .advisor/run-<id>.json for later --resume",
+    )
+    p_plan.add_argument(
+        "--resume",
+        default=None,
+        metavar="RUN_ID",
+        help="Resume a previously-saved checkpoint (skips discovery)",
+    )
     p_plan.set_defaults(func=cmd_plan)
 
     p_prompt = sub.add_parser("prompt", help="Print a step prompt for pasting into Claude Code")
@@ -550,6 +864,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=0,
         help="Actual file count for verify prompt (default: use --max-runners)",
+    )
+    p_prompt.add_argument(
+        "--no-history",
+        action="store_true",
+        help="Skip loading .advisor/history.jsonl into the advisor prompt",
     )
     p_prompt.set_defaults(func=cmd_prompt)
 
@@ -598,7 +917,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_status = sub.add_parser(
         "status",
-        aliases=["doctor"],
         help="Print a health summary of the advisor install (writes nothing)",
     )
     p_status.add_argument("--path", default="", help="Override target CLAUDE.md path")
@@ -618,6 +936,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit status as JSON for scripting (no colors, no CTA)",
     )
     p_status.set_defaults(func=cmd_status)
+
+    p_doctor = sub.add_parser(
+        "doctor",
+        help=(
+            "Extended diagnostic: install status + git/claude/python/env checks (writes nothing)"
+        ),
+    )
+    p_doctor.add_argument("--path", default="", help="Override target CLAUDE.md path")
+    p_doctor.add_argument(
+        "--skill-path",
+        default="",
+        help="Override target SKILL.md path",
+    )
+    p_doctor.add_argument(
+        "--strict",
+        action="store_true",
+        help=f"Exit {_STRICT_NOOP_EXIT} if any check has level=fail",
+    )
+    p_doctor.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the doctor report as JSON for scripting (no colors)",
+    )
+    p_doctor.set_defaults(func=cmd_doctor)
 
     p_uninstall = sub.add_parser(
         "uninstall",
@@ -652,6 +994,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_protocol.set_defaults(func=cmd_protocol)
 
+    p_history = sub.add_parser(
+        "history",
+        help="Show recent CONFIRMED findings logged under <target>/.advisor/history.jsonl",
+    )
+    p_history.add_argument(
+        "target",
+        nargs="?",
+        default=".",
+        help="Target directory containing the .advisor/ tree (default: current directory)",
+    )
+    p_history.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help="Maximum number of recent entries to show (default: %(default)s)",
+    )
+    p_history.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit entries as JSON for scripting",
+    )
+    p_history.set_defaults(func=cmd_history)
+
     return parser
 
 
@@ -669,6 +1034,7 @@ _NUDGE_SKIP_COMMANDS = {
     "pipeline",
     "prompt",
     "protocol",
+    "history",
 }
 
 

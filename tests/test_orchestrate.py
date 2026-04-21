@@ -410,3 +410,108 @@ class TestBuildRunnerHandoffMessage:
             extra_context="   ",
         )
         assert "Extra context" not in msg["message"]
+
+
+class TestTeamConfigEnhancements:
+    """E5, E8, E10 — env-driven defaults, test_command, model validation."""
+
+    def test_test_command_defaults_empty(self):
+        from advisor.orchestrate import default_team_config
+
+        config = default_team_config("/src")
+        assert config.test_command == ""
+
+    def test_test_command_flows_through(self):
+        from advisor.orchestrate import default_team_config
+
+        config = default_team_config("/src", test_command="pytest -q")
+        assert config.test_command == "pytest -q"
+
+    def test_advisor_prompt_includes_test_block(self):
+        from advisor.orchestrate import default_team_config
+
+        config = default_team_config("/src", test_command="pytest -q")
+        prompt = build_advisor_prompt(config)
+        assert "Regression gate" in prompt
+        assert "pytest -q" in prompt
+
+    def test_advisor_prompt_omits_test_block_when_none(self):
+        from advisor.orchestrate import default_team_config
+
+        config = default_team_config("/src")
+        prompt = build_advisor_prompt(config)
+        assert "Regression gate" not in prompt
+
+    def test_advisor_prompt_history_block(self):
+        from advisor.orchestrate import default_team_config
+
+        config = default_team_config("/src")
+        prompt = build_advisor_prompt(config, history_block="## Recent findings")
+        assert "Recent findings" in prompt
+
+    def test_env_var_advisor_model(self, monkeypatch):
+        from advisor.orchestrate import default_team_config
+
+        monkeypatch.setenv("ADVISOR_MODEL", "sonnet")
+        config = default_team_config("/src")
+        assert config.advisor_model == "sonnet"
+
+    def test_env_var_runner_model(self, monkeypatch):
+        from advisor.orchestrate import default_team_config
+
+        monkeypatch.setenv("ADVISOR_RUNNER_MODEL", "haiku")
+        config = default_team_config("/src")
+        assert config.runner_model == "haiku"
+
+    def test_env_var_max_runners(self, monkeypatch):
+        from advisor.orchestrate import default_team_config
+
+        monkeypatch.setenv("ADVISOR_MAX_RUNNERS", "8")
+        config = default_team_config("/src")
+        assert config.max_runners == 8
+
+    def test_env_var_file_types(self, monkeypatch):
+        from advisor.orchestrate import default_team_config
+
+        monkeypatch.setenv("ADVISOR_FILE_TYPES", "*.{js,ts}")
+        config = default_team_config("/src")
+        assert config.file_types == "*.{js,ts}"
+
+    def test_env_var_test_command(self, monkeypatch):
+        from advisor.orchestrate import default_team_config
+
+        monkeypatch.setenv("ADVISOR_TEST_COMMAND", "npm test")
+        config = default_team_config("/src")
+        assert config.test_command == "npm test"
+
+    def test_explicit_non_default_overrides_env(self, monkeypatch):
+        """An explicit non-default value wins over env; explicit-matches-default
+        defers to env (documented trade-off in default_team_config docstring)."""
+        from advisor.orchestrate import default_team_config
+
+        monkeypatch.setenv("ADVISOR_MODEL", "haiku")
+        config = default_team_config("/src", advisor_model="sonnet")
+        assert config.advisor_model == "sonnet"
+
+
+class TestIsKnownModel:
+    """E10 — model name validation."""
+
+    def test_known_shortcuts(self):
+        from advisor.orchestrate import is_known_model
+
+        for name in ("opus", "sonnet", "haiku"):
+            assert is_known_model(name) is True
+
+    def test_long_form_accepted(self):
+        from advisor.orchestrate import is_known_model
+
+        assert is_known_model("claude-sonnet-4-5-20250929") is True
+        assert is_known_model("claude-opus-4-20250514") is True
+
+    def test_unknown_rejected(self):
+        from advisor.orchestrate import is_known_model
+
+        assert is_known_model("gpt-4") is False
+        assert is_known_model("unknown-model") is False
+        assert is_known_model("") is False

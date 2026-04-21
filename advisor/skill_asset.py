@@ -8,6 +8,22 @@ configuration in pyproject.toml.
 
 from __future__ import annotations
 
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
+
+
+def _advisor_version() -> str:
+    try:
+        return _pkg_version("advisor-agent")
+    except PackageNotFoundError:  # pragma: no cover — editable fallback
+        return "0+unknown"
+
+
+#: HTML-comment badge so ``advisor status`` can parse the installed version
+#: without hashing the whole file. Must match ``_BADGE_RE`` in ``install.py``.
+VERSION_BADGE = f"<!-- advisor:{_advisor_version()} -->"
+
+
 SKILL_MD = """---
 name: advisor
 description: >-
@@ -30,6 +46,7 @@ description: >-
   file look-up, or the user explicitly wants something else.
 origin: custom
 ---
+__VERSION_BADGE__
 
 # Advisor — Opus-led review-and-fix pipeline
 
@@ -301,3 +318,5 @@ The local `advisor` binary provides:
 - `advisor prompt advisor <dir>` — the exact Opus advisor prompt
 - `advisor plan <dir>` — local batch dispatch plan (no agents spawned)
 """
+
+SKILL_MD = SKILL_MD.replace("__VERSION_BADGE__", VERSION_BADGE)

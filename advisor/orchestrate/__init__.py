@@ -20,7 +20,7 @@ instead — Opus now handles discovery directly.
 from __future__ import annotations
 
 from .advisor_prompt import build_advisor_agent, build_advisor_prompt
-from .config import TeamConfig, default_team_config
+from .config import KNOWN_MODEL_SHORTCUTS, TeamConfig, default_team_config, is_known_model
 from .pipeline import render_pipeline
 from .runner_prompts import (
     build_runner_agents,
@@ -35,8 +35,10 @@ from .verify_dispatch import build_verify_dispatch_prompt, build_verify_message
 
 __all__ = [
     # config
+    "KNOWN_MODEL_SHORTCUTS",
     "TeamConfig",
     "default_team_config",
+    "is_known_model",
     # advisor
     "build_advisor_agent",
     "build_advisor_prompt",

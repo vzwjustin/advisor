@@ -7,3 +7,7 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+.coverage
+.advisor/
+
+

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import enum
 import os
+import re
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -16,6 +17,33 @@ from pathlib import Path
 from typing import IO
 
 from .skill_asset import SKILL_MD
+
+#: Matches ``<!-- advisor:0.4.0 -->``; used to extract installed skill version
+#: without hashing or diffing the whole file.
+_BADGE_RE = re.compile(r"<!--\s*advisor:([^\s>]+)\s*-->")
+
+
+def parse_badge(text: str) -> str | None:
+    """Return the version declared by the first advisor badge in ``text``.
+
+    Returns ``None`` when no badge is present — e.g. a skill installed by
+    advisor <= 0.4.0 that predates the version-badge convention.
+    """
+    m = _BADGE_RE.search(text)
+    return m.group(1) if m else None
+
+
+def get_installed_skill_version(path: Path | None = None) -> str | None:
+    """Read ``~/.claude/skills/advisor/SKILL.md`` and return its advisor version.
+
+    Returns ``None`` if the file does not exist, is unreadable, or predates
+    the badge convention.
+    """
+    target = path or default_skill_path()
+    try:
+        return parse_badge(target.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return None
 
 
 class InstallAction(str, enum.Enum):

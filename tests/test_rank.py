@@ -275,3 +275,52 @@ class TestAdvisorIgnore:
         # falls back to path-based keywords.
         ranked = rank_files(["src/auth.py"], read_fn=bad)
         assert ranked[0].priority == 5  # still matched on "auth" in path
+
+
+class TestLanguageAwareKeywords:
+    """E2 — per-language keyword sets extend the core priority map."""
+
+    def test_language_for_path_python(self):
+        from advisor.rank import language_for_path
+
+        assert language_for_path("src/auth.py") == "python"
+
+    def test_language_for_path_javascript(self):
+        from advisor.rank import language_for_path
+
+        assert language_for_path("src/auth.js") == "javascript"
+        assert language_for_path("src/auth.jsx") == "javascript"
+        # .ts/.tsx share the JS/TS bucket — keyword overlap is high
+        assert language_for_path("src/auth.ts") == "javascript"
+
+    def test_language_for_path_go(self):
+        from advisor.rank import language_for_path
+
+        assert language_for_path("cmd/main.go") == "go"
+
+    def test_language_for_path_rust(self):
+        from advisor.rank import language_for_path
+
+        assert language_for_path("src/main.rs") == "rust"
+
+    def test_language_for_path_unknown(self):
+        from advisor.rank import language_for_path
+
+        assert language_for_path("README.md") is None
+
+    def test_js_file_picks_up_js_specific_keyword(self):
+        """JS-specific keywords like 'eval' / 'innerHTML' raise priority."""
+        ranked = rank_files(
+            ["src/handler.js"],
+            read_fn=lambda _: "document.body.innerHTML = userInput;",
+        )
+        # innerHTML should be caught by the JS extension set; content alone
+        # (without "auth"/"login"/"password") wouldn't otherwise be P3+
+        assert ranked[0].priority >= 3
+
+    def test_language_extra_keywords_contains_js(self):
+        from advisor.rank import LANGUAGE_EXTRA_KEYWORDS
+
+        assert "javascript" in LANGUAGE_EXTRA_KEYWORDS
+        assert "go" in LANGUAGE_EXTRA_KEYWORDS
+        assert "rust" in LANGUAGE_EXTRA_KEYWORDS
