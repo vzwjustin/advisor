@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-04-22
+
 ### Added — runner budget + scope anchors (drift + exhaustion defense)
 - **`advisor/runner_budget.py`** — pure `RunnerBudget` dataclass,
   `parse_scope_anchor`, `update_budget`, `budget_status`,
@@ -27,7 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   clause that mirrors the runner contract and encodes the soft/hard
   rotation protocol (BUDGET SOFT → compact, BUDGET ROTATE → handoff).
 
-### Fixed — PR#9 review follow-ups (pre-release)
+### Fixed — runner budget pre-release fixes
 - Scope regex: hyphens inside filenames (`src/my-file.py`) were
   consumed by the separator group, producing `file=src/my, stage=file`.
   The regex now requires whitespace around the `·|-` separator, so
@@ -45,8 +47,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `normalize_batch_files(paths) -> frozenset[str]` and a
   `frozenset` fast-path on `out_of_batch` so hot loops amortize the
   normalization work instead of rebuilding the set per turn.
-
-## [0.5.0] - 2026-04-22
 
 ### Added — SARIF + GitHub Action (v0.5 Phase 1)
 - **`advisor/sarif.py`**: pure SARIF 2.1.0 emitter. `findings_to_sarif`

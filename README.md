@@ -23,7 +23,7 @@ Priority scale: **P5** auth/secrets · **P4** user input/parsing · **P3** handl
 ## Install (30 seconds)
 
 ```bash
-pipx install git+https://github.com/vzwjustin/advisor
+pipx install advisor-agent
 advisor status
 ```
 
@@ -35,12 +35,12 @@ slash command automatically. `advisor status` confirms what landed where.
 
 ```bash
 # Zero-install one-shot (uv)
-uvx --from git+https://github.com/vzwjustin/advisor advisor pipeline src/
+uvx advisor-agent pipeline src/
 
 # Plain pip
-pip install git+https://github.com/vzwjustin/advisor
+pip install advisor-agent
 
-# Local dev
+# From source
 git clone https://github.com/vzwjustin/advisor && cd advisor && pip install -e .
 
 # Local dev with uv tool (reinstall after edits)
@@ -84,6 +84,8 @@ Or use the standalone CLI to inspect the prompts and plans:
 advisor pipeline src/                  # full pipeline reference
 advisor plan src/                      # rank local files, print dispatch plan
 advisor plan src/ --json               # same, machine-readable for `jq` etc.
+advisor plan src/ --sarif out.sarif    # SARIF 2.1.0 output for Code Scanning
+advisor audit RUN_ID [TARGET]          # post-hoc diagnostic for a completed run
 advisor prompt advisor src/            # the advisor's prompt body
 advisor prompt runner src/ --runner-id 1   # a runner's bootstrap prompt
 advisor prompt verify src/ < findings  # verify-pass prompt
@@ -91,6 +93,11 @@ advisor status                         # health check (alias: doctor)
 advisor status --json                  # JSON-formatted health for scripting
 advisor install                        # install nudge + /advisor skill
 advisor uninstall                      # remove nudge + /advisor skill
+advisor history                        # recent findings from .advisor/history.jsonl
+advisor baseline create                # snapshot current findings as baseline
+advisor baseline diff                  # compare current run vs. baseline
+advisor presets                        # list available rule-pack presets
+advisor suppressions --list            # list active false-positive suppressions
 ```
 
 Every subcommand's `target` defaults to `.` (current directory). Piping a
@@ -99,6 +106,9 @@ long scope description is supported via `--context -` (reads stdin).
 Flags: `--team`, `--file-types`, `--max-runners` (advisory — Opus may
 exceed for large repos), `--min-priority`, `--context`, `--advisor-model`,
 `--runner-model`. Default models: `opus` / `sonnet`.
+
+Context-pressure knobs (reduce runner context exhaustion):
+`--max-fixes-per-runner N` · `--large-file-line-threshold N` · `--large-file-max-fixes M`.
 
 Automation flags: `--json` on `status`/`plan`/`install --check`,
 `--quiet` on `install`/`uninstall`, `--strict` on `status`/`install`/`uninstall`
@@ -134,6 +144,8 @@ from advisor import (
     build_runner_pool_prompt,
     build_runner_dispatch_messages,
     build_runner_handoff_message,
+    build_fix_assignment_message,   # stamped fix-count header per assignment
+    check_batch_fix_budget,         # pre-flight cap validator
     build_verify_dispatch_prompt,
     build_verify_message,
     rank_files,
@@ -170,6 +182,7 @@ Code `Agent(...)` or `SendMessage(...)` call.
 - `advisor/rank.py` — `rank_files`, `RankedFile` (keyword-signal priority ranking)
 - `advisor/focus.py` — `create_focus_tasks` / `create_focus_batches`, plan formatters
 - `advisor/verify.py` — `Finding`, `parse_findings_from_text`, verify-pass builders
+- `advisor/runner_budget.py` — `RunnerBudget`, scope-anchor parsing, per-runner output-char budget and rotation logic
 - `advisor/install.py` — idempotent CLAUDE.md nudge + `/advisor` skill install/uninstall
 - `advisor/_style.py` — zero-dep ANSI styling (colors on by default)
 
