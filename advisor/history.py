@@ -219,14 +219,14 @@ def format_history_block(entries: list[HistoryEntry]) -> str:
 def new_run_id() -> str:
     """Generate a collision-resistant run_id.
 
-    Format: ``YYYYMMDDTHHMMSSZ-XXXX`` where ``XXXX`` is a random 4-hex
-    suffix. The leading timestamp keeps lexical order == chronological
+    Format: ``YYYYMMDDTHHMMSSZ-XXXXXXXX`` where ``XXXXXXXX`` is a random
+    8-hex suffix. The leading timestamp keeps lexical order == chronological
     order (so ``sorted(..., reverse=True)`` in ``list_checkpoints`` still
     returns newest-first); the suffix prevents two back-to-back runs in
     the same second from overwriting each other's checkpoint.
     """
     ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    return f"{ts}-{secrets.token_hex(2)}"
+    return f"{ts}-{secrets.token_hex(4)}"
 
 
 def load_recent_findings(history_path: Path, *, limit: int = 500) -> list[HistoryEntry]:

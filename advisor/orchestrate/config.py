@@ -160,6 +160,8 @@ def default_team_config(
     if max_runners is None:
         raw = _env_int_or("ADVISOR_MAX_RUNNERS", 5)
         max_runners = raw if raw >= 1 else 5
+    elif max_runners < 1:
+        max_runners = 1
     if file_types_is_default:
         file_types = _env_or("ADVISOR_FILE_TYPES", file_types)
     if min_priority_is_default:

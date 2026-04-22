@@ -152,6 +152,13 @@ class TestDoubleStarGlob:
 
         assert _matches_any_pattern("tests/foo.py", ["src/**/*.py"]) is False
 
+    def test_double_star_bracket_negation_only_no_error(self):
+        # `**/[!].py` produced `[^]` (invalid regex) before the fix.
+        # Must not raise re.error and must not match an unrelated file.
+        from advisor.rank import _matches_any_pattern
+
+        assert _matches_any_pattern("a/foo.py", ["**/[!].py"]) is False
+
 
 @pytest.mark.parametrize(
     "priority,keyword",

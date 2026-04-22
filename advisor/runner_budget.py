@@ -258,10 +258,25 @@ def out_of_batch(anchor: ScopeAnchor | None, batch_files: Iterable[str]) -> bool
 
 
 def _normalize(path: str) -> str:
-    """Shared normalizer matching ``verify._normalize_path``."""
+    """Shared normalizer matching ``verify._normalize_path``.
+
+    Strips whitespace, backticks, leading ``./``, backslashes, and trailing
+    ``:line`` / ``:line:col`` suffixes so anchors that include a line number
+    (``SCOPE: src/foo.py:42 · reading``) match batch entries keyed by
+    filename only.
+    """
     p = path.strip().strip("`").replace("\\", "/")
     if p.startswith("./"):
         p = p[2:]
+    # Strip trailing ``:line`` / ``:line:col`` suffixes so anchors that
+    # include a line number (``SCOPE: src/foo.py:42 · reading``) match
+    # batch entries keyed by filename only. Matches verify._normalize_path.
+    while ":" in p:
+        head, _, tail = p.rpartition(":")
+        if tail.isdigit() and head:
+            p = head
+            continue
+        break
     return p
 
 

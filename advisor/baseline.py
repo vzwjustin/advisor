@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,6 +35,49 @@ SCHEMA_VERSION = "1.0"
 # Sentinel top-level record written on the first line so parsers can
 # verify shape without decoding the full payload.
 _HEADER_KEY = "__advisor_baseline__"
+
+
+def _atomic_write_text(target: Path, text: str) -> None:
+    """Write ``text`` to ``target`` atomically via a same-dir tmpfile + rename.
+
+    A SIGINT / disk-full mid-write leaves the original file untouched —
+    ``os.replace`` is atomic on POSIX and Windows when source and target
+    sit on the same filesystem. We write to a tmpfile in the target's
+    parent directory to guarantee that property.
+    """
+    parent = target.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=str(parent))
+    tmp = Path(tmp_name)
+    try:
+        fh = os.fdopen(fd, "w", encoding="utf-8")
+    except BaseException:
+        os.close(fd)
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+    try:
+        with fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, target)
+        try:
+            dir_fd = os.open(str(parent), os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            pass
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,7 +126,6 @@ def findings_to_entries(findings: list[Finding]) -> list[BaselineEntry]:
 
 def write_baseline(path: Path, entries: list[BaselineEntry]) -> None:
     """Write entries to a baseline JSONL file, overwriting any existing file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
     lines: list[str] = [
         json.dumps({_HEADER_KEY: True, "schema_version": SCHEMA_VERSION, "count": len(entries)})
     ]
@@ -97,7 +141,7 @@ def write_baseline(path: Path, entries: list[BaselineEntry]) -> None:
                 }
             )
         )
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _atomic_write_text(path, "\n".join(lines) + "\n")
 
 
 def read_baseline(path: Path) -> list[BaselineEntry]:

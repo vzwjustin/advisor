@@ -101,7 +101,13 @@ def _matches_glob(file_path: str, pattern: str) -> bool:
             else:
                 parts.append(re.escape(c))
                 i += 1
-        return bool(re.match("^" + "".join(parts) + "$", p))
+        try:
+            return bool(re.match("^" + "".join(parts) + "$", p))
+        except re.error:
+            # Malformed regex translation — fall through to plain fnmatch
+            # so a suppressions.jsonl with an edge-case glob doesn't crash
+            # the whole load pass.
+            pass
     return fnmatch.fnmatch(p, pattern)
 
 

@@ -286,18 +286,50 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
 
 def _safe_rglob(target: Path, pattern: str) -> tuple[list[str] | None, str | None]:
     """Return (paths, error). `error` is non-None on a malformed glob pattern
-    or a filesystem error (e.g. symlink loops, permission denied)."""
+    or a filesystem error (e.g. symlink loops, permission denied).
+
+    Symlinks pointing outside ``target`` are skipped silently (per-entry
+    ``.resolve().is_relative_to`` check, mirroring
+    :func:`advisor._fs.safe_rglob_paths`). Per-entry ELOOP / permission
+    errors skip that single entry rather than aborting the whole scan."""
     try:
         # Resolve before walking — `Path.rglob` on an unresolved path
         # containing symlink cycles can hang on Python <3.13 instead of
         # raising. Resolving first canonicalizes the start point and lets
         # the OS-level walk surface ELOOP as an OSError we already catch.
-        target = target.resolve()
-        return [str(p) for p in target.rglob(pattern) if p.is_file()], None
+        resolved_target = target.resolve()
+        iterator = resolved_target.rglob(pattern)
     except ValueError as exc:
         return None, f"invalid --file-types pattern {pattern!r}: {exc}"
     except OSError as exc:
         return None, f"filesystem error scanning {target}: {exc}"
+
+    results: list[str] = []
+    for p in iterator:
+        try:
+            if p.is_file() and p.resolve().is_relative_to(resolved_target):
+                results.append(str(p))
+        except (OSError, ValueError):
+            # Single broken symlink or permission-denied entry — skip it
+            # rather than aborting the whole scan. Mirrors _fs.safe_rglob_paths.
+            continue
+    return results, None
+
+
+def _valid_port(raw: str) -> int:
+    """argparse ``type=`` validator for TCP port numbers (1..65535).
+
+    Raises ``argparse.ArgumentTypeError`` on out-of-range or non-integer
+    input so the CLI shows a clean usage error instead of a cryptic OS
+    bind failure.
+    """
+    try:
+        n = int(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid port {raw!r}: {exc}") from exc
+    if not 1 <= n <= 65535:
+        raise argparse.ArgumentTypeError(f"port {n} out of range — must be between 1 and 65535")
+    return n
 
 
 def _apply_exclude_patterns(target: Path, paths: list[str], patterns: list[str]) -> list[str]:
@@ -2096,7 +2128,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_ui.add_argument(
         "--port",
-        type=int,
+        type=_valid_port,
         default=8765,
         help="Port to bind (default: %(default)s)",
     )

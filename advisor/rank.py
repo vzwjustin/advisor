@@ -351,6 +351,15 @@ def load_advisorignore(base_dir: str | Path) -> list[str]:
                     stacklevel=2,
                 )
                 continue
+            if stripped.startswith("/"):
+                import warnings
+
+                warnings.warn(
+                    f"{path}: anchored pattern {stripped!r} is not fully supported — "
+                    "matching will behave as if the leading '/' were absent (unanchored)",
+                    UserWarning,
+                    stacklevel=2,
+                )
             patterns.append(stripped.lstrip("/"))
     return patterns
 
@@ -398,7 +407,12 @@ def _double_star_to_regex(pattern: str) -> re.Pattern[str]:
                 else:
                     if body.startswith("!"):
                         body = "^" + body[1:]
-                    parts.append("[" + body + "]")
+                    if body in ("^", ""):
+                        # Empty char class or negation-only — treat as literal
+                        # to avoid compiling ``[^]`` (a regex error).
+                        parts.append(re.escape(pattern[i : end + 1]))
+                    else:
+                        parts.append("[" + body + "]")
                     i = end + 1
         else:
             parts.append(re.escape(c))
@@ -450,10 +464,13 @@ def _matches_any_pattern(file_path: str, patterns: list[str]) -> bool:
         # Match against full path
         if fnmatch.fnmatch(path_str, pattern):
             return True
-        # Match against any path component for bare-word patterns only (no glob metacharacters).
-        # Wildcard patterns like *.py are excluded to avoid matching directory components
-        # with dotted names (e.g., scripts.py/) when only filename matching was intended.
-        if not any(c in pattern for c in "*?[") and any(
+        # Match against any path component for bare-word patterns only
+        # (no glob metacharacters AND no `.`). Filename-shaped patterns
+        # like `foo.py` are excluded — they should match via the filename
+        # or full-path strategies above, not as directory components,
+        # otherwise a single dir named `foo.py/` would shadow every file
+        # beneath it.
+        if not any(c in pattern for c in "*?[.") and any(
             fnmatch.fnmatch(part, pattern.rstrip("/")) for part in path.parts
         ):
             return True

@@ -82,14 +82,14 @@ class TestFormatHistoryBlock:
 class TestRunIdAndEntryNow:
     def test_new_run_id_format(self) -> None:
         rid = new_run_id()
-        # YYYYMMDDTHHMMSSZ-XXXX  (timestamp + "-" + 4 hex chars)
-        assert len(rid) == 21
+        # YYYYMMDDTHHMMSSZ-XXXXXXXX  (timestamp + "-" + 8 hex chars)
+        assert len(rid) == 25
         ts, sep, suffix = rid.partition("-")
         assert sep == "-"
         assert ts.endswith("Z")
         assert len(ts) == 16
-        assert len(suffix) == 4
-        # 4-hex suffix ⇒ only 0-9a-f
+        assert len(suffix) == 8
+        # 8-hex suffix ⇒ only 0-9a-f
         assert all(c in "0123456789abcdef" for c in suffix)
 
     def test_new_run_id_is_unique_within_a_second(self) -> None:
@@ -98,8 +98,8 @@ class TestRunIdAndEntryNow:
         checkpoint. The random suffix makes collisions vanishingly rare.
         """
         ids = {new_run_id() for _ in range(50)}
-        # With 16 bits of entropy, 50 draws colliding would be a freak event
-        # (birthday bound ≈ 50²/2¹⁶ ≈ 0.04). Require at least 48 unique.
+        # With 32 bits of entropy, 50 draws colliding would be a freak event
+        # (birthday bound ≈ 50²/2³² ≈ 0). Require at least 48 unique.
         assert len(ids) >= 48
 
     def test_entry_now_populates_timestamp(self) -> None:
