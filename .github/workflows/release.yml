@@ -1,14 +1,10 @@
 name: Release
 
-# Tag-triggered PyPI publish. Push a tag matching `v<semver>` (e.g.
-# `v0.4.0`) and this workflow will:
+# Tag-triggered validation. Push a tag matching `v<semver>` (e.g. `v0.5.0`)
+# and this workflow will:
 #   1. Verify the tag matches `pyproject.toml` `version`
 #   2. Run the full test suite on the tagged commit
 #   3. Build sdist + wheel with `python -m build`
-#   4. Publish to PyPI via Trusted Publishing (OIDC — no API token stored)
-#
-# Setup (one-time): configure the `advisor-agent` PyPI project with a
-# Trusted Publisher pointing at this repo + workflow. No secrets needed.
 
 on:
   push:
@@ -79,22 +75,3 @@ jobs:
         with:
           name: dist
           path: dist/
-
-  publish:
-    name: Publish to PyPI (Trusted Publisher)
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: pypi
-      url: https://pypi.org/p/advisor-agent
-    permissions:
-      id-token: write  # Required for Trusted Publishing via OIDC
-    steps:
-      - name: Download dist artifacts
-        uses: actions/download-artifact@v8
-        with:
-          name: dist
-          path: dist/
-
-      - name: Publish
-        uses: pypa/gh-action-pypi-publish@release/v1
