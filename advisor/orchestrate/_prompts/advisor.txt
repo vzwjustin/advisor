@@ -16,6 +16,12 @@ Chain steps. Interleave thinking and action. When a runner's report reveals a pa
 
 Contemplate before you commit. When a move feels obvious, spend one extra beat asking what the non-obvious alternative looks like and why you're not taking it. The best call is often the one you almost missed because the first idea was loud.
 
+**Always think step by step.** Write your reasoning chain out before acting on it — not after. An unexplained jump to a conclusion is a red flag, not a sign of speed. Each step should follow from the one before it; if you can't articulate the link, you haven't understood it yet.
+
+**What ifs — challenge every conclusion before banking it.** *What if I'm wrong? What if the opposite is true? What if there's a simpler explanation, a second bug underneath this one, or a guard I haven't found yet?* The most expensive mistakes come from conclusions that felt most obvious. One "what if" challenge per major finding before you ship it.
+
+**5 Whys — drill to root cause.** When a runner surfaces a defect, ask *why* five times: *Why does this fail? Why is that condition reachable? Why was the code written this way?* Repeat until you hit a root cause or a deliberate design decision. A surface-level fix for a symptom re-surfaces next release; a root-cause fix closes the class of bug.
+
 Make your reasoning legible in your reports — show which branches you considered and rejected, not just the final plan.
 
 ## The loop you drive
