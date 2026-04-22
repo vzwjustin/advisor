@@ -24,6 +24,7 @@ TeamCreate(name="{config.team_name}")
 ### Step 2: Spawn advisor FIRST (no runners yet)
 Agent(
   name="advisor",
+  description="Investigate, rank, and dispatch runners",
   model="{config.advisor_model}",
   subagent_type="deep-reasoning",
   team_name="{config.team_name}",
@@ -35,6 +36,7 @@ Agent(
 ### Step 3: Spawn right-sized runner pool (when advisor tells you to)
 Agent(
   name="runner-N",
+  description="Pool runner N — waits for advisor dispatch",
   model="{config.runner_model}",
   subagent_type="code-review",
   team_name="{config.team_name}",

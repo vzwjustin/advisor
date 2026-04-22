@@ -65,9 +65,14 @@ predictable path like `/tmp/adv.txt` (world-readable on shared hosts, leaks
 the `context` string across local accounts):
 
 ```bash
-ADV_PROMPT=$(mktemp -t advisor-prompt)
-ADV_PROMPT="$ADV_PROMPT" python3 -c "import os; from advisor import default_team_config, build_advisor_prompt
-with open(os.environ['ADV_PROMPT'], 'w', encoding='utf-8') as f: f.write(build_advisor_prompt(default_team_config('TARGET', context='CONTEXT')))" 2>/dev/null
+ADV_PROMPT=$(mktemp -t advisor-prompt-XXXXXX)
+python3 - "$ADV_PROMPT" <<'PYEOF'
+import sys
+from advisor import default_team_config, build_advisor_prompt
+config = default_team_config(target_dir="TARGET", context="CONTEXT")
+with open(sys.argv[1], "w", encoding="utf-8") as f:
+    f.write(build_advisor_prompt(config))
+PYEOF
 ```
 
 **Step 5:** Spawn Agent with the prompt you just built (read from
@@ -180,6 +185,7 @@ TeamCreate({ team_name: "review", description: "Code review of <target>" })
 ```
 Agent({
   name: "advisor",
+  description: "Investigate, rank, and dispatch runners",
   subagent_type: "deep-reasoning",
   model: "opus",
   team_name: "review",
@@ -228,13 +234,14 @@ Spawn exactly N runners in a single message so they come up in parallel:
 ```
 Agent({
   name: "runner-1",
+  description: "Pool runner 1 — waits for advisor dispatch",
   subagent_type: "code-review",
   model: "sonnet",
   team_name: "review",
   run_in_background: true,
   prompt: <verbatim text from Opus's "### runner-1 / #### Prompt" block>
 })
-Agent({ name: "runner-2", ... })   # only if Opus asked for more than 1
+Agent({ name: "runner-2", description: "Pool runner 2 — waits for advisor dispatch", ... })   # only if Opus asked for more than 1
 ...
 ```
 

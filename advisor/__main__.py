@@ -921,12 +921,14 @@ or spawning runners before the advisor) breaks the pipeline.
 1. TeamCreate(name="review")
 
 2. Spawn advisor FIRST (no runners yet):
-   Agent(name="advisor", model="opus", subagent_type="deep-reasoning",
+   Agent(name="advisor", description="Investigate, rank, and dispatch runners",
+         model="opus", subagent_type="deep-reasoning",
          team_name="review", prompt=<build_advisor_prompt(config)>)
 
 3. Advisor does Glob+Grep discovery, ranks P1–P5, decides runner pool size,
    THEN tells you to spawn N runners:
-   Agent(name="runner-<i>", model="sonnet", subagent_type="code-review",
+   Agent(name="runner-<i>", description="Pool runner <i> — waits for advisor dispatch",
+         model="sonnet", subagent_type="code-review",
          team_name="review", run_in_background=true,
          prompt=<build_runner_pool_prompt(i, config)>)
 
