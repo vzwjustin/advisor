@@ -28,6 +28,15 @@ from .audit import (
     audit_transcript,
     format_audit_report,
 )
+from .baseline import (
+    BaselineDiff,
+    BaselineEntry,
+    diff_against_baseline,
+    filter_against_baseline,
+    findings_to_entries,
+    read_baseline,
+    write_baseline,
+)
 from .checkpoint import (
     CHECKPOINT_SCHEMA_VERSION,
     Checkpoint,
@@ -52,9 +61,12 @@ from .history import (
     HistoryEntry,
     append_entries,
     entry_now,
+    file_repeat_counts,
+    file_repeat_scores,
     format_history_block,
     history_path,
     load_recent,
+    load_recent_findings,
     new_run_id,
 )
 from .install import (
@@ -94,6 +106,8 @@ from .orchestrate import (
     is_known_model,
     render_pipeline,
 )
+from .pr_comment import format_pr_comment
+from .presets import PRESETS, RulePack, get_preset, list_presets
 from .rank import (
     CONTENT_SCAN_LIMIT,
     LANGUAGE_EXTRA_KEYWORDS,
@@ -104,7 +118,14 @@ from .rank import (
     rank_files,
     rank_to_prompt,
 )
+from .sarif import (
+    SARIF_SCHEMA_URI,
+    SARIF_VERSION,
+    findings_to_sarif,
+    synthesize_rule_id,
+)
 from .skill_asset import SKILL_MD
+from .suppressions import Suppression, apply_suppressions, load_suppressions
 from .verify import (
     Finding,
     build_verify_prompt,
@@ -189,9 +210,12 @@ __all__ = [
     "HistoryEntry",
     "append_entries",
     "entry_now",
+    "file_repeat_counts",
+    "file_repeat_scores",
     "format_history_block",
     "history_path",
     "load_recent",
+    "load_recent_findings",
     "new_run_id",
     # checkpoint
     "CHECKPOINT_SCHEMA_VERSION",
@@ -205,6 +229,30 @@ __all__ = [
     "audit_to_dict",
     "audit_transcript",
     "format_audit_report",
+    # presets
+    "PRESETS",
+    "RulePack",
+    "get_preset",
+    "list_presets",
+    # sarif
+    "SARIF_SCHEMA_URI",
+    "SARIF_VERSION",
+    "findings_to_sarif",
+    "synthesize_rule_id",
+    # baseline
+    "BaselineDiff",
+    "BaselineEntry",
+    "diff_against_baseline",
+    "filter_against_baseline",
+    "findings_to_entries",
+    "read_baseline",
+    "write_baseline",
+    # suppressions
+    "Suppression",
+    "apply_suppressions",
+    "load_suppressions",
+    # pr comment
+    "format_pr_comment",
     # skill asset
     "SKILL_MD",
 ]

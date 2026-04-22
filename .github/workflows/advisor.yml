@@ -1,0 +1,110 @@
+name: Advisor Review
+
+# Reusable workflow: `uses: vzwjustin/advisor/.github/workflows/advisor.yml@v0.5.0`
+#
+# Runs `advisor plan` on the caller's repo and uploads the resulting SARIF
+# 2.1.0 document to GitHub Code Scanning. On pull_request events, scope is
+# auto-narrowed to the diff against the base ref unless the caller passes
+# `since:` explicitly.
+
+on:
+  workflow_call:
+    inputs:
+      target:
+        type: string
+        default: "."
+        description: "Path to review (default: repo root)"
+      min-priority:
+        type: number
+        default: 3
+        description: "Minimum priority tier (1-5). Higher = more selective."
+      since:
+        type: string
+        default: ""
+        description: "Git ref to scope to changed files since (e.g. HEAD~5). Overrides auto PR-base inference."
+      fail-on:
+        type: string
+        default: "never"
+        description: "Exit non-zero if any finding at/above level (never|low|medium|high|critical)."
+      preset:
+        type: string
+        default: ""
+        description: "Rule-pack preset name (python-web|python-cli|node-api|typescript-react|go-service|rust-crate)."
+      post-pr-comment:
+        type: boolean
+        default: false
+        description: "On pull_request, post a summary PR comment (pr-comment format)."
+
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: write
+
+jobs:
+  advisor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install advisor
+        run: python -m pip install advisor-agent
+
+      - name: Run advisor plan
+        id: plan
+        run: |
+          SINCE_FLAG=""
+          if [ -n "${{ inputs.since }}" ]; then
+            SINCE_FLAG="--since ${{ inputs.since }}"
+          elif [ "${{ github.event_name }}" = "pull_request" ]; then
+            SINCE_FLAG="--since origin/${{ github.base_ref }}"
+          fi
+          PRESET_FLAG=""
+          if [ -n "${{ inputs.preset }}" ]; then
+            PRESET_FLAG="--preset ${{ inputs.preset }}"
+          fi
+          advisor plan "${{ inputs.target }}" \
+            $SINCE_FLAG $PRESET_FLAG \
+            --min-priority ${{ inputs.min-priority }} \
+            --fail-on "${{ inputs.fail-on }}" \
+            --sarif advisor.sarif
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: advisor.sarif
+          category: advisor
+
+      - name: Post PR comment
+        if: ${{ always() && inputs.post-pr-comment && github.event_name == 'pull_request' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = 'advisor.sarif';
+            if (!fs.existsSync(path)) return;
+            const doc = JSON.parse(fs.readFileSync(path, 'utf8'));
+            const results = (doc.runs && doc.runs[0] && doc.runs[0].results) || [];
+            if (results.length === 0) return;
+            const counts = { error: 0, warning: 0, note: 0 };
+            for (const r of results) counts[r.level] = (counts[r.level] || 0) + 1;
+            const body = [
+              '## Advisor review',
+              '',
+              `Findings: **${results.length}** ` +
+                `(error: ${counts.error}, warning: ${counts.warning}, note: ${counts.note})`,
+              '',
+              '_See Code Scanning for full detail._',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });

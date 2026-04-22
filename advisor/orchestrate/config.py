@@ -73,6 +73,7 @@ class TeamConfig:
     large_file_line_threshold: int = 800
     large_file_max_fixes: int = 3
     test_command: str = ""
+    preset: str | None = None
 
 
 def _env_or(env_key: str, default: str) -> str:
@@ -110,6 +111,7 @@ def default_team_config(
     large_file_max_fixes: int = 3,
     test_command: str = "",
     warn_unknown_model: bool = True,
+    preset: str | None = None,
 ) -> TeamConfig:
     """Create a default team configuration.
 
@@ -145,6 +147,22 @@ def default_team_config(
     if test_command == "":
         test_command = _env_or("ADVISOR_TEST_COMMAND", test_command)
 
+    # Preset merge — only fills in fields the caller left at their
+    # documented default sentinels. Explicit overrides always win.
+    if preset:
+        # Imported lazily so advisor.orchestrate.config has no top-level
+        # dependency on advisor.presets (orchestrate sits below presets
+        # in the layering).
+        from ..presets import get_preset
+
+        pack = get_preset(preset)
+        if file_types == "*.py":
+            file_types = pack.file_types
+        if min_priority == 3:
+            min_priority = pack.min_priority
+        if test_command == "" and pack.test_command:
+            test_command = pack.test_command
+
     if warn_unknown_model:
         for label, model in (("advisor_model", advisor_model), ("runner_model", runner_model)):
             if not is_known_model(model):
@@ -167,4 +185,5 @@ def default_team_config(
         large_file_line_threshold=large_file_line_threshold,
         large_file_max_fixes=large_file_max_fixes,
         test_command=test_command,
+        preset=preset,
     )

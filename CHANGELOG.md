@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-04-22
+
+### Added — SARIF + GitHub Action (v0.5 Phase 1)
+- **`advisor/sarif.py`**: pure SARIF 2.1.0 emitter. `findings_to_sarif`
+  converts a list of `Finding` objects into a schema-compliant run dict
+  ready for GitHub Code Scanning. `synthesize_rule_id(severity,
+  description)` produces stable `advisor/<sev>/<hash>` ids so repeated
+  findings group under one rule in the UI. Absolute paths outside the
+  target tree raise `ValueError` rather than leaking into CI artifacts.
+- **`--sarif PATH`** on `advisor plan` and `advisor audit`: writes SARIF
+  2.1.0 to PATH via the atomic-write helper. `plan --sarif` emits an
+  empty-results document (real findings come from `audit --sarif`).
+- **`Finding.rule_id: str | None = None`**: optional stable rule
+  identifier. Existing Finding fields are unchanged; parsers tolerate
+  presence and absence equally.
+- **`.github/workflows/advisor.yml`**: reusable workflow that runs
+  `advisor plan`, uploads SARIF to Code Scanning, and optionally posts a
+  PR comment. Inputs: `target`, `min-priority`, `since`, `fail-on`,
+  `preset`, `post-pr-comment`.
+- README gains a **GitHub Action** section with a copy-paste example.
+
+### Added — history-informed ranking (v0.5 Phase 2)
+- **`history.load_recent_findings`** + **`history.file_repeat_scores`**:
+  pure readers that aggregate `.advisor/history.jsonl` into a per-file
+  "repeat offender" score with exponential decay (default half-life 30
+  days).
+- **`rank_files(history_scores=...)`**: optional per-file bonus bounded
+  at **+1 tier** (P3→P4 never P3→P5 from history alone). Files with
+  repeated findings float up the plan without drowning fresh risk.
+- **`FocusTask.reasons`** surfaces `"repeat offender: N findings in last
+  90d"` when history boosted the priority.
+- **`advisor plan --no-history`** disables the bonus for deterministic
+  CI plans.
+
+### Added — rule-pack presets (v0.5 Phase 3)
+- **`advisor/presets.py`** ships six `RulePack`s: `python-web`,
+  `python-cli`, `node-api`, `typescript-react`, `go-service`,
+  `rust-crate`. Each preset tweaks `file_types`, `min_priority`,
+  `test_command`, and layers ecosystem-specific keywords onto the
+  language-aware baseline.
+- **`--preset NAME`** on `advisor plan`, `pipeline`, `prompt`.
+- **`advisor presets` / `--json`** subcommand lists presets.
+
+### Added — findings lifecycle (v0.5 Phase 4)
+- **`--fail-on {low,medium,high,critical,never}`** on `plan` and
+  `audit`: exits 4 when any finding ≥ threshold. `never` (default)
+  preserves back-compat.
+- **`advisor baseline create [TARGET]`** and
+  **`advisor baseline diff`**: snapshot-and-compare mode for adopting
+  advisor on existing codebases. `plan --baseline PATH` suppresses
+  matching findings. JSONL, schema-versioned.
+- **`advisor/suppressions.py`** + **`.advisor/suppressions.jsonl`**:
+  targeted per-rule, per-file false-positive suppressions with expiry.
+  Zero-deps JSONL (no YAML dep added — preserves the zero-runtime-deps
+  invariant). Expired entries log at WARNING; findings above MEDIUM
+  require both a non-empty `reason` and a future `until` date.
+- **`advisor plan --format pr-comment`**: emits GitHub-flavored markdown
+  summary suitable for a PR body. Safely escapes backticks and pipes.
+- GHA workflow gains `post-pr-comment` input to post the summary via
+  `actions/github-script`.
+
 ### Added — structural drift enforcement
 - **`build_fix_assignment_message`** (`advisor.orchestrate`): new helper
   for building fix-assignment SendMessage specs with the runner's

@@ -15,6 +15,7 @@ advisory, never fatal.
 from __future__ import annotations
 
 import json
+import math
 import secrets
 import sys
 import warnings
@@ -31,6 +32,22 @@ UTC = timezone.utc
 HISTORY_DIR_NAME = ".advisor"
 HISTORY_FILE_NAME = "history.jsonl"
 HISTORY_SCHEMA_VERSION = "1.0"
+
+# Severity weights for repeat-offender scoring. Higher-severity findings
+# should dominate the per-file score so a file with one CRITICAL
+# recurrence outranks one with five LOW ones.
+_SEVERITY_WEIGHTS: dict[str, float] = {
+    "CRITICAL": 4.0,
+    "HIGH": 2.5,
+    "MEDIUM": 1.5,
+    "LOW": 1.0,
+}
+
+# Default bonus cap — `rank_files` enforces the hard +1-tier cap, but
+# the raw score is also clamped here so pathological history files
+# (e.g. 10,000 findings on one file) don't explode intermediate
+# calculations.
+_MAX_FILE_SCORE = 10.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,6 +220,140 @@ def new_run_id() -> str:
     """
     ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     return f"{ts}-{secrets.token_hex(2)}"
+
+
+def load_recent_findings(history_path: Path, *, limit: int = 500) -> list[HistoryEntry]:
+    """Read the last ``limit`` entries from a JSONL history file.
+
+    Tolerates malformed lines (logs a warning, skips). Returns
+    newest-first. Missing file returns ``[]``. Never raises on IO errors
+    — history is advisory, never fatal.
+
+    ``history_path`` is the *file* path (use :func:`history_path` to
+    derive it from a target dir). ``limit`` bounds the deque used to
+    stream the tail.
+    """
+    if limit <= 0:
+        return []
+    if not history_path.exists():
+        return []
+    buffer_size = max(limit * 2, limit + 8)
+    try:
+        with history_path.open("r", encoding="utf-8") as f:
+            lines: deque[tuple[int, str]] = deque(enumerate(f, 1), maxlen=buffer_size)
+    except (OSError, UnicodeDecodeError) as exc:
+        warnings.warn(f"could not read {history_path}: {exc}", UserWarning, stacklevel=2)
+        return []
+
+    entries: list[HistoryEntry] = []
+    for line_num, line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            obj = json.loads(stripped)
+            entries.append(
+                HistoryEntry(
+                    timestamp=str(obj["timestamp"]),
+                    file_path=str(obj["file_path"]),
+                    severity=str(obj["severity"]),
+                    description=str(obj["description"]),
+                    status=str(obj["status"]),
+                    run_id=str(obj["run_id"]),
+                    schema_version=str(obj.get("schema_version", HISTORY_SCHEMA_VERSION)),
+                )
+            )
+        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            warnings.warn(
+                f"skipping malformed history entry at {history_path}:{line_num}: {exc}",
+                UserWarning,
+                stacklevel=2,
+            )
+
+    # Newest-first per contract. We don't know whether the file is in
+    # chronological order, but by convention entries are appended — so
+    # reversing the tail yields the newest-first view.
+    entries.reverse()
+    return entries[:limit]
+
+
+def _age_days(entry: HistoryEntry, *, now: datetime | None = None) -> float:
+    """Return the age of ``entry`` in days. Unparseable timestamps → 0.
+
+    Unparseable entries are treated as brand-new (0 days) — more
+    conservative than discarding them, since an entry that's in the
+    history file at all is evidence of a past finding.
+    """
+    now_dt = now or datetime.now(UTC)
+    try:
+        ts = datetime.fromisoformat(entry.timestamp)
+    except ValueError:
+        return 0.0
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=UTC)
+    delta = now_dt - ts
+    return max(0.0, delta.total_seconds() / 86400.0)
+
+
+def file_repeat_counts(
+    findings: list[HistoryEntry],
+    *,
+    window_days: float = 90.0,
+    now: datetime | None = None,
+) -> dict[str, int]:
+    """Per-file CONFIRMED-finding count within the last ``window_days``.
+
+    Used to annotate the "repeat offender" reason with a concrete number
+    so the plan reads naturally. Separate from :func:`file_repeat_scores`
+    because the rank boost is an exponentially-decaying continuous score,
+    while the *reason label* wants a human-readable tally.
+    """
+    now_dt = now or datetime.now(UTC)
+    counts: dict[str, int] = {}
+    for entry in findings:
+        if entry.status.upper() not in {"CONFIRMED"}:
+            continue
+        age = _age_days(entry, now=now_dt)
+        if age > window_days:
+            continue
+        counts[entry.file_path] = counts.get(entry.file_path, 0) + 1
+    return counts
+
+
+def file_repeat_scores(
+    findings: list[HistoryEntry],
+    *,
+    half_life_days: float = 30.0,
+    now: datetime | None = None,
+) -> dict[str, float]:
+    """Aggregate historical findings into a per-file repeat-offender score.
+
+    Applies exponential decay with the given half-life — a finding that
+    landed ``half_life_days`` days ago contributes half its severity
+    weight; twice that ago, a quarter; etc. Returns
+    ``{abs_path: score}`` where score > 0 for every file that appears.
+    Missing files are absent.
+
+    FIXED / REJECTED statuses are ignored — only CONFIRMED findings
+    signal ongoing risk.
+    """
+    if half_life_days <= 0:
+        raise ValueError("half_life_days must be > 0")
+    now_dt = now or datetime.now(UTC)
+    scores: dict[str, float] = {}
+    decay_lambda = math.log(2.0) / half_life_days
+    for entry in findings:
+        if entry.status.upper() not in {"CONFIRMED"}:
+            continue
+        weight = _SEVERITY_WEIGHTS.get(entry.severity.upper(), 1.0)
+        age = _age_days(entry, now=now_dt)
+        contribution = weight * math.exp(-decay_lambda * age)
+        if contribution <= 0:
+            continue
+        scores[entry.file_path] = min(
+            _MAX_FILE_SCORE, scores.get(entry.file_path, 0.0) + contribution
+        )
+    return scores
 
 
 def entry_now(
