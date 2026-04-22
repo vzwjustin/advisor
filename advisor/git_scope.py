@@ -142,6 +142,17 @@ def resolve_git_scope(
     selectors = [bool(since), bool(staged), bool(branch)]
     if sum(selectors) > 1:
         raise GitScopeError("--since, --staged and --branch are mutually exclusive; pick one")
+    # Reject refs that begin with ``-`` so they cannot be interpreted as
+    # git options by ``git diff`` (e.g. ``-p`` would silently enable patch
+    # mode; ``-h`` would hang on help output). Validation happens here at
+    # the public boundary rather than inside ``_run_git`` so the error
+    # message can name the specific selector the user passed.
+    for label, value in (("--since", since), ("--branch", branch)):
+        if value and value.startswith("-"):
+            raise GitScopeError(
+                f"{label} ref {value!r} cannot begin with '-'; "
+                f"git would parse it as an option, not a ref"
+            )
     if since:
         return files_since(target, since)
     if staged:

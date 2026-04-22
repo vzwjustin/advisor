@@ -80,8 +80,6 @@ def _matches_glob(file_path: str, pattern: str) -> bool:
     p = PurePath(file_path).as_posix()
     if "**" in pattern:
         # Simple translation: ** → .*, * → [^/]*, ? → [^/]
-        import re
-
         parts: list[str] = []
         i = 0
         while i < len(pattern):

@@ -73,11 +73,19 @@ prompt = build_advisor_prompt(config)  # keep in-memory; do not print
 parameter. **NEVER use the Read tool to read back a temp file — it renders
 the full prompt (~170 lines) to the user as visible conversation output.**
 
+**Step 6 (immediately after Step 5):** Send a begin trigger — agents in
+mailbox mode go idle until a message arrives. Without this, the advisor's
+first turn will never start:
+
+```
+SendMessage({ to: "advisor", message: "Begin." })
+```
+
 **Keep ALL output minimal:**
 - NO file listings, NO ls, NO cat
 - NO verbose Python in output
 - NO long explanations
-- ONLY: TeamDelete → TeamCreate → (quiet bash) → Agent spawns
+- ONLY: TeamDelete → TeamCreate → (quiet bash) → Agent spawns → SendMessage begin
 
 A one-command entry point for a multi-agent review (and optional fix loop)
 driven entirely by Opus with Sonnet runners as its hands. Runs through
@@ -182,6 +190,13 @@ Agent({
   team_name: "review",
   prompt: <build_advisor_prompt(config)>
 })
+```
+
+**Immediately after spawning, send a begin trigger** — agents in mailbox
+mode go idle until a message arrives:
+
+```
+SendMessage({ to: "advisor", message: "Begin." })
 ```
 
 Build the prompt silently via inline Python (see IMPORTANT section above).

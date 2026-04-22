@@ -139,6 +139,27 @@ def _relative_age(mtime_epoch: float, now_epoch: float | None = None) -> str:
     return f"{min(days, 99)}d ago"
 
 
+def _resolve_max_runners(raw: int | None) -> int:
+    """Resolve the CLI ``--max-runners`` value to a concrete int.
+
+    Mirrors :func:`default_team_config`'s env-var fallback so subcommands
+    that need the runner count directly (without building a full
+    :class:`TeamConfig`) see the same value the config would. Argparse
+    defaults to ``None``; env var ``ADVISOR_MAX_RUNNERS`` (if set to a
+    valid positive int) fills in; final fallback is 5.
+    """
+    if raw is not None and raw >= 1:
+        return raw
+    env_raw = os.environ.get("ADVISOR_MAX_RUNNERS", "").strip()
+    if env_raw:
+        try:
+            parsed = int(env_raw)
+        except ValueError:
+            parsed = 5
+        return parsed if parsed >= 1 else 5
+    return 5
+
+
 def _config_from_args(args: argparse.Namespace) -> TeamConfig:
     # Allow piping a large scope description into any subcommand via
     # `--context -` (or the literal string "-"), matching POSIX stdin
@@ -184,8 +205,11 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--max-runners",
         type=int,
-        default=5,
-        help="Advisory runner count. Opus may exceed this for large codebases.",
+        default=None,
+        help=(
+            "Advisory runner count. Opus may exceed this for large codebases. "
+            "Env-var default: ADVISOR_MAX_RUNNERS (falls back to 5 when unset)."
+        ),
     )
     parser.add_argument(
         "--min-priority",
@@ -820,10 +844,11 @@ def cmd_prompt(args: argparse.Namespace) -> int:
                 findings = "<paste findings here>"
             else:
                 findings = piped
+        resolved_max_runners = _resolve_max_runners(args.max_runners)
         text = build_verify_dispatch_prompt(
             findings,
-            file_count=args.file_count or args.max_runners,
-            runner_count=args.max_runners,
+            file_count=args.file_count or resolved_max_runners,
+            runner_count=resolved_max_runners,
         )
     if as_json:
         print(json.dumps({"schema_version": JSON_SCHEMA_VERSION, "step": args.step, "text": text}))

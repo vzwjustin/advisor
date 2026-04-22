@@ -55,10 +55,16 @@ def format_pr_comment(findings: list[Finding]) -> str:
     if not findings:
         return "## Advisor review\n\n_No findings at the current threshold._\n"
 
+    # Unknown severities are clamped to LOW so the per-severity table rows
+    # sum to ``len(findings)``. Without this, a finding tagged ``"INFO"``
+    # (or any non-canonical severity) would increment the total headline
+    # but never appear in any row — the table would silently under-count.
     counts: dict[str, int] = {s: 0 for s in _SEVERITY_ORDER}
     for f in findings:
         sev = f.severity.upper()
-        counts[sev] = counts.get(sev, 0) + 1
+        if sev not in counts:
+            sev = "LOW"
+        counts[sev] += 1
 
     lines: list[str] = [
         "## Advisor review",
@@ -69,10 +75,14 @@ def format_pr_comment(findings: list[Finding]) -> str:
         "| --- | ---: |",
     ]
     for sev in _SEVERITY_ORDER:
-        lines.append(f"| {sev} | {counts.get(sev, 0)} |")
+        lines.append(f"| {sev} | {counts[sev]} |")
     lines.append("")
     lines.append("### Details")
     lines.append("")
+    # Track the running character count incrementally so the truncation
+    # check stays O(n) overall. Summing ``lines`` every iteration was
+    # O(n²) — painful for 500+ findings approaching the body cap.
+    projected_chars = sum(len(line) + 1 for line in lines)
     rendered_count = 0
     truncated = False
     for f in findings:
@@ -102,11 +112,12 @@ def format_pr_comment(findings: list[Finding]) -> str:
         # Stop appending once the running body would exceed the GitHub cap.
         # Posting a truncated comment with a "run locally" pointer is more
         # useful than a 422 from the API.
-        projected = sum(len(line) + 1 for line in lines) + sum(len(line) + 1 for line in block)
-        if projected > _GITHUB_BODY_LIMIT and rendered_count > 0:
+        block_chars = sum(len(line) + 1 for line in block)
+        if projected_chars + block_chars > _GITHUB_BODY_LIMIT and rendered_count > 0:
             truncated = True
             break
         lines.extend(block)
+        projected_chars += block_chars
         rendered_count += 1
     if truncated:
         omitted = len(findings) - rendered_count
