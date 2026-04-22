@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import re
 import warnings
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -106,10 +107,21 @@ def _matches_glob(file_path: str, pattern: str) -> bool:
     return fnmatch.fnmatch(p, pattern)
 
 
+_DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
 def _parse_until(raw: str | None, *, context: str) -> tuple[str | None, bool]:
     """Return (normalized_until, expired) or raise ValueError on bad shape."""
     if raw is None or raw == "":
         return None, False
+    # Reject datetime-shaped strings up front. Python 3.11+ ``date.fromisoformat``
+    # accepts full ISO datetimes (e.g. ``2026-09-01T00:00:00+05:30``) and
+    # silently drops the time and timezone, which would store an
+    # off-by-one expiry under any non-UTC offset.
+    if not _DATE_ONLY_RE.match(raw):
+        raise ValueError(
+            f"{context}: invalid until={raw!r}: expected YYYY-MM-DD (date only, no time/tz)"
+        )
     try:
         d = date.fromisoformat(raw)
     except ValueError as exc:

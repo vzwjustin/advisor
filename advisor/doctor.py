@@ -82,10 +82,15 @@ _KNOWN_ENV_VARS = (
 
 
 def _check_python_version() -> Check:
-    # pyproject.toml gates Python >= 3.10 via requires-python; the
-    # check is still emitted so scripted consumers of doctor output
-    # always have the ``python`` field.
-    return Check("python", "ok", f"Python {sys.version_info.major}.{sys.version_info.minor}")
+    # pyproject.toml gates Python >= 3.10 via requires-python at install
+    # time, but a broken uv environment, the wrong shim, or a manual
+    # ``python3`` invocation can still bypass that and reach this code on
+    # an older interpreter. Surface it as a hard fail rather than green.
+    info = sys.version_info
+    label = f"Python {info.major}.{info.minor}"
+    if (info.major, info.minor) < (3, 10):
+        return Check("python", "fail", f"{label} — advisor requires Python 3.10+")
+    return Check("python", "ok", label)
 
 
 def _check_git() -> Check:

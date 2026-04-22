@@ -317,9 +317,10 @@ APP_JS = r"""(() => {
     tbody.innerHTML = '';
     (data.tasks || []).forEach((t, i) => {
       const tr = document.createElement('tr');
+      const pri = escapeHtml(String(t.priority));
       tr.innerHTML = `
         <td>${i + 1}</td>
-        <td><span class="pri-${t.priority}">P${t.priority}</span></td>
+        <td><span class="pri-${pri}">P${pri}</span></td>
         <td><code>${escapeHtml(t.file_path)}</code></td>
       `;
       tbody.appendChild(tr);

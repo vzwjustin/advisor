@@ -14,6 +14,10 @@ from .verify import Finding
 
 _SEVERITY_ORDER = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
 
+# GitHub rejects PR/issue bodies and comments above 65,536 characters with a
+# 422 error. Leave headroom for the trailing truncation notice.
+_GITHUB_BODY_LIMIT = 60_000
+
 
 def _escape_table_cell(text: str) -> str:
     """Escape characters that break GFM table rendering."""
@@ -69,26 +73,46 @@ def format_pr_comment(findings: list[Finding]) -> str:
     lines.append("")
     lines.append("### Details")
     lines.append("")
+    rendered_count = 0
+    truncated = False
     for f in findings:
         title = _escape_table_cell(f.description)[:100] or "(no description)"
-        lines.append(
-            f"<details><summary><strong>[{f.severity}]</strong> "
-            f"<code>{_escape_inline(f.file_path)}</code> — {title}</summary>"
-        )
-        lines.append("")
-        lines.append(f"**Description:** {_neutralize_details(f.description)}")
-        lines.append("")
-        lines.append("**Evidence:**")
-        lines.append("")
-        lines.append("```")
-        lines.append(_neutralize_details(f.evidence).replace("```", "'''"))
-        lines.append("```")
-        lines.append("")
-        lines.append(f"**Fix:** {_neutralize_details(f.fix)}")
+        block: list[str] = [
+            (
+                f"<details><summary><strong>[{f.severity}]</strong> "
+                f"<code>{_escape_inline(f.file_path)}</code> — {title}</summary>"
+            ),
+            "",
+            f"**Description:** {_neutralize_details(f.description)}",
+            "",
+            "**Evidence:**",
+            "",
+            "```",
+            _neutralize_details(f.evidence).replace("```", "'''"),
+            "```",
+            "",
+            f"**Fix:** {_neutralize_details(f.fix)}",
+        ]
         if f.rule_id:
-            lines.append("")
-            lines.append(f"**Rule:** `{_escape_inline(f.rule_id)}`")
-        lines.append("")
-        lines.append("</details>")
+            block.append("")
+            block.append(f"**Rule:** `{_escape_inline(f.rule_id)}`")
+        block.append("")
+        block.append("</details>")
+        block.append("")
+        # Stop appending once the running body would exceed the GitHub cap.
+        # Posting a truncated comment with a "run locally" pointer is more
+        # useful than a 422 from the API.
+        projected = sum(len(line) + 1 for line in lines) + sum(len(line) + 1 for line in block)
+        if projected > _GITHUB_BODY_LIMIT and rendered_count > 0:
+            truncated = True
+            break
+        lines.extend(block)
+        rendered_count += 1
+    if truncated:
+        omitted = len(findings) - rendered_count
+        lines.append(
+            f"_Output truncated to fit GitHub's body length cap — "
+            f"{omitted} finding(s) omitted. Run `advisor` locally for the full report._"
+        )
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"

@@ -249,7 +249,7 @@ def _parse_blocks(text: str) -> list[Finding]:
                 _flush()
             current = {}
             active_key = None
-            in_header_block = False
+            in_header_block = True
             continue
 
         matched = _match_key(stripped)

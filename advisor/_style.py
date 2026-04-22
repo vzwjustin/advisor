@@ -234,6 +234,10 @@ _PRIORITY_RE = re.compile(r"\*\*P([1-5])\*\*" r"|(?<![A-Za-z0-9*\x1b])P([1-5])(?
 # colorized text (e.g. a colored header body). Re-painting them would
 # emit an inner ``\x1b[0m`` that prematurely closes the outer style.
 _ANSI_SGR_RE = re.compile(r"\x1b\[[\d;]*m")
+# Matches any SGR whose first parameter is `0` — both the canonical
+# ``\x1b[0m`` reset and combined sequences like ``\x1b[0;1m`` (reset
+# then bold). Used by `_inside_ansi_span` to count resets correctly.
+_ANSI_RESET_RE = re.compile(r"\x1b\[0[;m]")
 # Combined header regex (H2/H3/H4 in a single pass). Depth is inferred
 # from the captured ``#`` run length; each depth gets a different style.
 # H1 is intentionally excluded — Markdown docs almost never emit ``# `` at
@@ -262,15 +266,17 @@ def colorize_markdown(text: str, stream: IO[str] | None = None) -> str:
     def _inside_ansi_span(full: str, pos: int) -> bool:
         """True when ``pos`` falls inside an unclosed SGR span.
 
-        Counts SGR escapes preceding ``pos`` and compares openers vs the
-        trailing ``\\x1b[0m`` resets. An odd opener count without a matching
-        reset means the match is inside a painted region — re-painting it
-        there would inject a premature reset and close the outer style.
+        Counts SGR escapes preceding ``pos`` and compares openers vs
+        resets. Any SGR whose first parameter is ``0`` is treated as a
+        reset — that includes the canonical ``\\x1b[0m`` AND combined
+        sequences like ``\\x1b[0;1m`` (reset then bold) common in copied
+        terminal output. An odd opener count without a matching reset
+        means the match is inside a painted region.
         """
         prefix = full[:pos]
         escapes = _ANSI_SGR_RE.findall(prefix)
-        open_count = sum(1 for e in escapes if e != "\x1b[0m")
-        close_count = sum(1 for e in escapes if e == "\x1b[0m")
+        close_count = sum(1 for e in escapes if _ANSI_RESET_RE.match(e))
+        open_count = len(escapes) - close_count
         return open_count > close_count
 
     def _color_priority(m: re.Match[str]) -> str:

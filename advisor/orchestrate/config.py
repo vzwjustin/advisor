@@ -188,6 +188,10 @@ def default_team_config(
             min_priority = pack.min_priority
         if test_command_is_default and test_command == "" and pack.test_command:
             test_command = pack.test_command
+        # Re-clamp after the preset merge — a preset that ships an
+        # out-of-range ``min_priority`` would otherwise land in
+        # :class:`TeamConfig` unclamped.
+        min_priority = max(1, min(5, min_priority))
 
     if warn_unknown_model:
         for label, model in (("advisor_model", advisor_model), ("runner_model", runner_model)):

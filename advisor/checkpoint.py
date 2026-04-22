@@ -92,6 +92,17 @@ def _atomic_write_text(target: Path, text: str) -> None:
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp, target)
+        # Best-effort directory fsync so the rename survives an abrupt
+        # power loss. Windows refuses to open a directory for fsync —
+        # silently skip there.
+        try:
+            dir_fd = os.open(str(parent), os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            pass
     except BaseException:
         try:
             tmp.unlink()

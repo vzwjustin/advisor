@@ -494,10 +494,20 @@ def _regex_with_extras(
 ) -> tuple[re.Pattern[str], dict[str, tuple[int, str]]]:
     """Build a one-shot regex that overlays ``extras`` on top of the language baseline.
 
-    Not cached — preset overlays are rare per process and the cache key
-    would need to include the extras dict. Keep the baseline path on the
-    lru_cache fast path and compile on the preset path.
+    Memoized via :func:`_regex_with_extras_cached` keyed on a hashable
+    snapshot of ``extras``. Without caching, a preset run with N files
+    triggered N identical regex compilations.
     """
+    extras_key = tuple(sorted((p, kws) for p, kws in extras.items()))
+    return _regex_with_extras_cached(language, extras_key)
+
+
+@lru_cache(maxsize=16)
+def _regex_with_extras_cached(
+    language: str | None,
+    extras_key: tuple[tuple[int, tuple[str, ...]], ...],
+) -> tuple[re.Pattern[str], dict[str, tuple[int, str]]]:
+    extras = dict(extras_key)
     base = _merged_keywords_for(language)
     merged: dict[int, tuple[str, ...]] = {}
     for priority, kws in base.items():

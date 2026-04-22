@@ -264,6 +264,11 @@ def _safe_rglob(target: Path, pattern: str) -> tuple[list[str] | None, str | Non
     """Return (paths, error). `error` is non-None on a malformed glob pattern
     or a filesystem error (e.g. symlink loops, permission denied)."""
     try:
+        # Resolve before walking — `Path.rglob` on an unresolved path
+        # containing symlink cycles can hang on Python <3.13 instead of
+        # raising. Resolving first canonicalizes the start point and lets
+        # the OS-level walk surface ELOOP as an OSError we already catch.
+        target = target.resolve()
         return [str(p) for p in target.rglob(pattern) if p.is_file()], None
     except ValueError as exc:
         return None, f"invalid --file-types pattern {pattern!r}: {exc}"
@@ -694,7 +699,11 @@ def _emit_plan(
         rendered = json.dumps(payload, indent=2)
         output_file = getattr(args, "output", None)
         if output_file:
-            _atomic_write(Path(output_file), rendered + "\n")
+            try:
+                _atomic_write(Path(output_file), rendered + "\n")
+            except OSError as exc:
+                print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
+                return 2
             if not getattr(args, "quiet", False):
                 print(_style.dim(f"wrote plan to {output_file}"))
         else:
@@ -1414,31 +1423,36 @@ def _load_findings_from_input(
         try:
             doc = json.loads(stripped)
         except json.JSONDecodeError:
+            # Looked like JSON but isn't — fall through to the markdown
+            # parser. A markdown report can legitimately start with `[` (e.g.
+            # `[CRITICAL] file.py:10 ...`); silently returning an empty list
+            # would swallow real findings.
             doc = None
-        if isinstance(doc, dict):
-            raw = doc.get("findings_in_batch") or doc.get("findings") or []
-        elif isinstance(doc, list):
-            raw = doc
-        else:
-            raw = []
-        findings: list[object] = []
-        for f in raw:
-            if not isinstance(f, dict):
-                continue
-            try:
-                findings.append(
-                    Finding(
-                        file_path=str(f["file_path"]),
-                        severity=str(f["severity"]),
-                        description=str(f["description"]),
-                        evidence=str(f.get("evidence", "")),
-                        fix=str(f.get("fix", "")),
-                        rule_id=f.get("rule_id") or None,
+        if doc is not None:
+            if isinstance(doc, dict):
+                raw = doc.get("findings_in_batch") or doc.get("findings") or []
+            elif isinstance(doc, list):
+                raw = doc
+            else:
+                raw = []
+            findings: list[object] = []
+            for f in raw:
+                if not isinstance(f, dict):
+                    continue
+                try:
+                    findings.append(
+                        Finding(
+                            file_path=str(f["file_path"]),
+                            severity=str(f["severity"]),
+                            description=str(f["description"]),
+                            evidence=str(f.get("evidence", "")),
+                            fix=str(f.get("fix", "")),
+                            rule_id=f.get("rule_id") or None,
+                        )
                     )
-                )
-            except KeyError:
-                continue
-        return findings, None
+                except KeyError:
+                    continue
+            return findings, None
     # Markdown fallback.
     return list(parse_findings_from_text(text)), None
 
@@ -1462,7 +1476,11 @@ def cmd_baseline(args: argparse.Namespace) -> int:
             return rc
         typed_findings: list[Finding] = [f for f in findings if isinstance(f, Finding)]
         entries = findings_to_entries(typed_findings)
-        write_baseline(output, entries)
+        try:
+            write_baseline(output, entries)
+        except OSError as exc:
+            print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
+            return 2
         if not getattr(args, "quiet", False):
             print(_style.success_box(f"baseline saved: {output} ({len(entries)} finding(s))"))
         return 0
