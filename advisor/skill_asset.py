@@ -58,26 +58,26 @@ __VERSION_BADGE__
 
 **Step 3 (BEFORE any Bash):** Call `TeamCreate(name="review")` — creates team
 
-**Step 4 (only AFTER steps 2+3 complete):** Build prompt silently. Prefer the
-in-conversation **Python tool** (see the concrete example below). If you
-must fall back to Bash, write to a per-invocation tmp file — never a
-predictable path like `/tmp/adv.txt` (world-readable on shared hosts, leaks
-the `context` string across local accounts):
+**Step 4 (only AFTER steps 2+3 complete):** Build the prompt in one Bash call
+that prints it to stdout. Capture the output as the tool result — do NOT
+write to a file and do NOT use the Read tool (Read renders all ~170 lines
+of prompt text as visible user output):
 
 ```bash
-ADV_PROMPT=$(mktemp -t advisor-prompt-XXXXXX)
-python3 - "$ADV_PROMPT" <<'PYEOF'
+python3 -c "
 import sys
+sys.path.insert(0, '/path/to/advisor')  # adjust to actual install path
 from advisor import default_team_config, build_advisor_prompt
-config = default_team_config(target_dir="TARGET", context="CONTEXT")
-with open(sys.argv[1], "w", encoding="utf-8") as f:
-    f.write(build_advisor_prompt(config))
-PYEOF
+config = default_team_config(target_dir='TARGET', context='CONTEXT')
+print(build_advisor_prompt(config))
+" 2>/dev/null
 ```
 
-**Step 5:** Spawn Agent with the prompt you just built (read from
-`$ADV_PROMPT` if you used the Bash fallback, or pass the Python-tool
-result directly).
+The Bash tool result is the prompt text. Copy it directly into Step 5.
+
+**Step 5:** Spawn Agent passing the Bash stdout output as the `prompt` parameter.
+**NEVER use the Read tool to read back a temp file — it renders the full
+prompt (~170 lines) to the user as visible conversation output.**
 
 **RULE: NO Bash before TeamDelete and TeamCreate. ZERO exceptions.**
 The user must see TeamDelete and TeamCreate FIRST before any Bash runs.
@@ -127,6 +127,7 @@ prompt = build_advisor_prompt(config)
 - ❌ `advisor prompt advisor ./src` (CLI dumps prompt text)
 - ❌ `Bash(python3 -c "...")` (shows code in output)
 - ❌ Use kwarg `user_request` (it doesn't exist — use `context`)
+- ❌ `Read(temp_file)` to read the prompt back — renders ~170 lines to user
 
 User sees only: `**Advisor mode**` → `[TeamCreate]` → `[Agent...]`
 
