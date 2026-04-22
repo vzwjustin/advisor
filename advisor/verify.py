@@ -25,15 +25,23 @@ _log = logging.getLogger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class Finding:
-    """A single finding from a focused agent."""
+    """A single finding from a focused agent.
+
+    ``rule_id`` is an optional stable identifier for grouping related
+    findings (e.g. on GitHub Code Scanning). When absent, the SARIF
+    emitter synthesizes one from severity + description hash.
+    """
 
     file_path: str
     severity: str
     description: str
     evidence: str
     fix: str
+    rule_id: str | None = None
 
 
+# Required for a well-formed block; ``rule_id`` is optional and never
+# gates parsing — blocks without it still produce a Finding.
 _REQUIRED_FIELDS = ("file_path", "severity", "description", "evidence", "fix")
 
 # Accept both ``-`` and ``*`` list markers; some agents (especially those
@@ -47,6 +55,7 @@ _KEY_PREFIXES: dict[str, tuple[str, ...]] = {
     "description": ("- **Description**:", "* **Description**:", "**Description**:"),
     "evidence": ("- **Evidence**:", "* **Evidence**:", "**Evidence**:"),
     "fix": ("- **Fix**:", "* **Fix**:", "**Fix**:"),
+    "rule_id": ("- **Rule**:", "* **Rule**:", "**Rule**:"),
 }
 
 # List-item markers recognized by the block-opening check. Must stay in
@@ -95,6 +104,8 @@ def format_findings_block(findings: list[Finding]) -> str:
         lines.append(f"- **Description**: {f.description}")
         lines.append(f"- **Evidence**: {f.evidence}")
         lines.append(f"- **Fix**: {f.fix}")
+        if f.rule_id:
+            lines.append(f"- **Rule**: {f.rule_id}")
         lines.append("")
 
     return "\n".join(lines)
@@ -281,7 +292,11 @@ def _extract_value(line: str, prefix: str = "") -> str:
 
 
 def _dict_to_finding(d: dict[str, str]) -> Finding | None:
-    """Convert a parsed block to a Finding, or None if any required field is missing."""
+    """Convert a parsed block to a Finding, or None if any required field is missing.
+
+    ``rule_id`` is optional — absent from the dict is fine and yields
+    ``rule_id=None`` on the Finding.
+    """
     missing = [k for k in _REQUIRED_FIELDS if not d.get(k)]
     if missing:
         return None
@@ -291,4 +306,5 @@ def _dict_to_finding(d: dict[str, str]) -> Finding | None:
         description=d["description"],
         evidence=d["evidence"],
         fix=d["fix"],
+        rule_id=d.get("rule_id") or None,
     )

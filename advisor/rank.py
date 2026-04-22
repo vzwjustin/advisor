@@ -488,6 +488,38 @@ def _merged_keywords_for(language: str | None) -> dict[int, tuple[str, ...]]:
     return merged
 
 
+def _regex_with_extras(
+    language: str | None,
+    extras: dict[int, tuple[str, ...]],
+) -> tuple[re.Pattern[str], dict[str, tuple[int, str]]]:
+    """Build a one-shot regex that overlays ``extras`` on top of the language baseline.
+
+    Not cached — preset overlays are rare per process and the cache key
+    would need to include the extras dict. Keep the baseline path on the
+    lru_cache fast path and compile on the preset path.
+    """
+    base = _merged_keywords_for(language)
+    merged: dict[int, tuple[str, ...]] = {}
+    for priority, kws in base.items():
+        extra = extras.get(priority, ())
+        seen: dict[str, None] = {}
+        for kw in (*kws, *extra):
+            seen.setdefault(kw, None)
+        merged[priority] = tuple(seen)
+    for priority, extra in extras.items():
+        if priority not in merged:
+            merged[priority] = tuple(dict.fromkeys(extra))
+
+    parts: list[str] = []
+    mapping: dict[str, tuple[int, str]] = {}
+    for priority, kws in merged.items():
+        for idx, kw in enumerate(kws):
+            group = f"p{priority}_{idx}"
+            parts.append(rf"(?P<{group}>\b{re.escape(kw)}\b)")
+            mapping[group] = (priority, kw)
+    return re.compile("|".join(parts), re.IGNORECASE), mapping
+
+
 @lru_cache(maxsize=16)
 def _combined_regex_for(language: str | None) -> tuple[re.Pattern[str], dict[str, tuple[int, str]]]:
     """Build and cache a combined regex + group-map for a language.
@@ -521,7 +553,12 @@ def __getattr__(name: str) -> object:
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-def _score_file(path: str, content: str) -> tuple[int, tuple[str, ...]]:
+def _score_file(
+    path: str,
+    content: str,
+    *,
+    extra_keywords: dict[int, tuple[str, ...]] | None = None,
+) -> tuple[int, tuple[str, ...]]:
     """Score a single file based on path and content keywords.
 
     Keywords use word-boundary matching so "key" does not match "keyword".
@@ -534,13 +571,20 @@ def _score_file(path: str, content: str) -> tuple[int, tuple[str, ...]]:
     extension is unrecognized, the content's first line is inspected for
     a ``#!`` shebang — so a file named ``deploy`` with
     ``#!/usr/bin/env python3`` still gets Python-specific scoring.
+
+    ``extra_keywords`` layers on top of the language baseline — used by
+    rule-pack presets to add ecosystem-framework terms (e.g. ``csrf``,
+    ``jsonwebtoken``) without hard-coding them in :data:`PRIORITY_KEYWORDS`.
     """
     language = language_for_path(path)
     if language is None and content:
         first_newline = content.find("\n")
         first_line = content[:first_newline] if first_newline != -1 else content
         language = _language_from_shebang(first_line)
-    regex, group_map = _combined_regex_for(language)
+    if extra_keywords:
+        regex, group_map = _regex_with_extras(language, extra_keywords)
+    else:
+        regex, group_map = _combined_regex_for(language)
     combined = f"{path} {content[:CONTENT_SCAN_LIMIT]}"
     matches_per_tier: dict[int, list[str]] = {}
 
@@ -565,6 +609,10 @@ def rank_files(
     ignore_patterns: list[str] | None = None,
     *,
     max_workers: int | None = None,
+    extra_keywords: dict[int, tuple[str, ...]] | None = None,
+    history_scores: dict[str, float] | None = None,
+    history_counts: dict[str, int] | None = None,
+    history_window_days: int = 90,
 ) -> list[RankedFile]:
     """Rank files by vulnerability likelihood, highest priority first.
 
@@ -579,6 +627,17 @@ def rank_files(
                     saturate SSD read queues without swamping small VMs.
                     Set to ``1`` to disable parallelism entirely (handy for
                     deterministic tests or debugging).
+        extra_keywords: Optional per-tier keyword overlay (e.g. from a
+                    :class:`~advisor.presets.RulePack`). Layered on top of
+                    the language-aware baseline. Each tier's extras are
+                    deduped while preserving order.
+        history_scores: Optional per-file repeat-offender scores (see
+                    :func:`advisor.history.file_repeat_scores`). Bumps
+                    a file's priority by **at most +1 tier** — a P3
+                    file with a high history score becomes P4 but never
+                    leaps to P5 from history alone. When a boost is
+                    applied, ``"repeat offender"`` is appended to the
+                    file's reasons list.
 
     Returns:
         A new list of RankedFile sorted by priority descending, then by path
@@ -611,10 +670,70 @@ def rank_files(
 
     ranked: list[RankedFile] = []
     for fp, content in zip(kept_paths, contents, strict=True):
-        priority, reasons = _score_file(fp, content)
+        priority, reasons = _score_file(fp, content, extra_keywords=extra_keywords)
+        if history_scores is not None:
+            boost = _history_boost(fp, history_scores)
+            if boost > 0:
+                boosted = min(5, priority + 1)  # +1 tier cap
+                if boosted > priority:
+                    priority = boosted
+                    count_label = ""
+                    if history_counts:
+                        n = _history_count_for(fp, history_counts)
+                        if n > 0:
+                            count_label = (
+                                f": {n} finding{'s' if n != 1 else ''} in last "
+                                f"{history_window_days}d"
+                            )
+                    reasons = (*reasons, f"repeat offender{count_label}")
         ranked.append(RankedFile(path=fp, priority=priority, reasons=reasons))
 
     return sorted(ranked, key=lambda r: (-r.priority, r.path))
+
+
+# Minimum score that earns a +1 tier boost. Chosen so a single low-severity
+# hit from six months ago doesn't trip the bump, but a cluster of recent
+# findings does.
+_HISTORY_BOOST_THRESHOLD = 1.5
+
+
+def _history_boost(file_path: str, history_scores: dict[str, float]) -> float:
+    """Return the history score for ``file_path`` above the boost threshold.
+
+    The caller may pass scores keyed by absolute path, repo-relative path,
+    or filename-only — we check all three. Returns 0.0 when no score
+    meets the boost threshold.
+    """
+    candidates = (
+        file_path,
+        str(Path(file_path)),
+        Path(file_path).as_posix(),
+        Path(file_path).name,
+    )
+    best = 0.0
+    for k in candidates:
+        score = history_scores.get(k, 0.0)
+        if score > best:
+            best = score
+    if best < _HISTORY_BOOST_THRESHOLD:
+        return 0.0
+    return best
+
+
+def _history_count_for(file_path: str, history_counts: dict[str, int]) -> int:
+    """Sum counts across alias keys for ``file_path`` (abs, posix, name)."""
+    candidates = (
+        file_path,
+        str(Path(file_path)),
+        Path(file_path).as_posix(),
+        Path(file_path).name,
+    )
+    best = 0
+    for k in candidates:
+        n = history_counts.get(k, 0)
+        if n > best:
+            best = n
+    return best
 
 
 def _read_contents_parallel(

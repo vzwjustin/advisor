@@ -16,9 +16,9 @@ the previous minor will also be patched for 6 months.
 
 | Version | Supported          |
 |---------|--------------------|
-| 0.4.x   | yes (current)      |
-| 0.3.x   | no                 |
-| < 0.3   | no                 |
+| 0.5.x   | yes (current)      |
+| 0.4.x   | no                 |
+| < 0.4   | no                 |
 
 ## Threat model
 
@@ -84,8 +84,29 @@ advisor never imports, loads, or runs files from the target directory. It
 reads the first `CONTENT_SCAN_LIMIT` (2000) bytes of each candidate file
 as plain text to score priority keywords, nothing more.
 
+### Suppressions (0.5+)
+
+`.advisor/suppressions.jsonl` is plain JSON Lines — **no YAML**, no
+runtime dependencies, no code execution on load. The loader:
+
+- Parses each line with `json.loads` and raises a `ValueError` on
+  malformed input rather than falling back to a lenient mode.
+- Enforces that entries matching findings above MEDIUM severity carry
+  both a `reason` and a future `until` date — suppress-and-forget is
+  rejected at load time.
+- Warns (but does not silently re-activate) when `until` has passed.
+- Accepts only two scope selectors — `file` (exact path) and
+  `file_glob` (fnmatch + `**`) — that operate on path strings; no
+  fnmatch pattern can trigger a filesystem read or execution.
+
+Baselines (`.advisor/baseline.jsonl`) apply the same JSON-only posture.
+
 ## Hardening history
 
+- **0.5.0** — SARIF paths outside `target_dir` rejected with
+  `ValueError` (no attacker-path leak into Code Scanning artifacts);
+  suppressions enforced at load time (reason + expiry required for >
+  MEDIUM); zero new runtime dependencies introduced.
 - **0.4.0** — symlink rejection in `_atomic_write_text`; `O_NOFOLLOW`
   on parent dir; `$HOME` containment check; prompt-injection defense
   via fenced user goal (see `CHANGELOG.md`).

@@ -11,14 +11,14 @@ import json
 import os
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
 from pathlib import Path
 
 from . import _style
 from ._fs import read_head as _read_head
-from .audit import audit_to_dict, audit_transcript, format_audit_report
+from .audit import AuditReport, audit_to_dict, audit_transcript, format_audit_report
 from .checkpoint import (
     Checkpoint,
     checkpoint_path,
@@ -40,7 +40,15 @@ from .focus import (
     format_dispatch_plan,
 )
 from .git_scope import GitScopeError, resolve_git_scope
-from .history import HISTORY_SCHEMA_VERSION, format_history_block, load_recent, new_run_id
+from .history import (
+    HISTORY_SCHEMA_VERSION,
+    file_repeat_scores,
+    format_history_block,
+    history_path,
+    load_recent,
+    load_recent_findings,
+    new_run_id,
+)
 from .install import (
     OPT_OUT_ENV,
     ComponentStatus,
@@ -71,6 +79,7 @@ from .orchestrate import (
     render_pipeline,
 )
 from .rank import rank_files
+from .sarif import findings_to_sarif
 
 # Top-level schema version for JSON outputs. Bump when the shape of any
 # ``--json`` payload changes in a way that would break downstream parsers.
@@ -152,6 +161,7 @@ def _config_from_args(args: argparse.Namespace) -> TeamConfig:
         large_file_line_threshold=getattr(args, "large_file_line_threshold", 800),
         large_file_max_fixes=getattr(args, "large_file_max_fixes", 3),
         test_command=getattr(args, "test_cmd", "") or "",
+        preset=getattr(args, "preset", None),
     )
 
 
@@ -223,6 +233,16 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
             "Effective fix cap for any batch containing a file at or above "
             "--large-file-line-threshold lines. Lowest applicable cap wins. "
             "Default: %(default)s"
+        ),
+    )
+    parser.add_argument(
+        "--preset",
+        default=None,
+        metavar="NAME",
+        help=(
+            "Apply a rule-pack preset (python-web, python-cli, node-api, "
+            "typescript-react, go-service, rust-crate). See `advisor "
+            "presets`."
         ),
     )
 
@@ -465,7 +485,43 @@ def cmd_plan(args: argparse.Namespace) -> int:
     if exclude_patterns and paths:
         paths = _apply_exclude_patterns(target, paths, exclude_patterns)
 
-    ranked = rank_files(paths or [], read_fn=_read_head)
+    # History-informed ranking — E9 history gets consumed here so repeat
+    # offenders float up the plan. ``--no-history`` disables the boost
+    # for deterministic CI (and for users who don't want the coupling).
+    history_bonus: dict[str, float] | None = None
+    history_count_map: dict[str, int] | None = None
+    if not getattr(args, "no_history", False):
+        hp = history_path(target)
+        entries = load_recent_findings(hp, limit=500)
+        if entries:
+            history_bonus = file_repeat_scores(entries)
+            from .history import file_repeat_counts
+
+            history_count_map = file_repeat_counts(entries, window_days=90.0)
+
+    # Preset-based keyword overlay — layered on top of language-aware
+    # baseline when --preset is given. The file-type / min-priority
+    # merging happens in default_team_config; the keyword overlay is
+    # applied here because rank_files takes it as a parameter.
+    preset_extras: dict[int, tuple[str, ...]] | None = None
+    preset_name = getattr(args, "preset", None)
+    if preset_name:
+        from .presets import get_preset
+
+        try:
+            rule_pack = get_preset(preset_name)
+        except ValueError as exc:
+            print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
+            return 2
+        preset_extras = dict(rule_pack.extra_keywords_by_tier)
+
+    ranked = rank_files(
+        paths or [],
+        read_fn=_read_head,
+        extra_keywords=preset_extras,
+        history_scores=history_bonus,
+        history_counts=history_count_map,
+    )
     tasks = create_focus_tasks(
         ranked,
         max_tasks=None,  # no hard cap; advisor decides in the live pipeline
@@ -508,6 +564,17 @@ def cmd_plan(args: argparse.Namespace) -> int:
                 _style.tip("add `.advisor/` to .gitignore so checkpoints + history stay local"),
                 file=sys.stderr,
             )
+
+    sarif_path = getattr(args, "sarif", None)
+    if sarif_path is not None:
+        # Plan runs before the live pipeline produces findings, so we emit
+        # an empty-results SARIF document representing "advisor ran, no
+        # findings recorded". CI workflows can still upload it to keep the
+        # Code Scanning artifact slot populated; the dirty-run artifact is
+        # produced later by ``advisor audit --sarif``.
+        rc = _write_sarif(Path(sarif_path), [], target)
+        if rc is not None:
+            return rc
 
     return _emit_plan(args, target, tasks, batches, run_id=saved_run_id)
 
@@ -1217,6 +1284,331 @@ def cmd_checkpoints(args: argparse.Namespace) -> int:
     return 0
 
 
+# --fail-on exit-code: CI gating. ``never`` (default) keeps backward
+# compatibility; any finding at or above the threshold produces exit 4
+# so wrappers can differentiate a clean run from a dirty one.
+_FAIL_ON_CHOICES = ("never", "low", "medium", "high", "critical")
+_FAIL_ON_RANK: dict[str, int] = {
+    "never": 99,
+    "low": 1,
+    "medium": 2,
+    "high": 3,
+    "critical": 4,
+}
+_SEVERITY_RANK: dict[str, int] = {
+    "LOW": 1,
+    "MEDIUM": 2,
+    "HIGH": 3,
+    "CRITICAL": 4,
+}
+_FAIL_ON_EXIT_CODE = 4
+
+
+def _fail_on_findings(
+    threshold: str | None,
+    findings: Sequence[object],
+) -> int | None:
+    """Return ``_FAIL_ON_EXIT_CODE`` if any finding meets/exceeds ``threshold``.
+
+    ``threshold`` is one of ``_FAIL_ON_CHOICES`` or ``None``. ``None`` or
+    ``"never"`` returns ``None`` (no exit-code override). ``findings`` is
+    any iterable of :class:`~advisor.verify.Finding`-shaped objects.
+    """
+    if not threshold or threshold == "never":
+        return None
+    gate = _FAIL_ON_RANK.get(threshold, 99)
+    for f in findings:
+        sev_attr = getattr(f, "severity", None)
+        if not isinstance(sev_attr, str):
+            continue
+        rank = _SEVERITY_RANK.get(sev_attr.upper(), 0)
+        if rank >= gate:
+            return _FAIL_ON_EXIT_CODE
+    return None
+
+
+def _log_info(message: str) -> None:
+    """One-line INFO log to stderr (no logging framework needed).
+
+    Used for per-suppression reporting so operators can see what was
+    dropped without dragging in Python's logging config for one feature.
+    """
+    print(_style.dim(f"info: {message}"), file=sys.stderr)
+
+
+def _replace_findings(
+    report: AuditReport,
+    kept: Sequence[object],
+) -> AuditReport:
+    """Return an :class:`AuditReport` with ``findings_in_batch`` replaced.
+
+    Separate helper so baseline / suppression wiring doesn't have to
+    reach into the report's internals.
+    """
+    import dataclasses
+
+    from .verify import Finding as _Finding
+
+    typed: list[_Finding] = [f for f in kept if isinstance(f, _Finding)]
+    return dataclasses.replace(report, findings_in_batch=typed)
+
+
+def _write_sarif(
+    sarif_path: Path,
+    findings: list[object],
+    target_dir: Path,
+) -> int | None:
+    """Write a SARIF 2.1.0 document for ``findings`` to ``sarif_path``.
+
+    Returns ``None`` on success, a non-zero exit code on IO or validation
+    failure (error message printed to stderr).
+    """
+    from .verify import Finding as _Finding
+
+    typed: list[_Finding] = [f for f in findings if isinstance(f, _Finding)]
+    try:
+        doc = findings_to_sarif(typed, tool_version=_get_version(), target_dir=target_dir)
+    except ValueError as exc:
+        print(_style.error_box(f"sarif: {exc}", stream=sys.stderr), file=sys.stderr)
+        return 1
+    try:
+        _atomic_write(sarif_path, json.dumps(doc, indent=2) + "\n")
+    except OSError as exc:
+        print(_style.error_box(f"sarif: {exc}", stream=sys.stderr), file=sys.stderr)
+        return 1
+    return None
+
+
+def _load_findings_from_input(
+    source: Path | None,
+) -> tuple[list[object], int | None]:
+    """Load findings from ``source`` (JSONL of findings), or stdin if ``None``.
+
+    Returns (findings, error_exit_code). On error, returns ``([], code)``.
+    Accepts both the raw parser format (markdown dump) and a JSON array.
+    """
+    from .verify import Finding, parse_findings_from_text
+
+    try:
+        if source is None:
+            if sys.stdin.isatty():
+                return [], None
+            text = sys.stdin.read()
+        else:
+            text = Path(source).read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
+        return [], 2
+    # Try JSON first (from `advisor audit --json`); fall back to markdown.
+    stripped = text.strip()
+    if stripped.startswith("{") or stripped.startswith("["):
+        try:
+            doc = json.loads(stripped)
+        except json.JSONDecodeError:
+            doc = None
+        if isinstance(doc, dict):
+            raw = doc.get("findings_in_batch") or doc.get("findings") or []
+        elif isinstance(doc, list):
+            raw = doc
+        else:
+            raw = []
+        findings: list[object] = []
+        for f in raw:
+            if not isinstance(f, dict):
+                continue
+            try:
+                findings.append(
+                    Finding(
+                        file_path=str(f["file_path"]),
+                        severity=str(f["severity"]),
+                        description=str(f["description"]),
+                        evidence=str(f.get("evidence", "")),
+                        fix=str(f.get("fix", "")),
+                        rule_id=f.get("rule_id") or None,
+                    )
+                )
+            except KeyError:
+                continue
+        return findings, None
+    # Markdown fallback.
+    return list(parse_findings_from_text(text)), None
+
+
+def cmd_baseline(args: argparse.Namespace) -> int:
+    """`advisor baseline create|diff` — snapshot and compare findings."""
+    from .baseline import (
+        diff_against_baseline,
+        findings_to_entries,
+        read_baseline,
+        write_baseline,
+    )
+    from .verify import Finding
+
+    action = args.action
+    target = Path(args.target)
+    if action == "create":
+        output = Path(getattr(args, "output", None) or (target / ".advisor" / "baseline.jsonl"))
+        findings, rc = _load_findings_from_input(getattr(args, "from_file", None))
+        if rc is not None:
+            return rc
+        typed_findings: list[Finding] = [f for f in findings if isinstance(f, Finding)]
+        entries = findings_to_entries(typed_findings)
+        write_baseline(output, entries)
+        if not getattr(args, "quiet", False):
+            print(_style.success_box(f"baseline saved: {output} ({len(entries)} finding(s))"))
+        return 0
+    if action == "diff":
+        baseline_path = Path(
+            getattr(args, "baseline_path", None) or (target / ".advisor" / "baseline.jsonl")
+        )
+        baseline = read_baseline(baseline_path)
+        findings, rc = _load_findings_from_input(getattr(args, "from_file", None))
+        if rc is not None:
+            return rc
+        typed_findings = [f for f in findings if isinstance(f, Finding)]
+        diff = diff_against_baseline(typed_findings, baseline)
+        if getattr(args, "json", False):
+            payload = {
+                "schema_version": JSON_SCHEMA_VERSION,
+                "new": [
+                    {
+                        "file_path": f.file_path,
+                        "severity": f.severity,
+                        "description": f.description,
+                    }
+                    for f in diff.new
+                ],
+                "persisting_count": len(diff.persisting),
+                "fixed": [
+                    {
+                        "file_path": e.file_path,
+                        "rule_id": e.rule_id,
+                        "description": e.description,
+                    }
+                    for e in diff.fixed
+                ],
+            }
+            print(json.dumps(payload, indent=2))
+            return 0
+        lines = [
+            "## Baseline diff",
+            "",
+            f"New findings: **{len(diff.new)}**",
+            f"Persisting: {len(diff.persisting)}",
+            f"Fixed (in baseline, not seen): {len(diff.fixed)}",
+            "",
+        ]
+        if diff.new:
+            lines.append("### New")
+            for f in diff.new:
+                lines.append(f"- [{f.severity}] `{f.file_path}` — {f.description}")
+        print(_style.colorize_markdown("\n".join(lines).rstrip() + "\n"))
+        return 0
+    print(_style.error_box(f"unknown action: {action}", stream=sys.stderr), file=sys.stderr)
+    return 2
+
+
+def cmd_suppressions(args: argparse.Namespace) -> int:
+    """`advisor suppressions` — list or inspect expired entries."""
+    from .suppressions import load_suppressions
+
+    target = Path(args.target)
+    path = target / ".advisor" / "suppressions.jsonl"
+    if not path.exists():
+        print(_style.dim(f"no suppressions file at {path}"))
+        return 0
+    try:
+        entries = load_suppressions(path)
+    except ValueError as exc:
+        print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
+        return 2
+
+    show_expired_only = getattr(args, "expired", False)
+    if show_expired_only:
+        entries = tuple(e for e in entries if e.expired)
+
+    if getattr(args, "json", False):
+        payload = {
+            "schema_version": JSON_SCHEMA_VERSION,
+            "count": len(entries),
+            "entries": [
+                {
+                    "rule_id": e.rule_id,
+                    "file": e.file,
+                    "file_glob": e.file_glob,
+                    "reason": e.reason,
+                    "until": e.until,
+                    "expired": e.expired,
+                }
+                for e in entries
+            ],
+        }
+        print(json.dumps(payload, indent=2))
+        return 0
+    if not entries:
+        label = "expired suppressions" if show_expired_only else "suppressions"
+        print(_style.dim(f"no {label} in {path}"))
+        return 0
+    lines = [f"## Suppressions ({len(entries)})", ""]
+    for e in entries:
+        scope = e.file or f"glob:{e.file_glob}"
+        stamp = f" until {e.until}" if e.until else ""
+        mark = " (expired)" if e.expired else ""
+        lines.append(f"- `{e.rule_id}` → `{scope}`{stamp}{mark}")
+        if e.reason:
+            lines.append(f"  - _{e.reason}_")
+    print(_style.colorize_markdown("\n".join(lines) + "\n"))
+    return 0
+
+
+def cmd_presets(args: argparse.Namespace) -> int:
+    """List available rule-pack presets (pretty or JSON)."""
+    from .presets import list_presets
+
+    presets = list_presets()
+    if getattr(args, "json", False):
+        payload = {
+            "schema_version": JSON_SCHEMA_VERSION,
+            "count": len(presets),
+            "presets": [
+                {
+                    "name": p.name,
+                    "description": p.description,
+                    "file_types": p.file_types,
+                    "min_priority": p.min_priority,
+                    "test_command": p.test_command,
+                    "notes": list(p.notes),
+                    "extra_keywords_by_tier": {
+                        str(k): list(v) for k, v in p.extra_keywords_by_tier.items()
+                    },
+                }
+                for p in presets
+            ],
+        }
+        print(json.dumps(payload, indent=2))
+        return 0
+    lines = [f"## Presets ({len(presets)})", ""]
+    for p in presets:
+        lines.append(f"- **`{p.name}`** — {p.description}")
+        lines.append(
+            f"  - defaults: `file-types={p.file_types}`, "
+            f"`min-priority={p.min_priority}`, "
+            f"`test-cmd={p.test_command or '(none)'}`"
+        )
+        if p.extra_keywords_by_tier:
+            tiers = ", ".join(
+                f"P{k}:{len(v)}" for k, v in sorted(p.extra_keywords_by_tier.items(), reverse=True)
+            )
+            lines.append(f"  - extra keywords: {tiers}")
+        for note in p.notes:
+            lines.append(f"  - _{note}_")
+        lines.append("")
+    print(_style.colorize_markdown("\n".join(lines).rstrip() + "\n"))
+    if not getattr(args, "quiet", False):
+        print(_style.cta("use", "advisor plan . --preset <name>"))
+    return 0
+
+
 def cmd_audit(args: argparse.Namespace) -> int:
     """Analyze a transcript against a checkpoint and print an audit report.
 
@@ -1253,13 +1645,60 @@ def cmd_audit(args: argparse.Namespace) -> int:
 
     report = audit_transcript(transcript, cp)
 
+    # Baseline / suppression filtering — applied to the in-batch findings.
+    baseline_path = getattr(args, "baseline_path", None)
+    if baseline_path:
+        from .baseline import filter_against_baseline, read_baseline
+
+        baseline = read_baseline(Path(baseline_path))
+        kept, _ = filter_against_baseline(list(report.findings_in_batch), baseline)
+        report = _replace_findings(report, kept)
+
+    # Always consult .advisor/suppressions.jsonl if present.
+    suppr_path = target / ".advisor" / "suppressions.jsonl"
+    if suppr_path.exists():
+        from .suppressions import apply_suppressions, load_suppressions
+
+        try:
+            entries = load_suppressions(suppr_path)
+        except ValueError as exc:
+            print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
+            return 2
+        kept, dropped = apply_suppressions(list(report.findings_in_batch), entries)
+        if dropped:
+            for f, s in dropped:
+                _log_info(
+                    f"suppressed {f.severity} {f.file_path!r} — "
+                    f"rule {s.rule_id!r} ({s.reason or 'no reason'})"
+                )
+        report = _replace_findings(report, kept)
+
+    pr_comment = getattr(args, "pr_comment", False)
+    fmt = getattr(args, "format", None)
+    want_pr_comment = pr_comment or fmt == "pr-comment"
+    if want_pr_comment:
+        from .pr_comment import format_pr_comment
+
+        print(format_pr_comment(list(report.findings_in_batch)))
+        return _fail_on_findings(getattr(args, "fail_on", None), report.findings_in_batch) or 0
+
+    sarif_path = getattr(args, "sarif", None)
+    if sarif_path is not None:
+        # Emit the in-batch findings for Code Scanning — out-of-batch findings
+        # are drift, not results, and shouldn't be uploaded as scan hits.
+        rc = _write_sarif(Path(sarif_path), list(report.findings_in_batch), target)
+        if rc is not None:
+            return rc
+
+    fail_on_rc = _fail_on_findings(getattr(args, "fail_on", None), report.findings_in_batch)
+
     if getattr(args, "json", False):
         payload: dict[str, object] = {
             "schema_version": JSON_SCHEMA_VERSION,
             **audit_to_dict(report),
         }
         print(json.dumps(payload, indent=2))
-        return 0
+        return fail_on_rc if fail_on_rc is not None else 0
 
     print(_style.colorize_markdown(format_audit_report(report)))
     if not getattr(args, "quiet", False) and (
@@ -1271,7 +1710,7 @@ def cmd_audit(args: argparse.Namespace) -> int:
                 "tighten caps with: advisor plan --max-fixes-per-runner N --large-file-max-fixes M"
             )
         )
-    return 0
+    return fail_on_rc if fail_on_rc is not None else 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1406,6 +1845,41 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="FILE",
         help="Load model pricing (cents per 1M tokens) from JSON FILE",
+    )
+    # SARIF output — for GitHub Code Scanning / other CI consumers. The
+    # plan stage emits an empty-results document (no findings yet); the
+    # real findings-bearing SARIF comes from ``advisor audit --sarif``.
+    p_plan.add_argument(
+        "--sarif",
+        metavar="PATH",
+        type=Path,
+        default=None,
+        help=(
+            "Write SARIF 2.1.0 output to PATH. For Code Scanning, pair with `actions/upload-sarif`."
+        ),
+    )
+    # CI gating — exit non-zero if any finding at/above the threshold
+    # is present. ``never`` (default) keeps exit 0 on a clean plan.
+    p_plan.add_argument(
+        "--fail-on",
+        dest="fail_on",
+        choices=_FAIL_ON_CHOICES,
+        default="never",
+        help=(
+            "Exit 4 if any finding meets/exceeds LEVEL. Thresholds are "
+            "inclusive: `--fail-on high` trips on HIGH and CRITICAL. "
+            "Default: never (back-compat)."
+        ),
+    )
+    # History-informed ranking — repeat-offender boost. Disabled on
+    # --no-history for deterministic CI plans.
+    p_plan.add_argument(
+        "--no-history",
+        action="store_true",
+        help=(
+            "Ignore .advisor/history.jsonl when ranking. Use in CI for "
+            "deterministic plans independent of previous run outcomes."
+        ),
     )
     p_plan.set_defaults(func=cmd_plan)
 
@@ -1659,6 +2133,67 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_checkpoints.set_defaults(func=cmd_checkpoints)
 
+    # Baseline subcommand (create / diff).
+    p_baseline = sub.add_parser(
+        "baseline",
+        help="Snapshot-and-compare: create a baseline or diff current findings vs. it",
+    )
+    p_baseline.add_argument("action", choices=("create", "diff"), help="create or diff")
+    p_baseline.add_argument(
+        "target",
+        nargs="?",
+        default=".",
+        help="Target directory (default: current directory)",
+    )
+    p_baseline.add_argument(
+        "--from",
+        dest="from_file",
+        metavar="PATH",
+        default=None,
+        type=Path,
+        help="Read findings from PATH (JSON or markdown). Default: stdin.",
+    )
+    p_baseline.add_argument(
+        "--output",
+        metavar="PATH",
+        default=None,
+        help="Baseline output path (default: <target>/.advisor/baseline.jsonl)",
+    )
+    p_baseline.add_argument(
+        "--baseline",
+        dest="baseline_path",
+        metavar="PATH",
+        default=None,
+        help="Baseline input path for diff (default: <target>/.advisor/baseline.jsonl)",
+    )
+    p_baseline.add_argument("--json", action="store_true", help="Emit JSON for scripting")
+    p_baseline.add_argument("--quiet", action="store_true", help="Suppress CTA/tip lines")
+    p_baseline.set_defaults(func=cmd_baseline)
+
+    # Suppressions subcommand — list active / expired suppressions.
+    p_suppr = sub.add_parser(
+        "suppressions",
+        help="List active suppressions from <target>/.advisor/suppressions.jsonl",
+    )
+    p_suppr.add_argument(
+        "target",
+        nargs="?",
+        default=".",
+        help="Target directory (default: current directory)",
+    )
+    p_suppr.add_argument("--list", action="store_true", help="List all entries (default)")
+    p_suppr.add_argument("--expired", action="store_true", help="Only show expired entries")
+    p_suppr.add_argument("--json", action="store_true", help="Emit JSON for scripting")
+    p_suppr.set_defaults(func=cmd_suppressions)
+
+    p_presets = sub.add_parser(
+        "presets",
+        help="List available rule-pack presets for `--preset NAME`",
+    )
+    p_presets.add_argument("--json", action="store_true", help="Emit preset catalog as JSON")
+    p_presets.add_argument("--quiet", action="store_true", help="Suppress CTA line")
+    p_presets.set_defaults(func=cmd_presets)
+
     p_audit = sub.add_parser(
         "audit",
         help=(
@@ -1696,6 +2231,38 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Suppress CTA/tip lines",
     )
+    p_audit.add_argument(
+        "--sarif",
+        metavar="PATH",
+        type=Path,
+        default=None,
+        help=(
+            "Write in-batch findings as SARIF 2.1.0 to PATH. For Code "
+            "Scanning, pair with `actions/upload-sarif`."
+        ),
+    )
+    p_audit.add_argument(
+        "--fail-on",
+        dest="fail_on",
+        choices=_FAIL_ON_CHOICES,
+        default="never",
+        help=("Exit 4 if any in-batch finding meets/exceeds LEVEL. Default: never (back-compat)."),
+    )
+    p_audit.add_argument(
+        "--format",
+        choices=("pretty", "json", "pr-comment"),
+        default=None,
+        help=("Output format. `pr-comment` emits GitHub-flavored markdown suitable for a PR body."),
+    )
+    p_audit.add_argument(
+        "--baseline",
+        dest="baseline_path",
+        metavar="PATH",
+        default=None,
+        help=(
+            "Suppress findings matching this baseline JSONL file (see `advisor baseline create`)."
+        ),
+    )
     p_audit.set_defaults(func=cmd_audit)
 
     return parser
@@ -1714,6 +2281,9 @@ _NUDGE_SKIP_COMMANDS = {
     "uninstall",
     "version",
     "ui",
+    "presets",
+    "suppressions",
+    "baseline",
 }
 
 

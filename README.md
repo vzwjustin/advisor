@@ -195,6 +195,76 @@ make check        # ruff + mypy + pytest
 pytest --cov=advisor --cov-report=term-missing
 ```
 
+## GitHub Action
+
+Reusable workflow that runs `advisor plan`, uploads SARIF 2.1.0 output to
+GitHub Code Scanning, and (optionally) posts a PR comment. Paste this into
+`.github/workflows/advisor.yml` in your repo:
+
+```yaml
+name: Advisor
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  advisor:
+    uses: vzwjustin/advisor/.github/workflows/advisor.yml@v0.5.0
+    with:
+      target: "."
+      min-priority: 3
+      fail-on: "high"        # fail CI on HIGH/CRITICAL findings
+      preset: "python-web"   # optional rule-pack tuning
+      post-pr-comment: false
+```
+
+Or roll your own: any CI system can run `advisor plan --sarif advisor.sarif`
+and upload the file to whatever scanner you use.
+
+## Presets
+
+Curated rule-pack bundles tune file-type defaults and priority keywords for
+common stacks:
+
+| Preset             | Stack                        | Defaults                           |
+|--------------------|------------------------------|------------------------------------|
+| `python-web`       | Flask / Django / FastAPI     | `*.py`, P5 auth keywords           |
+| `python-cli`       | argparse / click CLIs        | `*.py`, P3 subprocess keywords     |
+| `node-api`         | Express / Fastify / Koa      | `*.js,*.ts`, P5 JWT/session        |
+| `typescript-react` | React + TS                   | `*.ts,*.tsx`, P4 DOM sinks         |
+| `go-service`       | net/http services            | `*.go`, P3 net/http/sql            |
+| `rust-crate`       | library / crate              | `*.rs`, P3 unsafe/transmute        |
+
+```bash
+advisor plan src/ --preset python-web
+advisor presets            # list presets
+advisor presets --json     # machine-readable
+```
+
+## Automation flags
+
+| Flag                | Applies to        | Effect                                       |
+|---------------------|-------------------|----------------------------------------------|
+| `--sarif PATH`      | `plan`, `audit`   | Write SARIF 2.1.0 for Code Scanning          |
+| `--fail-on LEVEL`   | `plan`, `audit`   | Exit 4 if any finding ≥ LEVEL                |
+| `--format pr-comment` | `plan`          | Emit a PR-body-ready markdown summary        |
+| `--no-history`      | `plan`            | Ignore history for deterministic CI plans    |
+| `--baseline PATH`   | `plan`            | Suppress findings matching a baseline        |
+| `--json` / `--output FILE` | `plan` / `audit` | Machine-readable output                |
+
+Exit codes: `0` clean · `4` `--fail-on` threshold tripped · `3` `--strict`
+no-op or unhealthy install · `2` argparse / user error · `1` unexpected.
+
+## Findings lifecycle
+
+- **`advisor history`** — recent confirmed findings from `.advisor/history.jsonl`
+- **`advisor baseline create`** — snapshot current findings as an accepted baseline
+- **`advisor baseline diff`** — compare current run vs. baseline
+- **`.advisor/suppressions.jsonl`** — per-rule, per-file suppressions with
+  expiry dates (run `advisor suppressions --list`)
+
 ## Further reading
 
 - [`docs/architecture.md`](docs/architecture.md) — module dependency graph,
