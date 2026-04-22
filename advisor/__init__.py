@@ -119,7 +119,7 @@ from .rank import (
     rank_to_prompt,
 )
 from .runner_budget import (
-    DEFAULT_BYTE_CEILING,
+    DEFAULT_CHAR_CEILING,
     DEFAULT_FILE_READ_CEILING,
     ROTATE_FRACTION,
     SCOPE_STAGES,
@@ -129,6 +129,7 @@ from .runner_budget import (
     budget_status,
     format_budget_nudge,
     new_budget,
+    normalize_batch_files,
     out_of_batch,
     parse_scope_anchor,
     stage_regressed,
@@ -270,7 +271,7 @@ __all__ = [
     # pr comment
     "format_pr_comment",
     # runner budget / scope anchor
-    "DEFAULT_BYTE_CEILING",
+    "DEFAULT_CHAR_CEILING",
     "DEFAULT_FILE_READ_CEILING",
     "ROTATE_FRACTION",
     "SCOPE_STAGES",
@@ -280,6 +281,7 @@ __all__ = [
     "budget_status",
     "format_budget_nudge",
     "new_budget",
+    "normalize_batch_files",
     "out_of_batch",
     "parse_scope_anchor",
     "stage_regressed",
