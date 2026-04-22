@@ -145,6 +145,14 @@ def default_team_config(
     config is still constructed — the warning is advisory so callers
     aren't locked out when Anthropic ships a new model ID.
     """
+    # Capture "caller left this at the default sentinel" BEFORE any env
+    # mutation — otherwise ADVISOR_FILE_TYPES / ADVISOR_MIN_PRIORITY could
+    # change the live value and silently shadow the preset below, since
+    # the preset-default check uses value equality.
+    file_types_is_default = file_types == "*.py"
+    min_priority_is_default = min_priority == 3
+    test_command_is_default = test_command == ""
+
     if advisor_model == "opus":
         advisor_model = _env_or("ADVISOR_MODEL", advisor_model)
     if runner_model == "sonnet":
@@ -152,19 +160,21 @@ def default_team_config(
     if max_runners is None:
         raw = _env_int_or("ADVISOR_MAX_RUNNERS", 5)
         max_runners = raw if raw >= 1 else 5
-    if file_types == "*.py":
+    if file_types_is_default:
         file_types = _env_or("ADVISOR_FILE_TYPES", file_types)
-    if min_priority == 3:
+    if min_priority_is_default:
         min_priority = _env_int_or("ADVISOR_MIN_PRIORITY", min_priority)
     # Clamp to the valid P1–P5 range. Argparse guards the CLI, but the
     # env-var path (ADVISOR_MIN_PRIORITY) and direct API callers could
     # otherwise pass anything.
     min_priority = max(1, min(5, min_priority))
-    if test_command == "":
+    if test_command_is_default:
         test_command = _env_or("ADVISOR_TEST_COMMAND", test_command)
 
     # Preset merge — only fills in fields the caller left at their
-    # documented default sentinels. Explicit overrides always win.
+    # documented default sentinels. Explicit overrides always win. The
+    # checks use the pre-env snapshots so env-derived values don't get
+    # clobbered by the preset.
     if preset:
         # Imported lazily so advisor.orchestrate.config has no top-level
         # dependency on advisor.presets (orchestrate sits below presets
@@ -172,11 +182,11 @@ def default_team_config(
         from ..presets import get_preset
 
         pack = get_preset(preset)
-        if file_types == "*.py":
+        if file_types_is_default and file_types == "*.py":
             file_types = pack.file_types
-        if min_priority == 3:
+        if min_priority_is_default and min_priority == 3:
             min_priority = pack.min_priority
-        if test_command == "" and pack.test_command:
+        if test_command_is_default and test_command == "" and pack.test_command:
             test_command = pack.test_command
 
     if warn_unknown_model:

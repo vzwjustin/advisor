@@ -170,7 +170,9 @@ def _cost_payload(state: AppState, qs: dict[str, list[str]]) -> dict[str, Any]:
 
 
 def _history_payload(state: AppState, qs: dict[str, list[str]]) -> dict[str, Any]:
-    limit = _first_int(qs, "limit", 100)
+    # Cap to 1000 to keep single responses bounded — an unbounded ?limit=
+    # could otherwise be used to exhaust memory on a large history file.
+    limit = min(_first_int(qs, "limit", 100), 1000)
     entries = load_recent(state.target, limit=limit)
     return {
         "schema_version": HISTORY_SCHEMA_VERSION,

@@ -675,17 +675,20 @@ def rank_files(
             boost = _history_boost(fp, history_scores)
             if boost > 0:
                 boosted = min(5, priority + 1)  # +1 tier cap
+                # Tier-bump is gated on boosted > priority (so P5 stays P5
+                # instead of wrapping), but the "repeat offender" label
+                # should appear whenever there *is* a boost signal — a P5
+                # that keeps showing up still deserves the annotation.
                 if boosted > priority:
                     priority = boosted
-                    count_label = ""
-                    if history_counts:
-                        n = _history_count_for(fp, history_counts)
-                        if n > 0:
-                            count_label = (
-                                f": {n} finding{'s' if n != 1 else ''} in last "
-                                f"{history_window_days}d"
-                            )
-                    reasons = (*reasons, f"repeat offender{count_label}")
+                count_label = ""
+                if history_counts:
+                    n = _history_count_for(fp, history_counts)
+                    if n > 0:
+                        count_label = (
+                            f": {n} finding{'s' if n != 1 else ''} in last {history_window_days}d"
+                        )
+                reasons = (*reasons, f"repeat offender{count_label}")
         ranked.append(RankedFile(path=fp, priority=priority, reasons=reasons))
 
     return sorted(ranked, key=lambda r: (-r.priority, r.path))
@@ -721,7 +724,12 @@ def _history_boost(file_path: str, history_scores: dict[str, float]) -> float:
 
 
 def _history_count_for(file_path: str, history_counts: dict[str, int]) -> int:
-    """Sum counts across alias keys for ``file_path`` (abs, posix, name)."""
+    """Return the max count across alias keys for ``file_path`` (abs, posix, name).
+
+    Takes the max (not the sum) so a file that appears under multiple
+    alias keys — e.g. absolute and repo-relative — is counted once rather
+    than inflated.
+    """
     candidates = (
         file_path,
         str(Path(file_path)),

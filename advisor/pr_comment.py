@@ -28,6 +28,19 @@ def _escape_inline(text: str) -> str:
     return text.replace("`", "‘")
 
 
+def _neutralize_details(text: str) -> str:
+    """Neutralize stray ``</details>`` / ``<details>`` tags in prose.
+
+    When finding descriptions or fixes are interpolated into a
+    ``<details>``-wrapped body, a ``</details>`` substring inside them
+    closes our outer block early, cascading into subsequent findings and
+    breaking the GitHub PR render. We replace the angle brackets with
+    zero-width-escaped equivalents so the text still reads as intended
+    but the tag no longer parses.
+    """
+    return text.replace("</details>", "<​/details>").replace("<details>", "<​details>")
+
+
 def format_pr_comment(findings: list[Finding]) -> str:
     """Render findings as a Markdown block suitable for a PR body.
 
@@ -63,15 +76,15 @@ def format_pr_comment(findings: list[Finding]) -> str:
             f"<code>{_escape_inline(f.file_path)}</code> — {title}</summary>"
         )
         lines.append("")
-        lines.append(f"**Description:** {f.description}")
+        lines.append(f"**Description:** {_neutralize_details(f.description)}")
         lines.append("")
         lines.append("**Evidence:**")
         lines.append("")
         lines.append("```")
-        lines.append(f.evidence.replace("```", "'''"))
+        lines.append(_neutralize_details(f.evidence).replace("```", "'''"))
         lines.append("```")
         lines.append("")
-        lines.append(f"**Fix:** {f.fix}")
+        lines.append(f"**Fix:** {_neutralize_details(f.fix)}")
         if f.rule_id:
             lines.append("")
             lines.append(f"**Rule:** `{_escape_inline(f.rule_id)}`")

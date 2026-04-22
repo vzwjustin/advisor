@@ -37,10 +37,17 @@ def safe_rglob_paths(target: Path, pattern: str) -> list[str]:
     """
     try:
         resolved_target = target.resolve()
-        return [
-            str(p)
-            for p in target.rglob(pattern)
-            if p.is_file() and p.resolve().is_relative_to(resolved_target)
-        ]
+        iterator = target.rglob(pattern)
     except (OSError, ValueError):
         return []
+
+    results: list[str] = []
+    # Resolve each entry in its own try so a single ELOOP / permission /
+    # stale-symlink error doesn't wipe the whole listing.
+    for p in iterator:
+        try:
+            if p.is_file() and p.resolve().is_relative_to(resolved_target):
+                results.append(str(p))
+        except (OSError, ValueError):
+            continue
+    return results

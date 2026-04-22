@@ -597,9 +597,9 @@ def _batches_from_checkpoint(cp: Checkpoint) -> list[FocusBatch]:
         )
         out.append(
             FocusBatch(
-                batch_id=int(str(b["batch_id"])),
+                batch_id=int(str(b.get("batch_id", 0))),
                 tasks=batch_tasks,
-                complexity=str(b["complexity"]),
+                complexity=str(b.get("complexity", "")),
             )
         )
     return out
@@ -1683,10 +1683,8 @@ def cmd_audit(args: argparse.Namespace) -> int:
                 )
         report = _replace_findings(report, kept)
 
-    pr_comment = getattr(args, "pr_comment", False)
     fmt = getattr(args, "format", None)
-    want_pr_comment = pr_comment or fmt == "pr-comment"
-    if want_pr_comment:
+    if fmt == "pr-comment":
         from .pr_comment import format_pr_comment
 
         print(format_pr_comment(list(report.findings_in_batch)))

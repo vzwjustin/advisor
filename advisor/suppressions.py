@@ -213,6 +213,11 @@ def _severity_from_rule_id(rule_id: str) -> int:
     parts = rule_id.split("/")
     if len(parts) >= 2:
         return _SEVERITY_RANK.get(parts[1].upper(), _REQUIRES_EXPIRY_ABOVE)
+    # Bare rule_id such as ``"CRITICAL"`` or ``"HIGH"`` — treat the whole
+    # string as the severity so the expiry-required-above-MEDIUM gate
+    # still engages. Unknown single-segment ids fall back to MEDIUM rank.
+    if len(parts) == 1 and parts[0]:
+        return _SEVERITY_RANK.get(parts[0].upper(), _REQUIRES_EXPIRY_ABOVE)
     return _REQUIRES_EXPIRY_ABOVE
 
 

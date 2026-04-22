@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import warnings
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -174,6 +175,15 @@ def load_checkpoint(target: str | Path, run_id: str) -> Checkpoint:
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"could not read checkpoint {path}: {exc}") from exc
 
+    version = str(obj.get("schema_version", CHECKPOINT_SCHEMA_VERSION))
+    if version and version != CHECKPOINT_SCHEMA_VERSION:
+        warnings.warn(
+            f"{path}: schema_version {version!r} does not match "
+            f"expected {CHECKPOINT_SCHEMA_VERSION!r}; parsing anyway",
+            UserWarning,
+            stacklevel=2,
+        )
+
     try:
         return Checkpoint(
             run_id=str(obj["run_id"]),
@@ -192,7 +202,7 @@ def load_checkpoint(target: str | Path, run_id: str) -> Checkpoint:
             context=str(obj.get("context", "")),
             tasks=list(obj.get("tasks", [])),
             batches=list(obj.get("batches", [])),
-            schema_version=str(obj.get("schema_version", CHECKPOINT_SCHEMA_VERSION)),
+            schema_version=version,
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError(f"checkpoint {path} is missing required fields: {exc}") from exc

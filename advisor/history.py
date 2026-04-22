@@ -125,6 +125,13 @@ def append_entries(target: str | Path, entries: list[HistoryEntry]) -> Path:
     write so two parallel ``advisor`` processes cannot interleave
     partial JSON lines. Locking is best-effort — see
     :func:`_lock_exclusive`.
+
+    .. note::
+        Unlike :mod:`advisor.checkpoint`, the append is **not** fsynced.
+        History is advisory — a lost tail on an OS crash is
+        acceptable — and the append path runs on every finding, so the
+        fsync cost per entry would dominate. Callers that need
+        durability guarantees should persist elsewhere.
     """
     if not entries:
         return history_path(target)

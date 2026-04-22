@@ -115,7 +115,17 @@ def _resolve_relative(path: str, target_dir: Path) -> str:
         return rel.as_posix()
     # Already relative — normalize to POSIX separators for cross-platform
     # determinism but do NOT resolve (a non-existent file shouldn't fail).
-    return p.as_posix().lstrip("./")
+    posix = p.as_posix()
+    # Guard against relative paths that escape the source root via ``..``.
+    # lstrip("./") was wrong here — it strips the character *set* {'.', '/'},
+    # corrupting ``../foo`` → ``foo`` and ``.hidden`` → ``hidden``. We keep
+    # the path as-is but reject any segment that climbs above %SRCROOT%.
+    if any(part == ".." for part in p.parts):
+        raise ValueError(
+            f"file_path {path!r} escapes target_dir {target_dir!s} via '..'; "
+            f"SARIF requires paths to resolve under %SRCROOT%"
+        )
+    return posix
 
 
 def findings_to_sarif(
@@ -164,7 +174,10 @@ def findings_to_sarif(
 
         region: dict[str, Any] = {}
         if line is not None:
-            region["startLine"] = line
+            # SARIF 2.1.0 requires startLine >= 1. Runners occasionally
+            # emit ``path:0`` for file-level findings — clamp rather than
+            # let a downstream validator reject the whole run.
+            region["startLine"] = max(1, line)
 
         physical_location: dict[str, Any] = {
             "artifactLocation": {

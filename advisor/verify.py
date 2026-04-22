@@ -247,9 +247,9 @@ def _parse_blocks(text: str) -> list[Finding]:
         if stripped.startswith("### Finding"):
             if current:
                 _flush()
-                current = {}
+            current = {}
             active_key = None
-            in_header_block = True
+            in_header_block = False
             continue
 
         matched = _match_key(stripped)

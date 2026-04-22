@@ -75,8 +75,11 @@ def build_advisor_prompt(config: TeamConfig, *, history_block: str = "") -> str:
     )
     # When a test command is configured, instruct the advisor to run it after
     # each fix wave and loop on failure. Keeps the fix-verify loop tight.
+    # Neutralize backticks in the user-supplied test command so they don't
+    # close the surrounding inline-code span in the rendered prompt.
+    test_command_safe = config.test_command.replace("`", "‘")
     test_block = (
-        f"\n\n**Regression gate:** after each runner reports fixes, run `{config.test_command}` "
+        f"\n\n**Regression gate:** after each runner reports fixes, run `{test_command_safe}` "
         "(or ask a runner to). If it fails, dispatch a runner to repair — do not declare done "
         "until the gate is green."
         if config.test_command
