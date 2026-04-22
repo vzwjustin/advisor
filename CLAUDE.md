@@ -7,7 +7,7 @@ Models configurable via `TeamConfig(advisor_model=, runner_model=)` — defaults
 
 | Role | Default Model | Agent Type | Job |
 |------|---------------|------------|-----|
-| **Advisor** | Opus | `deep-reasoning` | Glob+Grep discovery, ranks P1–P5, sizes runner pool, **writes a unique, file-aware prompt for every runner**, dispatches explore + fix waves, live dialogue with runners, verifies each output as it lands |
+| **Advisor** | Opus | `advisor-executor` | Glob+Grep discovery, ranks P1–P5, sizes runner pool, **writes a unique, file-aware prompt for every runner**, dispatches explore + fix waves, live dialogue with runners, verifies each output as it lands |
 | **Runner** | Sonnet | `code-review` | Reads files, finds issues, implements fixes. Each runner gets a domain-specific prompt from the advisor — not a generic template. Works ONLY on what the advisor hands it. In constant two-way conversation with the advisor. |
 
 ## Pipeline

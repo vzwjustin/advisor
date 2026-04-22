@@ -185,7 +185,7 @@ TeamCreate({ team_name: "review", description: "Code review of <target>" })
 Agent({
   name: "advisor",
   description: "Investigate, rank, and dispatch runners",
-  subagent_type: "deep-reasoning",
+  subagent_type: "advisor-executor",
   model: "opus",
   team_name: "review",
   prompt: <build_advisor_prompt(config)>

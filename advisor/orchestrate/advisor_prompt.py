@@ -110,7 +110,7 @@ def build_advisor_agent(config: TeamConfig) -> dict[str, str]:
     return {
         "description": "Investigate, rank, and dispatch runners",
         "name": "advisor",
-        "subagent_type": "deep-reasoning",
+        "subagent_type": "advisor-executor",
         "model": config.advisor_model,
         "team_name": config.team_name,
         "prompt": build_advisor_prompt(config),
