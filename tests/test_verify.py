@@ -4,11 +4,50 @@ import pytest
 
 from advisor.verify import (
     Finding,
+    _normalize_path,
     build_verify_prompt,
     format_findings_block,
     parse_findings_from_text,
     parse_findings_with_drift,
 )
+
+
+class TestNormalizePath:
+    """Regression: batch membership compared line-suffixed paths against
+    bare filenames and falsely flagged every finding as scope drift."""
+
+    def test_strips_line_suffix(self) -> None:
+        assert _normalize_path("src/auth.py:42") == "src/auth.py"
+
+    def test_strips_line_and_column_suffix(self) -> None:
+        assert _normalize_path("src/auth.py:42:7") == "src/auth.py"
+
+    def test_preserves_windows_drive_letter(self) -> None:
+        # Trailing segment must be all digits; drive letter ``C:`` is not.
+        assert _normalize_path("C:/Users/x/a.py:10") == "C:/Users/x/a.py"
+
+    def test_strips_leading_dot_slash_and_backticks(self) -> None:
+        assert _normalize_path("  `./src/a.py:3` ") == "src/a.py"
+
+    def test_non_numeric_tail_is_not_stripped(self) -> None:
+        assert _normalize_path("src/a.py:main") == "src/a.py:main"
+
+
+class TestDriftFilterWithLineNumbers:
+    """Runners emit ``file:line`` findings (per format_findings_block).
+    The drift filter must match them against bare-file batch keys."""
+
+    def test_line_suffixed_finding_matches_bare_batch_key(self) -> None:
+        text = """
+- **File**: src/auth.py:42
+- **Severity**: HIGH
+- **Description**: issue
+- **Evidence**: line 42
+- **Fix**: patch
+"""
+        kept, dropped = parse_findings_with_drift(text, batch_files={"src/auth.py"})
+        assert len(kept) == 1
+        assert dropped == []
 
 
 class TestFormatFindingsBlock:

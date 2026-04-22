@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — runner budget + scope anchors (drift + exhaustion defense)
+- **`advisor/runner_budget.py`** — pure `RunnerBudget` dataclass,
+  `parse_scope_anchor`, `update_budget`, `budget_status`,
+  `stage_regressed`, `out_of_batch`, `format_budget_nudge`,
+  `normalize_batch_files`. Three layered signals: SCOPE anchor line
+  per runner reply, per-runner output-char budget (soft nudge at 60%,
+  auto-rotate at 80%), and hard ceilings on chars/file-reads/fixes as
+  the safety net.
+- **`TeamConfig.runner_output_char_ceiling` / `.runner_file_read_ceiling`**
+  — new configurable ceilings (defaults 80 000 chars / 20 files). The
+  ceiling is in characters (`len(str)`) as a token-spend proxy, not
+  raw bytes.
+- Runner prompt now requires every reply to open with
+  `SCOPE: <file> · <reading|hypothesizing|confirming|fixing|done>`.
+  Missing / drifting / regressing anchors are caught by the advisor
+  deterministically, well before a finding lands.
+- Advisor prompt gains a "Scope anchors and runner output budget"
+  clause that mirrors the runner contract and encodes the soft/hard
+  rotation protocol (BUDGET SOFT → compact, BUDGET ROTATE → handoff).
+
+### Fixed — PR#9 review follow-ups (pre-release)
+- Scope regex: hyphens inside filenames (`src/my-file.py`) were
+  consumed by the separator group, producing `file=src/my, stage=file`.
+  The regex now requires whitespace around the `·|-` separator, so
+  hyphenated paths survive.
+- `format_budget_nudge` now returns `(msg, new_budget)` and gates on
+  two new fields (`soft_nudge_sent`, `rotate_nudge_sent`) so a
+  threshold-crossing nudge fires exactly once — previously it
+  re-emitted `BUDGET SOFT` every turn while the budget stayed in the
+  SOFT_WARN region, contradicting the "Never re-issue the same nudge
+  twice" contract in the advisor prompt.
+- Renamed `output_bytes` / `byte_ceiling` / `runner_output_byte_ceiling`
+  / `DEFAULT_BYTE_CEILING` → `*_chars` / `*_char_ceiling` /
+  `DEFAULT_CHAR_CEILING`. `len(str)` is characters, not bytes — the
+  old name was misleading for non-ASCII input.
+- Added `normalize_batch_files(paths) -> frozenset[str]` and a
+  `frozenset` fast-path on `out_of_batch` so hot loops amortize the
+  normalization work instead of rebuilding the set per turn.
+
 ## [0.5.0] - 2026-04-22
 
 ### Added — SARIF + GitHub Action (v0.5 Phase 1)

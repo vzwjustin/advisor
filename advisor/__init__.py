@@ -118,6 +118,23 @@ from .rank import (
     rank_files,
     rank_to_prompt,
 )
+from .runner_budget import (
+    DEFAULT_CHAR_CEILING,
+    DEFAULT_FILE_READ_CEILING,
+    ROTATE_FRACTION,
+    SCOPE_STAGES,
+    SOFT_WARN_FRACTION,
+    RunnerBudget,
+    ScopeAnchor,
+    budget_status,
+    format_budget_nudge,
+    new_budget,
+    normalize_batch_files,
+    out_of_batch,
+    parse_scope_anchor,
+    stage_regressed,
+    update_budget,
+)
 from .sarif import (
     SARIF_SCHEMA_URI,
     SARIF_VERSION,
@@ -253,6 +270,22 @@ __all__ = [
     "load_suppressions",
     # pr comment
     "format_pr_comment",
+    # runner budget / scope anchor
+    "DEFAULT_CHAR_CEILING",
+    "DEFAULT_FILE_READ_CEILING",
+    "ROTATE_FRACTION",
+    "SCOPE_STAGES",
+    "SOFT_WARN_FRACTION",
+    "RunnerBudget",
+    "ScopeAnchor",
+    "budget_status",
+    "format_budget_nudge",
+    "new_budget",
+    "normalize_batch_files",
+    "out_of_batch",
+    "parse_scope_anchor",
+    "stage_regressed",
+    "update_budget",
     # skill asset
     "SKILL_MD",
 ]
