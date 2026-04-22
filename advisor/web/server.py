@@ -100,6 +100,17 @@ def _first_int(qs: dict[str, list[str]], key: str, default: int) -> int:
         return default
 
 
+def _validate_file_types(pattern: str) -> None:
+    """Reject path-traversal or absolute-path patterns in user-supplied file_types.
+
+    ``..`` blocks directory traversal (``../../../etc/*.conf``).
+    A leading ``/`` or ``\\`` blocks absolute paths on POSIX and Windows.
+    Interior ``/`` is allowed so recursive globs like ``**/*.py`` work.
+    """
+    if ".." in pattern or pattern.startswith("/") or pattern.startswith("\\"):
+        raise ValueError(f"unsafe file_types pattern: {pattern!r}")
+
+
 def _rank_target(state: AppState, file_types: str, min_priority: int) -> list[FocusTask]:
     """Discover + rank + filter files under the target, honoring ``.advisorignore``.
 
@@ -107,6 +118,7 @@ def _rank_target(state: AppState, file_types: str, min_priority: int) -> list[Fo
     drift on which files are in scope.
     """
     min_priority = max(1, min(5, min_priority))
+    _validate_file_types(file_types)
     paths = _safe_rglob(state.target, file_types)
     ignore_patterns = load_advisorignore(state.target)
     ranked = rank_files(paths, read_fn=_read_head, ignore_patterns=ignore_patterns)
@@ -264,6 +276,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             # Client hung up while we were writing — common when switching
             # tabs in the browser. Nothing actionable.
             return
+        except ValueError as exc:
+            self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
+            return
         except Exception:
             # Full traceback goes to the server log so developers can
             # debug. The response body carries only a generic message —
@@ -346,4 +361,4 @@ def find_free_port(host: str = DEFAULT_HOST, start: int = DEFAULT_PORT, tries: i
             except OSError:
                 continue
             return candidate
-    raise OSError(f"no free port in range {start}..{start + tries - 1}")
+    raise OSError(f"no free port in range {start}..{start + tries - 1} ({tries} tried)")

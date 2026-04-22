@@ -385,10 +385,14 @@ def _double_star_to_regex(pattern: str) -> re.Pattern[str]:
                 i += 1
             else:
                 body = pattern[i + 1 : end]
-                if body.startswith("!"):
-                    body = "^" + body[1:]
-                parts.append("[" + body + "]")
-                i = end + 1
+                if not body:
+                    parts.append(re.escape("["))
+                    i += 1
+                else:
+                    if body.startswith("!"):
+                        body = "^" + body[1:]
+                    parts.append("[" + body + "]")
+                    i = end + 1
         else:
             parts.append(re.escape(c))
             i += 1
@@ -642,6 +646,7 @@ def _read_contents_parallel(
 
 def rank_to_prompt(ranked: list[RankedFile], top_n: int = 10) -> str:
     """Format ranked files into a prompt-ready priority list."""
+    top_n = max(0, top_n)
     lines = ["## File Priority Ranking", ""]
     for i, rf in enumerate(ranked[:top_n], 1):
         reasons_str = ", ".join(rf.reasons) if rf.reasons else "general"

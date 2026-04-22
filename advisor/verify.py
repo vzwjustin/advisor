@@ -202,6 +202,7 @@ def _parse_blocks(text: str) -> list[Finding]:
     findings: list[Finding] = []
     current: dict[str, str] = {}
     active_key: str | None = None
+    in_header_block: bool = False  # True once we see any ### Finding header
 
     def _flush() -> None:
         finding = _dict_to_finding(current)
@@ -224,6 +225,7 @@ def _parse_blocks(text: str) -> list[Finding]:
                 _flush()
                 current = {}
             active_key = None
+            in_header_block = True
             continue
 
         matched = _match_key(stripped)
@@ -243,9 +245,11 @@ def _parse_blocks(text: str) -> list[Finding]:
                 # New field for this block — record it.
                 current[key] = value
                 active_key = key
-            elif key == "file_path":
+            elif key == "file_path" and not in_header_block:
                 # Safety-net: second file_path signals a new block in
-                # header-less output. Flush and start fresh.
+                # header-less output. Only active when no ### Finding headers
+                # have been seen — inside a header-delimited block, a second
+                # - **File**: line is continuation prose, not a block boundary.
                 _flush()
                 current = {key: value}
                 active_key = key

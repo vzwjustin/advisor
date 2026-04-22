@@ -136,7 +136,8 @@ def default_team_config(
     if runner_model == "sonnet":
         runner_model = _env_or("ADVISOR_RUNNER_MODEL", runner_model)
     if max_runners is None:
-        max_runners = _env_int_or("ADVISOR_MAX_RUNNERS", 5)
+        raw = _env_int_or("ADVISOR_MAX_RUNNERS", 5)
+        max_runners = raw if raw >= 1 else 5
     if file_types == "*.py":
         file_types = _env_or("ADVISOR_FILE_TYPES", file_types)
     if min_priority == 3:

@@ -173,8 +173,8 @@ def _check_install(
 
 
 def _collect_env_overrides() -> dict[str, str]:
-    """Return env-var overrides currently in effect (only keys actually set)."""
-    return {k: os.environ[k] for k in _KNOWN_ENV_VARS if k in os.environ}
+    """Return env-var overrides currently in effect (only keys set to non-empty values)."""
+    return {k: val for k in _KNOWN_ENV_VARS if (val := os.environ.get(k))}
 
 
 def run_doctor(

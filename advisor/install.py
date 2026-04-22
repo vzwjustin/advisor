@@ -329,8 +329,9 @@ def ensure_nudge(
     errors: list[str] = []
     try:
         current = target.read_text(encoding="utf-8") if target.exists() else ""
-        if START_MARKER not in current or END_MARKER not in current:
-            nudge_result = install(path=target)
+        expected_block = render_block(NUDGE_BODY)
+        if START_MARKER not in current or END_MARKER not in current or expected_block not in current:
+            nudge_result = install(path=target, body=NUDGE_BODY)
     except (OSError, UnicodeDecodeError) as exc:
         # Warnings for auto-install failures are non-fatal by design — we
         # don't want `advisor plan` to bail because ~/.claude is readonly.
@@ -351,9 +352,9 @@ def ensure_nudge(
         skill_result_action = InstallAction.UNCHANGED.value
 
     _updated = {InstallAction.INSTALLED.value, InstallAction.UPDATED.value}
-    if nudge_result.action == InstallAction.INSTALLED.value or skill_result_action in _updated:
+    if nudge_result.action in _updated or skill_result_action in _updated:
         pieces: list[str] = []
-        if nudge_result.action == InstallAction.INSTALLED.value:
+        if nudge_result.action in _updated:
             pieces.append(f"  nudge     → {nudge_result.path}")
         if skill_result_action in _updated:
             pieces.append(f"  skill     → {skill_target}")
