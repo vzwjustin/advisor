@@ -88,6 +88,7 @@ from .install import (
     uninstall_skill,
 )
 from .orchestrate import (
+    KNOWN_MODEL_SHORTCUTS,
     TeamConfig,
     build_advisor_agent,
     build_advisor_prompt,
@@ -177,6 +178,7 @@ __all__ = [
     "parse_findings_from_text",
     "parse_findings_with_drift",
     # orchestrate
+    "KNOWN_MODEL_SHORTCUTS",
     "TeamConfig",
     "default_team_config",
     "is_known_model",

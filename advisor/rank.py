@@ -753,7 +753,7 @@ def _read_contents_parallel(
     def _safe(p: str) -> str:
         try:
             return read_fn(p)
-        except Exception:
+        except (OSError, UnicodeDecodeError):
             return ""
 
     # Small jobs: serial is faster than spinning up a pool.

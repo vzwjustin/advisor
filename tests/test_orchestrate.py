@@ -409,13 +409,15 @@ class TestMaxFixesPerRunner:
         assert "BEFORE accepting the next" in prompt
 
     def test_runner_prompt_preemptive_ping_clamps_at_one(self):
-        """With a cap of 1, the CONTEXT_PRESSURE paragraph is replaced with stand-by text."""
+        """With a cap of 1 there is no N-1 fix — use the first-fix trigger."""
         config = default_team_config("/src", max_fixes_per_runner=1)
         prompt = build_runner_pool_prompt(1, config)
-        # cap=1 means there is no next assignment — no "fix #N of 1" ping text
-        assert "stand by for rotation" in prompt
-        assert "fix #1 of 1" not in prompt
+        # Cap 1 has no runway for an "N-1" ping, so runner pings immediately
+        # after completing its first (and only) fix.
+        assert "first fix is assigned" in prompt
+        assert "Cap of 1" in prompt
         assert "#0" not in prompt
+        assert "fix #0 of" not in prompt
 
     def test_runner_prompt_has_read_count_proxy(self):
         """Runner must be told to track file reads as a secondary proxy."""

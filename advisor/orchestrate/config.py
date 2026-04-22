@@ -156,6 +156,10 @@ def default_team_config(
         file_types = _env_or("ADVISOR_FILE_TYPES", file_types)
     if min_priority == 3:
         min_priority = _env_int_or("ADVISOR_MIN_PRIORITY", min_priority)
+    # Clamp to the valid P1–P5 range. Argparse guards the CLI, but the
+    # env-var path (ADVISOR_MIN_PRIORITY) and direct API callers could
+    # otherwise pass anything.
+    min_priority = max(1, min(5, min_priority))
     if test_command == "":
         test_command = _env_or("ADVISOR_TEST_COMMAND", test_command)
 

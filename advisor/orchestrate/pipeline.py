@@ -64,8 +64,8 @@ Advisor's final message to team-lead is a structured summary:
 Shut down each teammate individually (broadcast `"*"` with structured
 messages fails), then delete the team:
 
-  SendMessage(to="advisor",  message={{ "type": "shutdown_request" }})
-  SendMessage(to="runner-1", message={{ "type": "shutdown_request" }})
+  SendMessage({{"to": "advisor",  "message": {{"type": "shutdown_request"}}}})
+  SendMessage({{"to": "runner-1", "message": {{"type": "shutdown_request"}}}})
   ...
   TeamDelete()
 """

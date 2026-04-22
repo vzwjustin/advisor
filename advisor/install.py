@@ -70,9 +70,6 @@ def _atomic_write_text(target: Path, text: str) -> None:
 
     Hardening against symlink-follow TOCTOU on shared hosts:
 
-    - **Parent dir is opened with** ``O_NOFOLLOW`` (where available) so a
-      race that swaps ``target.parent`` to a symlink between the parent's
-      ``mkdir`` and our write is detected and refused.
     - **The target itself is rejected if it is a symlink.** ``os.replace``
       does not follow the final path component, so replacing over a
       symlink would silently swap in our content at the symlink's path —
@@ -86,19 +83,6 @@ def _atomic_write_text(target: Path, text: str) -> None:
         raise OSError(f"refusing to write through symlink: {target} -> {os.readlink(target)}")
 
     parent = target.parent
-    parent_fd: int | None = None
-    nofollow = getattr(os, "O_NOFOLLOW", 0)
-    directory = getattr(os, "O_DIRECTORY", 0)
-    # ``O_NOFOLLOW`` + ``O_DIRECTORY`` on Unix guarantees we opened the real
-    # parent directory inode, not a symlink to one. Windows lacks both; we
-    # fall back to the plain Path check, which is still covered by the
-    # symlink-target check above for the common case.
-    if nofollow and hasattr(os, "open"):
-        try:
-            parent_fd = os.open(str(parent), os.O_RDONLY | nofollow | directory)
-        except OSError:
-            parent_fd = None
-
     fd, tmp_name = tempfile.mkstemp(
         prefix=f".{target.name}.",
         suffix=".tmp",
@@ -132,12 +116,6 @@ def _atomic_write_text(target: Path, text: str) -> None:
         except OSError:
             pass
         raise
-    finally:
-        if parent_fd is not None:
-            try:
-                os.close(parent_fd)
-            except OSError:
-                pass
 
 
 OPT_OUT_ENV = "ADVISOR_NO_NUDGE"
@@ -288,6 +266,7 @@ def install(path: Path | None = None, body: str = NUDGE_BODY) -> InstallResult:
         resolved = target.resolve()
         if not resolved.is_relative_to(Path.home().resolve()):
             raise OSError(f"refusing to install nudge outside $HOME: {resolved}")
+        target = resolved
     target.parent.mkdir(parents=True, exist_ok=True)
     current = target.read_text(encoding="utf-8") if target.exists() else ""
     new_contents, action = apply_nudge(current, body)

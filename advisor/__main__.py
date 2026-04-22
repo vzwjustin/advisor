@@ -41,7 +41,6 @@ from .focus import (
 )
 from .git_scope import GitScopeError, resolve_git_scope
 from .history import (
-    HISTORY_SCHEMA_VERSION,
     file_repeat_scores,
     format_history_block,
     history_path,
@@ -191,6 +190,7 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--min-priority",
         type=int,
+        choices=range(1, 6),
         default=3,
         help="Minimum priority tier (1=utilities, 5=auth/secrets, default: %(default)s)",
     )
@@ -666,6 +666,15 @@ def _emit_plan(
             print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
             return 2
 
+    if getattr(args, "output", "") and not getattr(args, "json", False):
+        print(
+            _style.warning_box(
+                "--output is ignored without --json; pretty output still goes to stdout",
+                stream=sys.stderr,
+            ),
+            file=sys.stderr,
+        )
+
     if getattr(args, "json", False):
         estimate = None
         if getattr(args, "estimate", False):
@@ -1008,10 +1017,10 @@ or spawning runners before the advisor) breaks the pipeline.
 
 5. Shut down teammates INDIVIDUALLY (broadcast "*" with structured messages
    fails silently):
-     SendMessage(to="advisor",  message={"type": "shutdown_request"})
-     SendMessage(to="runner-1", message={"type": "shutdown_request"})
+     SendMessage({"to": "advisor",  "message": {"type": "shutdown_request"}})
+     SendMessage({"to": "runner-1", "message": {"type": "shutdown_request"}})
      ...
-     SendMessage(to="runner-N", message={"type": "shutdown_request"})
+     SendMessage({"to": "runner-N", "message": {"type": "shutdown_request"}})
 
 6. TeamDelete()
 
@@ -1079,6 +1088,11 @@ def cmd_ui(args: argparse.Namespace) -> int:
         )
         return 2
 
+    if getattr(args, "json", False):
+        url = f"http://{args.host}:{args.port}"
+        print(json.dumps({"schema_version": JSON_SCHEMA_VERSION, "url": url}))
+        return 0
+
     try:
         from .web import build_app_state, run_server
     except ImportError as exc:
@@ -1091,11 +1105,6 @@ def cmd_ui(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
-
-    if getattr(args, "json", False):
-        url = f"http://{args.host}:{args.port}"
-        print(json.dumps({"schema_version": JSON_SCHEMA_VERSION, "url": url}))
-        return 0
 
     state = build_app_state(
         target,
@@ -1123,7 +1132,7 @@ def cmd_history(args: argparse.Namespace) -> int:
     entries = load_recent(target, limit=args.limit)
     if getattr(args, "json", False):
         payload = {
-            "schema_version": HISTORY_SCHEMA_VERSION,
+            "schema_version": JSON_SCHEMA_VERSION,
             "target": str(target),
             "count": len(entries),
             "entries": [
@@ -1635,6 +1644,7 @@ def cmd_audit(args: argparse.Namespace) -> int:
                 ),
                 file=sys.stderr,
             )
+            return 2
         transcript = sys.stdin.read()
     else:
         try:

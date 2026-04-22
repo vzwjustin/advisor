@@ -389,8 +389,8 @@ APP_JS = r"""(() => {
     const minTok = (e.input_tokens_min || 0) + (e.output_tokens_min || 0);
     const maxTok = (e.input_tokens_max || 0) + (e.output_tokens_max || 0);
     $('#cost-summary').innerHTML = `
-      <div class="cost-card"><h4>Files</h4><div class="val">${data.task_count}</div></div>
-      <div class="cost-card"><h4>Runners</h4><div class="val">${e.runner_count || '—'}</div></div>
+      <div class="cost-card"><h4>Files</h4><div class="val">${escapeHtml(data.task_count)}</div></div>
+      <div class="cost-card"><h4>Runners</h4><div class="val">${escapeHtml(e.runner_count || '—')}</div></div>
       <div class="cost-card"><h4>Min tokens</h4><div class="val">${formatNum(minTok)}</div></div>
       <div class="cost-card"><h4>Max tokens</h4><div class="val">${formatNum(maxTok)}</div></div>
       <div class="cost-card"><h4>Min cost</h4><div class="val">$${formatMoney(e.cost_usd_min)}</div></div>

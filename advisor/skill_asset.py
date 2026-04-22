@@ -58,30 +58,20 @@ __VERSION_BADGE__
 
 **Step 3 (BEFORE any Bash):** Call `TeamCreate(name="review")` — creates team
 
-**Step 4 (only AFTER steps 2+3 complete):** Build the prompt in one Bash call
-that prints it to stdout. Capture the output as the tool result — do NOT
-write to a file and do NOT use the Read tool (Read renders all ~170 lines
-of prompt text as visible user output):
+**Step 4 (only AFTER steps 2+3 complete):** Build the prompt via the Python
+tool — NOT Bash. Hold the returned string in a variable; do NOT print it
+and do NOT write it to a file and Read it back (Read renders all ~170
+lines of prompt text as visible user output):
 
-```bash
-python3 -c "
-import sys
-sys.path.insert(0, '/path/to/advisor')  # adjust to actual install path
+```python
 from advisor import default_team_config, build_advisor_prompt
-config = default_team_config(target_dir='TARGET', context='CONTEXT')
-print(build_advisor_prompt(config))
-" 2>/dev/null
+config = default_team_config(target_dir="TARGET", context="CONTEXT")
+prompt = build_advisor_prompt(config)  # keep in-memory; do not print
 ```
 
-The Bash tool result is the prompt text. Copy it directly into Step 5.
-
-**Step 5:** Spawn Agent passing the Bash stdout output as the `prompt` parameter.
-**NEVER use the Read tool to read back a temp file — it renders the full
-prompt (~170 lines) to the user as visible conversation output.**
-
-**RULE: NO Bash before TeamDelete and TeamCreate. ZERO exceptions.**
-The user must see TeamDelete and TeamCreate FIRST before any Bash runs.
-Bash is for prompt-building ONLY and happens AFTER the team exists.
+**Step 5:** Spawn Agent passing `prompt` straight through as the `prompt`
+parameter. **NEVER use the Read tool to read back a temp file — it renders
+the full prompt (~170 lines) to the user as visible conversation output.**
 
 **Keep ALL output minimal:**
 - NO file listings, NO ls, NO cat
@@ -290,8 +280,8 @@ done. Shut down individually (broadcast to `"*"` with structured
 messages fails):
 
 ```
-SendMessage({ to: "advisor",  message: { type: "shutdown_request" } })
-SendMessage({ to: "runner-1", message: { type: "shutdown_request" } })
+SendMessage({"to": "advisor",  "message": {"type": "shutdown_request"}})
+SendMessage({"to": "runner-1", "message": {"type": "shutdown_request"}})
 ...
 TeamDelete()
 ```

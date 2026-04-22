@@ -26,6 +26,28 @@ def _coerce_batch(target: FocusBatch | FocusTask) -> FocusBatch:
     return FocusBatch(batch_id=1, tasks=(target,), complexity="medium")
 
 
+def _fix_count_trigger(cap: int) -> str:
+    """Render the fix-count CONTEXT_PRESSURE trigger sentence for a given cap.
+
+    When ``cap <= 1`` there is no "one-before-cap" fix to anchor on, so the
+    runner is told to ping immediately after the first fix instead.
+    """
+    if cap <= 1:
+        return (
+            "**The moment your first fix is assigned — send "
+            "`CONTEXT_PRESSURE` immediately after completing it.** Cap of 1 "
+            "leaves no runway otherwise.\n\n"
+        )
+    return (
+        f"**The moment you finish fix #{cap - 1} of {cap} — BEFORE "
+        "accepting the next assignment — send `CONTEXT_PRESSURE`.** Do "
+        "not wait for the cap itself; the advisor needs one fix's worth "
+        "of runway to spawn your successor and build a handoff brief. "
+        "If you only flag at the cap, rotation happens mid-stall, which "
+        "is the case this rule exists to prevent.\n\n"
+    )
+
+
 # ── Per-batch runner prompt (used by legacy build_runner_agents path) ─
 
 
@@ -226,8 +248,9 @@ def build_runner_pool_prompt(runner_id: int, config: TeamConfig) -> str:
         "the inside. Instead, track concrete proxies and ping preemptively.\n\n"
         f"**Fix-count proxy (primary).** Hard cap: "
         f"{config.max_fixes_per_runner} fix assignments per runner. Track "
-        f"your own fix count. {cp_note}\n\n"
-        "**Read-count proxy (secondary).** Count every file you Read in "
+        "your own fix count. "
+        + _fix_count_trigger(config.max_fixes_per_runner)
+        + "**Read-count proxy (secondary).** Count every file you Read in "
         "this session (explore + fixes combined). If you cross ~15 total "
         "reads, treat yourself as at-risk and send `CONTEXT_PRESSURE` at "
         "the start of your next assignment rather than waiting for the "
