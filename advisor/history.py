@@ -178,14 +178,17 @@ def load_recent(target: str | Path, limit: int = 20) -> list[HistoryEntry]:
             continue
         try:
             obj = json.loads(stripped)
+            for _f in ("timestamp", "file_path", "severity", "description", "status", "run_id"):
+                if not isinstance(obj.get(_f), str):
+                    raise TypeError(f"{_f} must be str, got {type(obj.get(_f)).__name__}")
             entries.append(
                 HistoryEntry(
-                    timestamp=str(obj["timestamp"]),
-                    file_path=str(obj["file_path"]),
-                    severity=str(obj["severity"]),
-                    description=str(obj["description"]),
-                    status=str(obj["status"]),
-                    run_id=str(obj["run_id"]),
+                    timestamp=obj["timestamp"],
+                    file_path=obj["file_path"],
+                    severity=obj["severity"],
+                    description=obj["description"],
+                    status=obj["status"],
+                    run_id=obj["run_id"],
                     schema_version=str(obj.get("schema_version", HISTORY_SCHEMA_VERSION)),
                 )
             )
@@ -259,14 +262,17 @@ def load_recent_findings(history_path: Path, *, limit: int = 500) -> list[Histor
             continue
         try:
             obj = json.loads(stripped)
+            for _f in ("timestamp", "file_path", "severity", "description", "status", "run_id"):
+                if not isinstance(obj.get(_f), str):
+                    raise TypeError(f"{_f} must be str, got {type(obj.get(_f)).__name__}")
             entries.append(
                 HistoryEntry(
-                    timestamp=str(obj["timestamp"]),
-                    file_path=str(obj["file_path"]),
-                    severity=str(obj["severity"]),
-                    description=str(obj["description"]),
-                    status=str(obj["status"]),
-                    run_id=str(obj["run_id"]),
+                    timestamp=obj["timestamp"],
+                    file_path=obj["file_path"],
+                    severity=obj["severity"],
+                    description=obj["description"],
+                    status=obj["status"],
+                    run_id=obj["run_id"],
                     schema_version=str(obj.get("schema_version", HISTORY_SCHEMA_VERSION)),
                 )
             )

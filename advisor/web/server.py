@@ -357,16 +357,15 @@ def run_server(
 
 
 def find_free_port(host: str = DEFAULT_HOST, start: int = DEFAULT_PORT, tries: int = 20) -> int:
-    """Scan forward from ``start`` for the first unused port.
+    """Return a free port assigned by the OS.
 
-    Only used by tests and by the CLI when ``--port 0`` is requested. The
-    user-facing default is a fixed port so invocations are reproducible.
+    Binds with port 0 so the kernel picks an available port atomically,
+    eliminating the bind-close-return TOCTOU race of scanning candidates.
+    ``start`` and ``tries`` are accepted for backward compatibility but unused.
+
+    Only used by tests and by the CLI when ``--port 0`` is requested.
     """
-    for candidate in range(start, start + tries):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            try:
-                sock.bind((host, candidate))
-            except OSError:
-                continue
-            return candidate
-    raise OSError(f"no free port in range {start}..{start + tries - 1} ({tries} tried)")
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind((host, 0))
+        port: int = sock.getsockname()[1]
+        return port

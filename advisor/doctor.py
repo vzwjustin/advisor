@@ -115,17 +115,17 @@ def _check_claude_cli() -> Check:
 
 def _check_claude_home() -> Check:
     claude_dir = Path.home() / ".claude"
-    if not claude_dir.exists():
-        return Check(
-            "claude-home",
-            "warn",
-            f"{claude_dir} does not exist (will be created on first `advisor install`)",
-        )
     if claude_dir.is_symlink():
         return Check(
             "claude-home",
             "warn",
             f"{claude_dir} is a symlink; advisor install refuses to write through symlinks",
+        )
+    if not claude_dir.exists():
+        return Check(
+            "claude-home",
+            "warn",
+            f"{claude_dir} does not exist (will be created on first `advisor install`)",
         )
     if not claude_dir.is_dir():
         return Check("claude-home", "fail", f"{claude_dir} exists but is not a directory")

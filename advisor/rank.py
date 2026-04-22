@@ -544,6 +544,8 @@ def _regex_with_extras_cached(
             group = f"p{priority}_{idx}"
             parts.append(rf"(?P<{group}>\b{re.escape(kw)}\b)")
             mapping[group] = (priority, kw)
+    if not parts:
+        return re.compile(r"(?!)"), mapping
     return re.compile("|".join(parts), re.IGNORECASE), mapping
 
 
@@ -564,6 +566,8 @@ def _combined_regex_for(language: str | None) -> tuple[re.Pattern[str], dict[str
             group = f"p{priority}_{idx}"
             parts.append(rf"(?P<{group}>\b{re.escape(kw)}\b)")
             mapping[group] = (priority, kw)
+    if not parts:
+        return re.compile(r"(?!)"), mapping
     return re.compile("|".join(parts), re.IGNORECASE), mapping
 
 
@@ -684,7 +688,9 @@ def rank_files(
         p = Path(fp)
         if any(part in SKIP_DIRS for part in p.parts):
             continue
-        if p.suffix in SKIP_EXTENSIONS or ".min." in p.name:
+        if p.suffix in SKIP_EXTENSIONS or any(
+            p.name.endswith(s) for s in (".min.js", ".min.mjs", ".min.cjs", ".min.css")
+        ):
             continue
         if _matches_any_pattern(fp, patterns):
             continue
