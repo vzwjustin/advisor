@@ -127,8 +127,11 @@ from advisor import (
 Invoke via `/advisor` slash command. Full protocol details in
 `~/.claude/skills/advisor/SKILL.md`.
 
-## General Rules
+## Setup
 
-- **Immutability** — Never mutate. Return new objects.
-- **TDD** — Write tests first. 80%+ coverage.
-- **Code review** — Use `code-review` agent after any edits.
+```bash
+uvx advisor install       # install from PyPI
+uv sync                   # sync dependencies (dev)
+uv run pytest             # run tests
+python -m advisor         # run locally
+```
