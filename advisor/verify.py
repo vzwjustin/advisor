@@ -197,14 +197,27 @@ def parse_findings_with_drift(
 def _normalize_path(path: str) -> str:
     """Normalize a file path for batch-membership comparison.
 
-    Strips surrounding whitespace, backticks, leading ``./``, and converts
-    backslashes to forward slashes. Does NOT resolve symlinks or make the
-    path absolute — batch filters operate on repo-relative POSIX paths as
-    emitted by the explore phase and echoed back in findings.
+    Strips surrounding whitespace, backticks, leading ``./``, converts
+    backslashes to forward slashes, and strips a trailing ``:line`` or
+    ``:line:col`` suffix. Findings conventionally encode the offending
+    line as ``src/auth.py:42``; batch membership keys are filenames, so
+    without the strip every finding would look like scope drift. Does
+    NOT resolve symlinks or make the path absolute — batch filters
+    operate on repo-relative POSIX paths as emitted by the explore
+    phase and echoed back in findings.
     """
     p = path.strip().strip("`").replace("\\", "/")
     if p.startswith("./"):
         p = p[2:]
+    # Strip ``:line`` and ``:line:col`` suffixes without eating drive
+    # letters (``C:\Users\...``) or scheme-like prefixes — we only
+    # strip when the tail is all digits.
+    while ":" in p:
+        head, _, tail = p.rpartition(":")
+        if tail.isdigit() and head:
+            p = head
+            continue
+        break
     return p
 
 
