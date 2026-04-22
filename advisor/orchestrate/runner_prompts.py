@@ -67,6 +67,35 @@ def build_runner_prompt(
 # ── Pool-runner spawn prompt ─────────────────────────────────────
 
 
+_SCOPE_ANCHOR_BLOCK = (
+    "## Open every reply with a SCOPE anchor line\n\n"
+    "The FIRST line of every message you send to the advisor must be:\n\n"
+    "    SCOPE: <file_path> · <stage>\n\n"
+    "where ``<stage>`` is one of ``reading``, ``hypothesizing``, "
+    "``confirming``, ``fixing``, ``done``. Use the exact file path the "
+    "advisor assigned you. Examples:\n\n"
+    "    SCOPE: src/auth.py · reading\n"
+    "    SCOPE: src/auth.py · confirming\n"
+    "    SCOPE: src/session.py · fixing\n"
+    "    SCOPE: src/auth.py · done\n\n"
+    "This is a one-line cost that lets the advisor catch drift "
+    "deterministically — the instant you anchor on a file that isn't in "
+    "your batch, or regress a stage (e.g. ``done`` → ``reading`` of a "
+    "new file on the same assignment), they can REDIRECT you before you "
+    "waste further turns. Missing the anchor is treated as drift too.\n\n"
+    "## Keep replies compact\n\n"
+    "The advisor tracks the cumulative size of your replies. At ~60% of "
+    "your per-runner output budget they will send a **BUDGET SOFT** "
+    "nudge — when you see it, compact your next reply: one primary "
+    "finding or update, skip recaps of work you already reported, then "
+    "confirm you're still under budget. At ~80% they will send a "
+    "**BUDGET ROTATE** directive — finish your current tool call, emit "
+    "a one-paragraph handoff brief (files touched, invariants learned, "
+    "what remains), and wait for ``shutdown_request``. Do not argue the "
+    "ceiling — a fresh runner is cheaper than a saturated one.\n\n"
+)
+
+
 def build_runner_pool_prompt(runner_id: int, config: TeamConfig) -> str:
     """Spawn prompt for a pool runner — live dialogue with the advisor."""
     if config.max_fixes_per_runner > 1:
@@ -117,7 +146,8 @@ def build_runner_pool_prompt(runner_id: int, config: TeamConfig) -> str:
         "  between tool calls. Incorporate and keep going.\n\n"
         "Treat this like pair-programming with a senior engineer watching "
         "your screen. Chatty is correct.\n\n"
-        "## You work ONLY on what the advisor hands you\n\n"
+        + _SCOPE_ANCHOR_BLOCK
+        + "## You work ONLY on what the advisor hands you\n\n"
         "This is strict. You do not go looking at files outside your "
         "assignment. You do not expand scope because something looks "
         "interesting. If you notice something beyond your batch, flag it "

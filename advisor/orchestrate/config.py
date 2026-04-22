@@ -74,6 +74,14 @@ class TeamConfig:
     large_file_max_fixes: int = 3
     test_command: str = ""
     preset: str | None = None
+    # Per-runner output-byte ceiling. Soft nudge at 60%, hard rotate at 80%.
+    # 80k chars is ~20k tokens — well inside the safe zone for Sonnet
+    # subagents with the rest of the conversation still fitting.
+    runner_output_byte_ceiling: int = 80_000
+    # Distinct-file-read ceiling. Heavy cross-referencing eats context
+    # faster than fix-count suggests; this is the secondary proxy from
+    # the runner prompt, now enforced on the advisor side too.
+    runner_file_read_ceiling: int = 20
 
 
 def _env_or(env_key: str, default: str) -> str:
@@ -112,6 +120,8 @@ def default_team_config(
     test_command: str = "",
     warn_unknown_model: bool = True,
     preset: str | None = None,
+    runner_output_byte_ceiling: int = 80_000,
+    runner_file_read_ceiling: int = 20,
 ) -> TeamConfig:
     """Create a default team configuration.
 
@@ -186,4 +196,6 @@ def default_team_config(
         large_file_max_fixes=large_file_max_fixes,
         test_command=test_command,
         preset=preset,
+        runner_output_byte_ceiling=runner_output_byte_ceiling,
+        runner_file_read_ceiling=runner_file_read_ceiling,
     )
