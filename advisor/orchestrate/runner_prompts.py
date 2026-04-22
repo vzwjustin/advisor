@@ -69,6 +69,22 @@ def build_runner_prompt(
 
 def build_runner_pool_prompt(runner_id: int, config: TeamConfig) -> str:
     """Spawn prompt for a pool runner — live dialogue with the advisor."""
+    if config.max_fixes_per_runner > 1:
+        cp_note = (
+            f"**The moment you finish fix "
+            f"#{max(1, config.max_fixes_per_runner - 1)} of "
+            f"{config.max_fixes_per_runner} — BEFORE accepting the next "
+            "assignment — send `CONTEXT_PRESSURE`.** Do not wait for the cap "
+            "itself; the advisor needs one fix's worth of runway to spawn "
+            "your successor and build a handoff brief. If you only flag at "
+            "the cap, rotation happens mid-stall, which is the case this "
+            "rule exists to prevent."
+        )
+    else:
+        cp_note = (
+            "After your single fix, stand by for rotation — no further "
+            "fix assignments are expected for this runner."
+        )
     return (
         f"You are `runner-{runner_id}`, a runner on team "
         f"`{config.team_name}`. The advisor runs the review — you are "
@@ -179,14 +195,7 @@ def build_runner_pool_prompt(runner_id: int, config: TeamConfig) -> str:
         "the inside. Instead, track concrete proxies and ping preemptively.\n\n"
         f"**Fix-count proxy (primary).** Hard cap: "
         f"{config.max_fixes_per_runner} fix assignments per runner. Track "
-        "your own fix count. **The moment you finish fix "
-        f"#{max(1, config.max_fixes_per_runner - 1)} of "
-        f"{config.max_fixes_per_runner} — BEFORE accepting the next "
-        "assignment — send `CONTEXT_PRESSURE`.** Do not wait for the cap "
-        "itself; the advisor needs one fix's worth of runway to spawn "
-        "your successor and build a handoff brief. If you only flag at "
-        "the cap, rotation happens mid-stall, which is the case this "
-        "rule exists to prevent.\n\n"
+        f"your own fix count. {cp_note}\n\n"
         "**Read-count proxy (secondary).** Count every file you Read in "
         "this session (explore + fixes combined). If you cross ~15 total "
         "reads, treat yourself as at-risk and send `CONTEXT_PRESSURE` at "

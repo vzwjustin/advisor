@@ -293,8 +293,7 @@ SKIP_EXTENSIONS = frozenset(
         ".a",
         ".dll",
         ".exe",
-        ".min.js",
-        ".min.css",
+
         ".map",
     }
 )
@@ -344,6 +343,15 @@ def load_advisorignore(base_dir: str | Path) -> list[str]:
     for line in text.splitlines():
         stripped = line.strip()
         if stripped and not stripped.startswith("#"):
+            if stripped.startswith("!"):
+                import warnings
+
+                warnings.warn(
+                    f"{path}: negation pattern {stripped!r} is not supported and will be ignored",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                continue
             patterns.append(stripped.lstrip("/"))
     return patterns
 
@@ -591,7 +599,7 @@ def rank_files(
         p = Path(fp)
         if any(part in SKIP_DIRS for part in p.parts):
             continue
-        if p.suffix in SKIP_EXTENSIONS:
+        if p.suffix in SKIP_EXTENSIONS or ".min." in p.name:
             continue
         if _matches_any_pattern(fp, patterns):
             continue
@@ -631,7 +639,7 @@ def _read_contents_parallel(
             return ""
 
     # Small jobs: serial is faster than spinning up a pool.
-    if len(paths) < 20 or max_workers == 1:
+    if len(paths) < 20 or (max_workers is not None and max_workers <= 1):
         return [_safe(p) for p in paths]
 
     import os

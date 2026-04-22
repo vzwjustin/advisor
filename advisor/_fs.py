@@ -36,6 +36,11 @@ def safe_rglob_paths(target: Path, pattern: str) -> list[str]:
     helper is for the "best-effort listing" case.
     """
     try:
-        return [str(p) for p in target.rglob(pattern) if p.is_file()]
+        resolved_target = target.resolve()
+        return [
+            str(p)
+            for p in target.rglob(pattern)
+            if p.is_file() and p.resolve().is_relative_to(resolved_target)
+        ]
     except (OSError, ValueError):
         return []

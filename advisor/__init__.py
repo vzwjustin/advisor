@@ -36,7 +36,7 @@ from .checkpoint import (
     load_checkpoint,
     save_checkpoint,
 )
-from .cost import CostEstimate, estimate_cost, format_estimate
+from .cost import CostEstimate, estimate_cost, format_estimate, load_pricing
 from .doctor import DoctorReport, run_doctor
 from .focus import (
     FocusBatch,
@@ -180,6 +180,7 @@ __all__ = [
     "CostEstimate",
     "estimate_cost",
     "format_estimate",
+    "load_pricing",
     # doctor
     "DoctorReport",
     "run_doctor",
