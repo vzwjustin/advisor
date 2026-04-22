@@ -224,6 +224,7 @@ def _language_from_shebang(first_line: str) -> str | None:
     Unrecognized interpreters return ``None`` so callers fall back to
     the base (language-less) keyword scoring.
     """
+    first_line = first_line.lstrip("﻿")
     if not first_line.startswith("#!"):
         return None
     tokens = first_line[2:].strip().split()
@@ -343,7 +344,7 @@ def load_advisorignore(base_dir: str | Path) -> list[str]:
     for line in text.splitlines():
         stripped = line.strip()
         if stripped and not stripped.startswith("#"):
-            patterns.append(stripped)
+            patterns.append(stripped.lstrip("/"))
     return patterns
 
 
@@ -622,7 +623,7 @@ def _read_contents_parallel(
     def _safe(p: str) -> str:
         try:
             return read_fn(p)
-        except (OSError, UnicodeDecodeError):
+        except Exception:
             return ""
 
     # Small jobs: serial is faster than spinning up a pool.

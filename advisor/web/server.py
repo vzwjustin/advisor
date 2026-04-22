@@ -106,6 +106,7 @@ def _rank_target(state: AppState, file_types: str, min_priority: int) -> list[Fo
     Shared by the ``/api/plan`` and ``/api/cost`` handlers so they can't
     drift on which files are in scope.
     """
+    min_priority = max(1, min(5, min_priority))
     paths = _safe_rglob(state.target, file_types)
     ignore_patterns = load_advisorignore(state.target)
     ranked = rank_files(paths, read_fn=_read_head, ignore_patterns=ignore_patterns)
@@ -345,4 +346,4 @@ def find_free_port(host: str = DEFAULT_HOST, start: int = DEFAULT_PORT, tries: i
             except OSError:
                 continue
             return candidate
-    raise OSError(f"no free port in range {start}..{start + tries}")
+    raise OSError(f"no free port in range {start}..{start + tries - 1}")

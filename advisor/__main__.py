@@ -26,6 +26,9 @@ from .checkpoint import (
     load_checkpoint,
     save_checkpoint,
 )
+from .checkpoint import (
+    _atomic_write_text as _atomic_write,
+)
 from .cost import estimate_cost, format_estimate, load_pricing
 from .doctor import format_report, run_doctor
 from .focus import (
@@ -470,7 +473,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
     )
 
     batches: list[FocusBatch] | None = None
-    if args.batch_size and args.batch_size > 1:
+    if args.batch_size and args.batch_size >= 1:
         batches = create_focus_batches(tasks, files_per_batch=args.batch_size)
 
     # Optional persistence: ``--checkpoint`` writes the full plan to
@@ -615,7 +618,7 @@ def _emit_plan(
         rendered = json.dumps(payload, indent=2)
         output_file = getattr(args, "output", None)
         if output_file:
-            Path(output_file).write_text(rendered + "\n", encoding="utf-8")
+            _atomic_write(Path(output_file), rendered + "\n")
             if not getattr(args, "quiet", False):
                 print(_style.dim(f"wrote plan to {output_file}"))
         else:

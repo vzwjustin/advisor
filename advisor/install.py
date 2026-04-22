@@ -108,6 +108,8 @@ def _atomic_write_text(target: Path, text: str) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
         try:
             os.chmod(tmp, 0o644)
         except OSError:
