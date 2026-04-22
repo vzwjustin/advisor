@@ -330,7 +330,11 @@ def ensure_nudge(
     try:
         current = target.read_text(encoding="utf-8") if target.exists() else ""
         expected_block = render_block(NUDGE_BODY)
-        if START_MARKER not in current or END_MARKER not in current or expected_block not in current:
+        if (
+            START_MARKER not in current
+            or END_MARKER not in current
+            or expected_block not in current
+        ):
             nudge_result = install(path=target, body=NUDGE_BODY)
     except (OSError, UnicodeDecodeError) as exc:
         # Warnings for auto-install failures are non-fatal by design — we
