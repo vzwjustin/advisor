@@ -101,7 +101,11 @@ As runner reports arrive, reason over them. Cross-reference findings from differ
 
 If the user asked for a **review-only** report, skip to Step 6. If they asked for **fixes, enhancements, or improvements**, continue to Step 5 with a concrete fix plan.
 
-Before dispatching fixes, shut down all current runners via `shutdown_request` and spawn a fresh pool of the same size for the fix wave. Use `build_runner_handoff_message` to generate a compact handoff brief for each incoming runner: which files the outgoing runner touched, the invariants to preserve, and the remaining fixes queued. Fresh runners start with clean context; the handoff brief is their only prior state. This eliminates cumulative-read context blowup from the explore wave bleeding into the fix wave.
+**Opus-direct shortcut:** When every finding already has an exact `file:line → specific edit` shape, you may execute all fixes yourself (Read + Edit) instead of dispatching to runners. Skip the runner pool for the fix wave entirely. When you do this, open your Step 6 report to team-lead with a single line: `Going Opus-direct — all N findings have exact file:line specs; runner handoff adds no value.` This tells the user why the runners shut down before the fix wave started.
+
+When findings are vague, require file-by-file investigation, or span more than ~5 files, use runners as normal.
+
+Before dispatching fixes to runners, shut down all current runners via `shutdown_request` and spawn a fresh pool of the same size for the fix wave. Use `build_runner_handoff_message` to generate a compact handoff brief for each incoming runner: which files the outgoing runner touched, the invariants to preserve, and the remaining fixes queued. Fresh runners start with clean context; the handoff brief is their only prior state. This eliminates cumulative-read context blowup from the explore wave bleeding into the fix wave.
 
 ## Step 5 — Dispatch fix assignments
 For each fix you decided on, SendMessage a clear, scoped instruction to the runner that already has context on that file. Format:
