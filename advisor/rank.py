@@ -293,7 +293,6 @@ SKIP_EXTENSIONS = frozenset(
         ".a",
         ".dll",
         ".exe",
-
         ".map",
     }
 )

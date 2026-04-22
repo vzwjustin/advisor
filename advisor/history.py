@@ -93,7 +93,7 @@ def _lock_windows(fh: IO[str]) -> None:
     except ImportError:
         return
     try:
-        msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 0x7fffffff)
+        msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 0x7FFFFFFF)
     except OSError:
         pass
 
