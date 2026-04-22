@@ -288,31 +288,45 @@ def _safe_rglob(target: Path, pattern: str) -> tuple[list[str] | None, str | Non
     """Return (paths, error). `error` is non-None on a malformed glob pattern
     or a filesystem error (e.g. symlink loops, permission denied).
 
-    Symlinks pointing outside ``target`` are skipped silently (per-entry
-    ``.resolve().is_relative_to`` check, mirroring
+    ``pattern`` may be a comma-separated list (e.g. ``"*.js,*.ts"``); each
+    sub-pattern is expanded independently and results are merged, deduped,
+    and sorted. Symlinks pointing outside ``target`` are skipped silently
+    (per-entry ``.resolve().is_relative_to`` check, mirroring
     :func:`advisor._fs.safe_rglob_paths`). Per-entry ELOOP / permission
     errors skip that single entry rather than aborting the whole scan."""
+    patterns = [p.strip() for p in pattern.split(",") if p.strip()]
+    if not patterns:
+        return [], None
+
     try:
         # Resolve before walking — `Path.rglob` on an unresolved path
         # containing symlink cycles can hang on Python <3.13 instead of
         # raising. Resolving first canonicalizes the start point and lets
         # the OS-level walk surface ELOOP as an OSError we already catch.
         resolved_target = target.resolve()
-        iterator = resolved_target.rglob(pattern)
-    except ValueError as exc:
-        return None, f"invalid --file-types pattern {pattern!r}: {exc}"
     except OSError as exc:
         return None, f"filesystem error scanning {target}: {exc}"
 
+    seen: set[str] = set()
     results: list[str] = []
-    for p in iterator:
+    for pat in patterns:
         try:
-            if p.is_file() and p.resolve().is_relative_to(resolved_target):
-                results.append(str(p))
-        except (OSError, ValueError):
-            # Single broken symlink or permission-denied entry — skip it
-            # rather than aborting the whole scan. Mirrors _fs.safe_rglob_paths.
-            continue
+            iterator = resolved_target.rglob(pat)
+        except ValueError as exc:
+            return None, f"invalid --file-types pattern {pat!r}: {exc}"
+        except OSError as exc:
+            return None, f"filesystem error scanning {target}: {exc}"
+        for p in iterator:
+            try:
+                if p.is_file() and p.resolve().is_relative_to(resolved_target):
+                    s = str(p)
+                    if s not in seen:
+                        seen.add(s)
+                        results.append(s)
+            except (OSError, ValueError):
+                # Single broken symlink or permission-denied entry — skip it
+                # rather than aborting the whole scan. Mirrors _fs.safe_rglob_paths.
+                continue
     return results, None
 
 
@@ -378,7 +392,16 @@ def _gitignore_missing_advisor_entry(target: Path) -> bool:
         content = gi.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return False
-    accepted = {".advisor", ".advisor/", ".advisor/*", "/.advisor", "/.advisor/"}
+    accepted = {
+        ".advisor",
+        ".advisor/",
+        ".advisor/*",
+        ".advisor/**",
+        ".advisor/**/*",
+        "/.advisor",
+        "/.advisor/",
+        "/.advisor/**",
+    }
     for line in content.splitlines():
         s = line.strip()
         if not s or s.startswith("#"):
@@ -461,7 +484,8 @@ def _resolve_plan_files(
         if pattern and pattern != "*":
             import fnmatch
 
-            files = [p for p in files if fnmatch.fnmatch(Path(p).name, pattern)]
+            pats = [p.strip() for p in pattern.split(",") if p.strip()]
+            files = [p for p in files if any(fnmatch.fnmatch(Path(p).name, pat) for pat in pats)]
         return files, None
     return _safe_rglob(target, args.file_types)
 

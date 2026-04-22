@@ -37,7 +37,7 @@ def safe_rglob_paths(target: Path, pattern: str) -> list[str]:
     """
     try:
         resolved_target = target.resolve()
-        iterator = target.rglob(pattern)
+        iterator = resolved_target.rglob(pattern)
     except (OSError, ValueError):
         return []
 
