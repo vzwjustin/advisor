@@ -11,11 +11,11 @@ import enum
 import os
 import re
 import sys
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
 
+from ._fs import atomic_write_text as _shared_atomic_write
 from .skill_asset import SKILL_MD
 
 #: Matches ``<!-- advisor:0.4.0 -->``; used to extract installed skill version
@@ -68,65 +68,13 @@ class InstallAction(str, enum.Enum):
 def _atomic_write_text(target: Path, text: str) -> None:
     """Atomically write `text` to `target` via a unique tmp file in the same dir.
 
-    Hardening against symlink-follow TOCTOU on shared hosts:
-
-    - **The target itself is rejected if it is a symlink.** ``os.replace``
-      does not follow the final path component, so replacing over a
-      symlink would silently swap in our content at the symlink's path —
-      but if an attacker tricked us into reading a symlink *beforehand*,
-      our idempotency logic could then be fooled. Easiest defense: refuse.
-    - Uses a randomized tmp name and cleans up on any exception.
-    - Final file is written with mode 0o644 — ``tempfile.mkstemp`` defaults
-      to 0o600 which would otherwise carry through ``os.replace``.
+    Thin wrapper over :func:`advisor._fs.atomic_write_text` that hard-wires
+    the install-path hardening: refuse to write through a symlink target
+    (defense against shared-host TOCTOU) and chmod the result to ``0o644``
+    so editors and other tools can read it. Kept as a module-level
+    function so external tests can patch it.
     """
-    if target.is_symlink():
-        raise OSError(f"refusing to write through symlink: {target} -> {os.readlink(target)}")
-
-    parent = target.parent
-    fd, tmp_name = tempfile.mkstemp(
-        prefix=f".{target.name}.",
-        suffix=".tmp",
-        dir=str(parent),
-    )
-    tmp = Path(tmp_name)
-    try:
-        fh = os.fdopen(fd, "w", encoding="utf-8")
-    except BaseException:
-        os.close(fd)
-        try:
-            tmp.unlink()
-        except OSError:
-            pass
-        raise
-    try:
-        with fh:
-            fh.write(text)
-            fh.flush()
-            os.fsync(fh.fileno())
-        try:
-            os.chmod(tmp, 0o644)
-        except OSError:
-            # Best-effort: Windows / restricted fs may refuse. The write
-            # still succeeds; mode just stays at the tempfile default.
-            pass
-        os.replace(tmp, target)
-        # Best-effort directory fsync so the rename survives an abrupt
-        # power loss. Windows refuses to open a directory for fsync —
-        # silently skip there.
-        try:
-            dir_fd = os.open(str(parent), os.O_RDONLY)
-            try:
-                os.fsync(dir_fd)
-            finally:
-                os.close(dir_fd)
-        except OSError:
-            pass
-    except BaseException:
-        try:
-            tmp.unlink()
-        except OSError:
-            pass
-        raise
+    _shared_atomic_write(target, text, reject_symlink=True, mode=0o644)
 
 
 OPT_OUT_ENV = "ADVISOR_NO_NUDGE"

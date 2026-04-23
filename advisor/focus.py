@@ -253,9 +253,10 @@ def format_batch_plan(batches: list[FocusBatch]) -> str:
         "",
     ]
     for b in batches:
+        batch_file_word = "file" if len(b.tasks) == 1 else "files"
         lines.append(
             f"**Batch {b.batch_id}** (complexity: {b.complexity}, "
-            f"top P{b.top_priority}) — {len(b.tasks)} file(s):"
+            f"top P{b.top_priority}) — {len(b.tasks)} {batch_file_word}:"
         )
         for t in b.tasks:
             lines.append(f"  - **P{t.priority}** `{t.file_path}`")

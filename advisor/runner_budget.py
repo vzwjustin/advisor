@@ -36,6 +36,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from typing import Final
 
+from ._fs import normalize_path as _normalize
+
 SCOPE_STAGES: Final[tuple[str, ...]] = (
     "reading",
     "hypothesizing",
@@ -266,29 +268,6 @@ def out_of_batch(anchor: ScopeAnchor | None, batch_files: Iterable[str]) -> bool
     if isinstance(batch_files, frozenset):
         return key not in batch_files
     return key not in {_normalize(f) for f in batch_files}
-
-
-def _normalize(path: str) -> str:
-    """Shared normalizer matching ``verify._normalize_path``.
-
-    Strips whitespace, backticks, leading ``./``, backslashes, and trailing
-    ``:line`` / ``:line:col`` suffixes so anchors that include a line number
-    (``SCOPE: src/foo.py:42 · reading``) match batch entries keyed by
-    filename only.
-    """
-    p = path.strip().strip("`").replace("\\", "/")
-    if p.startswith("./"):
-        p = p[2:]
-    # Strip trailing ``:line`` / ``:line:col`` suffixes so anchors that
-    # include a line number (``SCOPE: src/foo.py:42 · reading``) match
-    # batch entries keyed by filename only. Matches verify._normalize_path.
-    while ":" in p:
-        head, _, tail = p.rpartition(":")
-        if tail.isdigit() and head:
-            p = head
-            continue
-        break
-    return p
 
 
 def format_budget_nudge(budget: RunnerBudget) -> tuple[str | None, RunnerBudget]:

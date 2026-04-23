@@ -326,7 +326,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         qs = parse_qs(parsed.query)
 
         try:
-            if route == "/" or route == "/index.html":
+            if route in ("/", "/index.html"):
                 self._send_text(INDEX_HTML, "text/html")
                 return
             if route == "/static/app.css":

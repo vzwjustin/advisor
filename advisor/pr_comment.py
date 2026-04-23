@@ -69,7 +69,7 @@ def format_pr_comment(findings: list[Finding]) -> str:
     lines: list[str] = [
         "## Advisor review",
         "",
-        f"**{len(findings)} finding(s)**",
+        f"**{len(findings)} {'finding' if len(findings) == 1 else 'findings'}**",
         "",
         "| Severity | Count |",
         "| --- | ---: |",
@@ -123,7 +123,8 @@ def format_pr_comment(findings: list[Finding]) -> str:
         omitted = len(findings) - rendered_count
         lines.append(
             f"_Output truncated to fit GitHub's body length cap — "
-            f"{omitted} finding(s) omitted. Run `advisor` locally for the full report._"
+            f"{omitted} {'finding' if omitted == 1 else 'findings'} omitted. "
+            f"Run `advisor` locally for the full report._"
         )
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"

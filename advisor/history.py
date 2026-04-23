@@ -287,7 +287,7 @@ def file_repeat_counts(
     now_dt = now or datetime.now(UTC)
     counts: dict[str, int] = {}
     for entry in findings:
-        if entry.status.upper() not in {"CONFIRMED"}:
+        if entry.status.upper() != "CONFIRMED":
             continue
         age = _age_days(entry, now=now_dt)
         if age > window_days:
@@ -319,7 +319,7 @@ def file_repeat_scores(
     scores: dict[str, float] = {}
     decay_lambda = math.log(2.0) / half_life_days
     for entry in findings:
-        if entry.status.upper() not in {"CONFIRMED"}:
+        if entry.status.upper() != "CONFIRMED":
             continue
         weight = _SEVERITY_WEIGHTS.get(entry.severity.upper(), 1.0)
         age = _age_days(entry, now=now_dt)

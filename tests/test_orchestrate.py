@@ -321,7 +321,7 @@ class TestRunnerPool:
         batches = [
             FocusBatch(batch_id=1, tasks=(), complexity="low"),
         ]
-        with pytest.raises(ValueError, match="have no tasks"):
+        with pytest.raises(ValueError, match="has no tasks"):
             build_runner_dispatch_messages(batches, pool_size=1)
 
 

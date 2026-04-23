@@ -20,6 +20,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from ._fs import normalize_path as _normalize_path_impl
+
 _log = logging.getLogger(__name__)
 
 
@@ -197,32 +199,12 @@ def parse_findings_with_drift(
 def _normalize_path(path: str) -> str:
     """Normalize a file path for batch-membership comparison.
 
-    Strips surrounding whitespace, backticks, leading ``./``, converts
-    backslashes to forward slashes, and strips a trailing ``:line`` or
-    ``:line:col`` suffix. Findings conventionally encode the offending
-    line as ``src/auth.py:42``; batch membership keys are filenames, so
-    without the strip every finding would look like scope drift. Does
-    NOT resolve symlinks or make the path absolute — batch filters
-    operate on repo-relative POSIX paths as emitted by the explore
-    phase and echoed back in findings.
+    Thin alias over :func:`advisor._fs.normalize_path`. Kept as a
+    module-level name so callers that import ``verify._normalize_path``
+    continue to work; the real implementation lives in ``_fs`` so
+    :mod:`advisor.runner_budget` shares the identical definition.
     """
-    p = path.strip().strip("`").replace("\\", "/")
-    if p.startswith("./"):
-        p = p[2:]
-    # Strip ``:line`` and ``:line:col`` suffixes without eating drive
-    # letters (``C:\Users\...``) or scheme-like prefixes — we only
-    # strip when the tail is all digits. Cap the loop at 2 iterations
-    # so a pathological input like ``file:42:43:44:45`` does not strip
-    # past the line/col pair into the actual path segments.
-    for _ in range(2):
-        if ":" not in p:
-            break
-        head, _sep, tail = p.rpartition(":")
-        if tail.isdigit() and head:
-            p = head
-        else:
-            break
-    return p
+    return _normalize_path_impl(path)
 
 
 def _parse_blocks(text: str) -> list[Finding]:

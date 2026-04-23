@@ -25,7 +25,7 @@ class TestFormatPrComment:
     def test_summary_table_counts(self) -> None:
         findings = [_f("CRITICAL"), _f("HIGH"), _f("HIGH"), _f("LOW")]
         out = format_pr_comment(findings)
-        assert "4 finding(s)" in out
+        assert "4 findings" in out
         assert "| CRITICAL | 1 |" in out
         assert "| HIGH | 2 |" in out
         assert "| LOW | 1 |" in out

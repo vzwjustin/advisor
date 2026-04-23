@@ -40,6 +40,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path, PurePath
 
+from .rank import _double_star_to_regex
 from .verify import Finding
 
 SCHEMA_VERSION = "1.0"
@@ -76,33 +77,18 @@ class Suppression:
 
 
 def _matches_glob(file_path: str, pattern: str) -> bool:
-    """Match ``file_path`` against ``pattern``, supporting ``**`` recursion."""
+    """Match ``file_path`` against ``pattern``, supporting ``**`` recursion.
+
+    Delegates the ``**`` translation to :func:`advisor.rank._double_star_to_regex`
+    (which also handles ``[seq]`` character classes) so both the
+    ``.advisorignore`` and suppressions glob paths share one implementation.
+    Patterns without ``**`` fall through to stdlib :func:`fnmatch.fnmatch`.
+    """
     p = PurePath(file_path).as_posix()
     if "**" in pattern:
-        # Simple translation: ** → .*, * → [^/]*, ? → [^/]
-        parts: list[str] = []
-        i = 0
-        while i < len(pattern):
-            c = pattern[i]
-            if c == "*":
-                if i + 1 < len(pattern) and pattern[i + 1] == "*":
-                    if i + 2 < len(pattern) and pattern[i + 2] == "/":
-                        parts.append("(?:.*/)?")
-                        i += 3
-                    else:
-                        parts.append(".*")
-                        i += 2
-                else:
-                    parts.append("[^/]*")
-                    i += 1
-            elif c == "?":
-                parts.append("[^/]")
-                i += 1
-            else:
-                parts.append(re.escape(c))
-                i += 1
         try:
-            return bool(re.match("^" + "".join(parts) + "$", p))
+            if _double_star_to_regex(pattern).match(p):
+                return True
         except re.error:
             # Malformed regex translation — fall through to plain fnmatch
             # so a suppressions.jsonl with an edge-case glob doesn't crash

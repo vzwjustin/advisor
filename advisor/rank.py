@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import fnmatch
 import re
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
@@ -330,8 +331,6 @@ def load_advisorignore(base_dir: str | Path) -> list[str]:
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
-        import warnings
-
         warnings.warn(
             f"could not read {path}: {exc}; treating as no ignore patterns",
             UserWarning,
@@ -343,8 +342,6 @@ def load_advisorignore(base_dir: str | Path) -> list[str]:
         stripped = line.strip()
         if stripped and not stripped.startswith("#"):
             if stripped.startswith("!"):
-                import warnings
-
                 warnings.warn(
                     f"{path}: negation pattern {stripped!r} is not supported and will be ignored",
                     UserWarning,
@@ -352,8 +349,6 @@ def load_advisorignore(base_dir: str | Path) -> list[str]:
                 )
                 continue
             if stripped.startswith("/"):
-                import warnings
-
                 warnings.warn(
                     f"{path}: anchored pattern {stripped!r} is not fully supported — "
                     "matching will behave as if the leading '/' were absent (unanchored)",
@@ -475,14 +470,6 @@ def _matches_any_pattern(file_path: str, patterns: list[str]) -> bool:
         ):
             return True
     return False
-
-
-# Pre-compiled word-boundary regexes per priority tier (base keywords only,
-# used by direct-lookup tests that want to introspect per-tier patterns).
-_COMPILED_KEYWORDS: dict[int, tuple[tuple[str, re.Pattern[str]], ...]] = {
-    priority: tuple((kw, re.compile(rf"\b{re.escape(kw)}\b", re.IGNORECASE)) for kw in keywords)
-    for priority, keywords in PRIORITY_KEYWORDS.items()
-}
 
 
 def _merged_keywords_for(language: str | None) -> dict[int, tuple[str, ...]]:

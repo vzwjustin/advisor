@@ -363,8 +363,10 @@ def build_runner_dispatch_messages(
             )
         empty = [b.batch_id for b in batches if not b.tasks]
         if empty:
+            label = "batch_id" if len(empty) == 1 else "batch_ids"
+            verb = "has" if len(empty) == 1 else "have"
             raise ValueError(
-                f"batch_id(s) {empty} have no tasks: dispatch would send an empty assignment"
+                f"{label} {empty} {verb} no tasks: dispatch would send an empty assignment"
             )
         if len(set(ids)) != len(ids):
             raise ValueError(

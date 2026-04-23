@@ -12,13 +12,12 @@ history file. They are human-readable JSON — diffable and auditable.
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 import warnings
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from ._fs import atomic_write_text as _shared_atomic_write
 from .focus import FocusBatch, FocusTask
 from .history import HISTORY_DIR_NAME
 
@@ -62,53 +61,15 @@ def checkpoint_path(target: str | Path, run_id: str) -> Path:
 
 
 def _atomic_write_text(target: Path, text: str) -> None:
-    """Write ``text`` to ``target`` atomically via a same-dir tmpfile + rename.
+    """Atomic write helper — thin alias over :func:`advisor._fs.atomic_write_text`.
 
-    A SIGINT / disk-full mid-write leaves the original file untouched —
-    ``os.replace`` is atomic on POSIX and Windows when source and target
-    sit on the same filesystem. We write to a tmpfile in the target's
-    parent directory to guarantee that property. Unlike the hardened
-    ``install._atomic_write_text`` (which defends against symlink TOCTOU
-    on shared $HOME), checkpoints live under the user's own target dir
-    and don't warrant the same ceremony — but atomic rename is still the
-    right reliability primitive.
+    Checkpoints live under the user's own target directory. Unlike the
+    hardened ``install._atomic_write_text`` path, we don't enable
+    symlink rejection here — the user's target directory is trusted and
+    the extra check would reject legitimate setups where the user
+    symlinks ``.advisor/`` to a shared cache.
     """
-    parent = target.parent
-    parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=str(parent))
-    tmp = Path(tmp_name)
-    try:
-        fh = os.fdopen(fd, "w", encoding="utf-8")
-    except BaseException:
-        os.close(fd)
-        try:
-            tmp.unlink()
-        except OSError:
-            pass
-        raise
-    try:
-        with fh:
-            fh.write(text)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, target)
-        # Best-effort directory fsync so the rename survives an abrupt
-        # power loss. Windows refuses to open a directory for fsync —
-        # silently skip there.
-        try:
-            dir_fd = os.open(str(parent), os.O_RDONLY)
-            try:
-                os.fsync(dir_fd)
-            finally:
-                os.close(dir_fd)
-        except OSError:
-            pass
-    except BaseException:
-        try:
-            tmp.unlink()
-        except OSError:
-            pass
-        raise
+    _shared_atomic_write(target, text)
 
 
 def save_checkpoint(

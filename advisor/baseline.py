@@ -21,12 +21,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import tempfile
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
+from ._fs import atomic_write_text as _shared_atomic_write
 from .sarif import synthesize_rule_id
 from .verify import Finding
 
@@ -38,46 +37,13 @@ _HEADER_KEY = "__advisor_baseline__"
 
 
 def _atomic_write_text(target: Path, text: str) -> None:
-    """Write ``text`` to ``target`` atomically via a same-dir tmpfile + rename.
+    """Atomic write helper — thin alias over :func:`advisor._fs.atomic_write_text`.
 
-    A SIGINT / disk-full mid-write leaves the original file untouched —
-    ``os.replace`` is atomic on POSIX and Windows when source and target
-    sit on the same filesystem. We write to a tmpfile in the target's
-    parent directory to guarantee that property.
+    Baseline files live under the user's own target directory and don't
+    need the symlink-rejection or 0o644 chmod that the shared-host
+    install path applies.
     """
-    parent = target.parent
-    parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=str(parent))
-    tmp = Path(tmp_name)
-    try:
-        fh = os.fdopen(fd, "w", encoding="utf-8")
-    except BaseException:
-        os.close(fd)
-        try:
-            tmp.unlink()
-        except OSError:
-            pass
-        raise
-    try:
-        with fh:
-            fh.write(text)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, target)
-        try:
-            dir_fd = os.open(str(parent), os.O_RDONLY)
-            try:
-                os.fsync(dir_fd)
-            finally:
-                os.close(dir_fd)
-        except OSError:
-            pass
-    except BaseException:
-        try:
-            tmp.unlink()
-        except OSError:
-            pass
-        raise
+    _shared_atomic_write(target, text)
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +64,16 @@ def _rule_id_for(f: Finding) -> str:
     if f.rule_id:
         return f.rule_id
     return synthesize_rule_id(f.severity, f.description)
+
+
+def _finding_key(f: Finding) -> tuple[str, str, str]:
+    """Identity key matching :meth:`BaselineEntry.key` for a live ``Finding``.
+
+    Centralizes the (file_path, rule_id, description_hash) construction so
+    the baseline write and diff paths cannot drift on how a finding is
+    identified.
+    """
+    return (f.file_path, _rule_id_for(f), _description_hash(f.description))
 
 
 def _description_hash(description: str) -> str:
@@ -213,8 +189,7 @@ def filter_against_baseline(
     new_findings: list[Finding] = []
     suppressed: list[Finding] = []
     for f in findings:
-        key = (f.file_path, _rule_id_for(f), _description_hash(f.description))
-        if key in baseline_keys:
+        if _finding_key(f) in baseline_keys:
             suppressed.append(f)
         else:
             new_findings.append(f)
@@ -255,7 +230,7 @@ def diff_against_baseline(
     new_findings: list[Finding] = []
     persisting: list[Finding] = []
     for f in findings:
-        key = (f.file_path, _rule_id_for(f), _description_hash(f.description))
+        key = _finding_key(f)
         current_keys.add(key)
         if key in baseline_by_key:
             persisting.append(f)
