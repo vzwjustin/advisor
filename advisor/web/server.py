@@ -202,42 +202,23 @@ def _history_payload(state: AppState, qs: dict[str, list[str]]) -> dict[str, Any
 def _status_payload(state: AppState) -> dict[str, Any]:
     """Cheap "has anything changed?" probe for the live dashboard poller.
 
-    Returns just enough state for the client to decide whether to re-fetch
-    ``/api/history``: the file's mtime (stable cache key), a newline count
-    (display-only), and whether the file was touched in the last
+    Returns the file's mtime (stable cache key for the client's
+    ``lastMtime`` check) and whether the file was touched in the last
     :data:`_ACTIVE_WINDOW_SECONDS` (drives the ``LIVE`` indicator).
-
-    We intentionally avoid JSON-parsing the file here — the whole point is
-    that this endpoint fires every few seconds, and iterating bytes is an
-    order of magnitude faster than :func:`load_recent`. If the caller wants
-    the entries themselves, they'll fetch ``/api/history`` when mtime
-    changes.
+    Intentionally does not read file contents — the whole point is that
+    this endpoint fires every few seconds and must be nearly free.
     """
     path = history_path(state.target)
-    empty = {"total_findings": 0, "last_mtime": None, "is_active": False}
+    empty: dict[str, Any] = {"last_mtime": None, "is_active": False}
     if not path.exists():
         return empty
     try:
         stat = path.stat()
     except OSError:
         return empty
-    total = 0
-    try:
-        # Binary mode skips codec work — we only need to count non-empty lines.
-        # A 10 MB history file (~50k findings) counts in well under 20 ms.
-        with path.open("rb") as f:
-            for line in f:
-                if line.strip():
-                    total += 1
-    except OSError:
-        # Transient read failures (e.g. concurrent truncation) shouldn't
-        # break the poll — fall through with total=0 and let the next
-        # tick retry.
-        pass
     mtime_dt = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
     age_seconds = (datetime.now(timezone.utc) - mtime_dt).total_seconds()
     return {
-        "total_findings": total,
         "last_mtime": mtime_dt.isoformat(),
         "is_active": 0 <= age_seconds < _ACTIVE_WINDOW_SECONDS,
     }

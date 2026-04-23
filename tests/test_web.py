@@ -154,7 +154,7 @@ class TestStatusPayload:
     def test_empty_when_no_history_file(self, tmp_path):
         state = build_app_state(tmp_path)
         payload = _status_payload(state)
-        assert payload == {"total_findings": 0, "last_mtime": None, "is_active": False}
+        assert payload == {"last_mtime": None, "is_active": False}
 
     def test_counts_entries_and_reports_mtime(self, tmp_path):
         append_entries(
@@ -180,7 +180,6 @@ class TestStatusPayload:
         )
         state = build_app_state(tmp_path)
         payload = _status_payload(state)
-        assert payload["total_findings"] == 2
         assert payload["last_mtime"] is not None
         # Just-appended history file must read as active.
         assert payload["is_active"] is True
@@ -210,7 +209,6 @@ class TestStatusPayload:
         os.utime(history_path(tmp_path), (past, past))
         state = build_app_state(tmp_path)
         payload = _status_payload(state)
-        assert payload["total_findings"] == 1
         assert payload["is_active"] is False
 
 
@@ -320,7 +318,7 @@ class TestLiveEndpoints:
         assert status == 200
         assert "application/json" in headers["Content-Type"]
         data = json.loads(body)
-        assert data == {"total_findings": 0, "last_mtime": None, "is_active": False}
+        assert data == {"last_mtime": None, "is_active": False}
 
     def test_api_status_reflects_writes(self, live_server):
         """After appending a finding, /api/status must report count>0, a
@@ -342,7 +340,6 @@ class TestLiveEndpoints:
         status, _, body = _get(host, port, "/api/status")
         assert status == 200
         data = json.loads(body)
-        assert data["total_findings"] == 1
         assert data["last_mtime"] is not None
         assert data["is_active"] is True
 

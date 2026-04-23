@@ -393,15 +393,11 @@ APP_JS = r"""(() => {
     });
     const tbody = $('#findings-table tbody');
     tbody.innerHTML = '';
-    // Snapshot the "seen before this render" set so every entry in THIS
-    // batch that's missing from the snapshot flashes. Then we add all
-    // current keys so they don't re-flash on the next render.
-    const previouslySeen = seenKeys;
-    const nextSeen = new Set(previouslySeen);
     filtered.forEach((e) => {
       const key = findingKey(e);
-      const isNew = key && !previouslySeen.has(key);
-      if (key) nextSeen.add(key);
+      // seenKeys.size === 0 means initial load — suppress flash so existing
+      // findings don't all light up blue on page open.
+      const isNew = seenKeys.size > 0 && key && !seenKeys.has(key);
       const tr = document.createElement('tr');
       if (isNew) tr.classList.add('row-new');
       tr.innerHTML = `
@@ -412,13 +408,11 @@ APP_JS = r"""(() => {
         <td>${escapeHtml(e.description || '')}</td>
       `;
       tbody.appendChild(tr);
-      // Drop the class after the animation completes so the row can
-      // flash again if it truly re-appears on a later poll.
-      if (isNew) {
-        setTimeout(() => tr.classList.remove('row-new'), 2100);
-      }
+      if (isNew) setTimeout(() => tr.classList.remove('row-new'), 2100);
     });
-    seenKeys = nextSeen;
+    // Track ALL raw entries (not just the filtered view) so clearing a filter
+    // never re-flashes entries that were merely hidden by the current query.
+    findingsRaw.forEach((e) => { const k = findingKey(e); if (k) seenKeys.add(k); });
     $('#findings-count').textContent = `${filtered.length} of ${findingsRaw.length}`;
     $('#findings-empty').hidden = findingsRaw.length !== 0;
     $('#findings-table').hidden = findingsRaw.length === 0;
@@ -451,9 +445,9 @@ APP_JS = r"""(() => {
   async function pollTick() {
     pollTimer = null;
     if (!liveEnabled) { setLiveState('paused', 'PAUSED'); return; }
-    if (document.hidden) { schedulePoll(POLL_INTERVAL_MS); return; }
+    if (document.hidden) return;
     const activeTab = document.querySelector('.tab.active')?.dataset.tab;
-    if (activeTab !== 'findings') { schedulePoll(POLL_INTERVAL_MS); return; }
+    if (activeTab !== 'findings') return;
 
     try {
       const r = await fetch('/api/status', { cache: 'no-store' });
@@ -639,6 +633,12 @@ APP_JS = r"""(() => {
     if (usd == null) return '—';
     return Number(usd).toFixed(4);
   }
+
+  // Resume polling when the user returns to the page after switching away.
+  // The tab-click listener already handles switching back to the findings tab.
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) schedulePoll(0);
+  });
 
   // --- init ---
   (async () => {
