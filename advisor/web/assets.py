@@ -464,8 +464,9 @@ APP_JS = r"""(() => {
       setLiveState(data.is_active ? 'active' : 'idle',
                    data.is_active ? 'LIVE' : 'IDLE');
       if (data.last_mtime !== lastMtime) {
-        lastMtime = data.last_mtime;
-        await refetchFindings();
+        if (await refetchFindings()) {
+          lastMtime = data.last_mtime;
+        }
       }
     } catch (_) {
       setLiveState('error', 'ERROR');
@@ -476,11 +477,14 @@ APP_JS = r"""(() => {
   async function refetchFindings() {
     try {
       const r = await fetch('/api/history', { cache: 'no-store' });
-      if (!r.ok) return;
+      if (!r.ok) return false;
       const data = await r.json();
       findingsRaw = data.entries || [];
       renderFindings();
-    } catch (_) { /* transient; next tick will retry via mtime change */ }
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   // "Updated Ns ago" ticker — refreshes once per second, independent of
