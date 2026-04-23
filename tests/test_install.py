@@ -367,6 +367,10 @@ class TestAtomicWriteSymlinkHardening:
     We must not follow that symlink through ``os.replace``.
     """
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="creating symlinks requires elevated privilege or Developer Mode on Windows",
+    )
     def test_refuses_symlink_target(self, tmp_path: Path):
         real = tmp_path / "real.txt"
         real.write_text("original\n")

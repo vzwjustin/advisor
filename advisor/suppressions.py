@@ -137,7 +137,7 @@ def load_suppressions(path: Path) -> tuple[Suppression, ...]:
         return ()
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         raise ValueError(f"could not read {path}: {exc}") from exc
 
     entries: list[Suppression] = []

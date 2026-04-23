@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from advisor.baseline import (
     SCHEMA_VERSION,
     diff_against_baseline,
@@ -43,6 +45,13 @@ class TestRoundTrip:
         text = p.read_text()
         first = json.loads(text.splitlines()[0])
         assert first["schema_version"] == SCHEMA_VERSION
+
+    def test_non_utf8_file_warns_and_returns_empty(self, tmp_path: Path) -> None:
+        p = tmp_path / "bad-encoding.jsonl"
+        p.write_bytes(b"\x80\x81\x82")
+        with pytest.warns(UserWarning, match="could not read baseline"):
+            loaded = read_baseline(p)
+        assert loaded == []
 
 
 class TestFilterAgainstBaseline:

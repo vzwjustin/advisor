@@ -338,6 +338,7 @@ APP_JS = r"""(() => {
 
   // --- findings ---
   let findingsRaw = [];
+  let findingsErrorMessage = '';
   // Keys of entries we've already seen in a previous render. Entries whose
   // key is NOT in here get the `.row-new` highlight on the next render.
   // See `findingKey` below for the identity contract.
@@ -414,11 +415,25 @@ APP_JS = r"""(() => {
     // never re-flashes entries that were merely hidden by the current query.
     findingsRaw.forEach((e) => { const k = findingKey(e); if (k) seenKeys.add(k); });
     $('#findings-count').textContent = `${filtered.length} of ${findingsRaw.length}`;
-    $('#findings-empty').hidden = findingsRaw.length !== 0;
-    $('#findings-table').hidden = findingsRaw.length === 0;
+    const hasVisibleFindings = filtered.length !== 0;
+    $('#findings-empty').textContent = findingsErrorMessage || (findingsRaw.length === 0
+      ? 'No findings yet. Run the advisor on this target first.'
+      : 'No findings match the current filters.');
+    $('#findings-empty').hidden = hasVisibleFindings;
+    $('#findings-table').hidden = !hasVisibleFindings;
   }
   $('#findings-search').addEventListener('input', renderFindings);
   $('#findings-severity').addEventListener('change', renderFindings);
+
+  function showFindingsError(message) {
+    findingsRaw = [];
+    findingsErrorMessage = message;
+    $('#findings-table tbody').innerHTML = '';
+    $('#findings-count').textContent = '0 of 0';
+    $('#findings-empty').textContent = message;
+    $('#findings-empty').hidden = false;
+    $('#findings-table').hidden = true;
+  }
 
   // --- live poll loop ---
   // Every POLL_INTERVAL_MS we hit /api/status (cheap). Only when the
@@ -471,12 +486,17 @@ APP_JS = r"""(() => {
   async function refetchFindings() {
     try {
       const r = await fetch('/api/history', { cache: 'no-store' });
-      if (!r.ok) return false;
+      if (!r.ok) {
+        showFindingsError('Error loading findings: ' + r.status);
+        return false;
+      }
       const data = await r.json();
+      findingsErrorMessage = '';
       findingsRaw = data.entries || [];
       renderFindings();
       return true;
     } catch (_) {
+      showFindingsError('Error loading findings: network error');
       return false;
     }
   }
@@ -510,6 +530,14 @@ APP_JS = r"""(() => {
   });
 
   // --- plan ---
+  function showPlanError(message) {
+    $('#plan-table tbody').innerHTML = '';
+    $('#plan-table').hidden = true;
+    $('#plan-count').textContent = '';
+    $('#plan-empty').hidden = false;
+    $('#plan-empty').textContent = message;
+  }
+
   async function loadPlan() {
     // Server binds to a single target at launch (see AppState); only the
     // ranking knobs round-trip to /api/plan.
@@ -517,13 +545,18 @@ APP_JS = r"""(() => {
     const qs = new URLSearchParams();
     qs.set('file_types', form.get('file_types') || '*.py');
     qs.set('min_priority', form.get('min_priority') || '3');
-    const r = await fetch('/api/plan?' + qs.toString());
-    if (!r.ok) {
-      $('#plan-empty').hidden = false;
-      $('#plan-empty').textContent = 'Error loading plan: ' + r.status;
+    let data;
+    try {
+      const r = await fetch('/api/plan?' + qs.toString());
+      if (!r.ok) {
+        showPlanError('Error loading plan: ' + r.status);
+        return;
+      }
+      data = await r.json();
+    } catch (_) {
+      showPlanError('Error loading plan: network error');
       return;
     }
-    const data = await r.json();
     const tbody = $('#plan-table tbody');
     tbody.innerHTML = '';
     (data.tasks || []).forEach((t, i) => {
@@ -538,6 +571,7 @@ APP_JS = r"""(() => {
     });
     $('#plan-count').textContent = `${data.task_count || 0} files`;
     const empty = (data.task_count || 0) === 0;
+    $('#plan-empty').textContent = 'No files matched the current min-priority filter.';
     $('#plan-empty').hidden = !empty;
     $('#plan-table').hidden = empty;
   }
@@ -576,6 +610,12 @@ APP_JS = r"""(() => {
   });
 
   // --- cost ---
+  function showCostError(message) {
+    $('#cost-summary').innerHTML = '';
+    $('#cost-empty').hidden = false;
+    $('#cost-empty').textContent = message;
+  }
+
   async function loadCost() {
     const form = new FormData($('#config-form'));
     const qs = new URLSearchParams();
@@ -583,17 +623,22 @@ APP_JS = r"""(() => {
     qs.set('min_priority', form.get('min_priority') || '3');
     qs.set('advisor_model', form.get('advisor_model') || 'opus');
     qs.set('runner_model', form.get('runner_model') || 'sonnet');
-    const r = await fetch('/api/cost?' + qs.toString());
-    if (!r.ok) {
-      $('#cost-summary').innerHTML = '';
-      $('#cost-empty').hidden = false;
-      $('#cost-empty').textContent = 'Error loading cost: ' + r.status;
+    let data;
+    try {
+      const r = await fetch('/api/cost?' + qs.toString());
+      if (!r.ok) {
+        showCostError('Error loading cost: ' + r.status);
+        return;
+      }
+      data = await r.json();
+    } catch (_) {
+      showCostError('Error loading cost: network error');
       return;
     }
-    const data = await r.json();
     if (!data.estimate) {
       $('#cost-summary').innerHTML = '';
       $('#cost-empty').hidden = false;
+      $('#cost-empty').textContent = 'No plan yet — cost estimate needs ranked files.';
       return;
     }
     const e = data.estimate;

@@ -130,7 +130,7 @@ def read_baseline(path: Path) -> list[BaselineEntry]:
         return []
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         warnings.warn(f"could not read baseline {path}: {exc}", UserWarning, stacklevel=2)
         return []
     entries: list[BaselineEntry] = []
