@@ -26,6 +26,7 @@ from advisor.web.server import (
     _cost_payload,
     _history_payload,
     _plan_payload,
+    _status_payload,
     _target_payload,
     find_free_port,
 )
@@ -165,6 +166,70 @@ class TestHistoryPayload:
         assert payload["entries"][0]["file_path"] == "a.py"
 
 
+class TestStatusPayload:
+    def test_empty_when_no_history_file(self, tmp_path):
+        state = build_app_state(tmp_path)
+        payload = _status_payload(state)
+        assert payload == {"total_findings": 0, "last_mtime": None, "is_active": False}
+
+    def test_counts_entries_and_reports_mtime(self, tmp_path):
+        append_entries(
+            tmp_path,
+            [
+                HistoryEntry(
+                    timestamp="2026-04-21T12:00:00+00:00",
+                    file_path="a.py",
+                    severity="HIGH",
+                    description="one",
+                    status="CONFIRMED",
+                    run_id="r1",
+                ),
+                HistoryEntry(
+                    timestamp="2026-04-21T12:00:01+00:00",
+                    file_path="b.py",
+                    severity="LOW",
+                    description="two",
+                    status="CONFIRMED",
+                    run_id="r1",
+                ),
+            ],
+        )
+        state = build_app_state(tmp_path)
+        payload = _status_payload(state)
+        assert payload["total_findings"] == 2
+        assert payload["last_mtime"] is not None
+        # Just-appended history file must read as active.
+        assert payload["is_active"] is True
+
+    def test_stale_file_is_not_active(self, tmp_path):
+        """A history file older than ``_ACTIVE_WINDOW_SECONDS`` must report
+        ``is_active=False`` so the LIVE pill stops pulsing after a run ends."""
+        import os
+        import time
+
+        append_entries(
+            tmp_path,
+            [
+                HistoryEntry(
+                    timestamp="2026-04-21T12:00:00+00:00",
+                    file_path="a.py",
+                    severity="LOW",
+                    description="old",
+                    status="CONFIRMED",
+                    run_id="r1",
+                )
+            ],
+        )
+        from advisor.history import history_path
+
+        past = time.time() - 120  # 2 min in the past; well outside the window
+        os.utime(history_path(tmp_path), (past, past))
+        state = build_app_state(tmp_path)
+        payload = _status_payload(state)
+        assert payload["total_findings"] == 1
+        assert payload["is_active"] is False
+
+
 class TestTargetPayload:
     def test_shape(self, tmp_path):
         state = build_app_state(tmp_path)
@@ -264,6 +329,38 @@ class TestLiveEndpoints:
         status, _, body = _get(host, port, "/api/history")
         assert status == 200
         assert json.loads(body)["count"] == 0
+
+    def test_api_status_empty(self, live_server):
+        host, port, _ = live_server
+        status, headers, body = _get(host, port, "/api/status")
+        assert status == 200
+        assert "application/json" in headers["Content-Type"]
+        data = json.loads(body)
+        assert data == {"total_findings": 0, "last_mtime": None, "is_active": False}
+
+    def test_api_status_reflects_writes(self, live_server):
+        """After appending a finding, /api/status must report count>0, a
+        non-null mtime, and is_active=True (the file was just written)."""
+        host, port, tmp = live_server
+        append_entries(
+            tmp,
+            [
+                HistoryEntry(
+                    timestamp="2026-04-21T12:00:00+00:00",
+                    file_path="a.py",
+                    severity="HIGH",
+                    description="x",
+                    status="CONFIRMED",
+                    run_id="r1",
+                )
+            ],
+        )
+        status, _, body = _get(host, port, "/api/status")
+        assert status == 200
+        data = json.loads(body)
+        assert data["total_findings"] == 1
+        assert data["last_mtime"] is not None
+        assert data["is_active"] is True
 
     def test_unknown_route_returns_404_json(self, live_server):
         host, port, _ = live_server

@@ -26,6 +26,7 @@ import logging
 import socket
 import traceback
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -37,7 +38,7 @@ from .._fs import read_head as _read_head
 from .._fs import safe_rglob_paths as _safe_rglob
 from ..cost import estimate_cost
 from ..focus import FocusTask, create_focus_tasks
-from ..history import HISTORY_SCHEMA_VERSION, load_recent
+from ..history import HISTORY_SCHEMA_VERSION, history_path, load_recent
 from ..rank import load_advisorignore, rank_files
 from .assets import APP_CSS, APP_JS, INDEX_HTML
 
@@ -45,6 +46,12 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
+
+# Window during which the history file's mtime is considered "fresh" and the
+# dashboard paints an ACTIVE indicator. 15s is a balance: long enough that the
+# LIVE pill doesn't flicker between a runner's finds, short enough that a
+# completed run stops looking active within one UI tick or two.
+_ACTIVE_WINDOW_SECONDS = 15.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,6 +229,50 @@ def _history_payload(state: AppState, qs: dict[str, list[str]]) -> dict[str, Any
     }
 
 
+def _status_payload(state: AppState) -> dict[str, Any]:
+    """Cheap "has anything changed?" probe for the live dashboard poller.
+
+    Returns just enough state for the client to decide whether to re-fetch
+    ``/api/history``: the file's mtime (stable cache key), a newline count
+    (display-only), and whether the file was touched in the last
+    :data:`_ACTIVE_WINDOW_SECONDS` (drives the ``LIVE`` indicator).
+
+    We intentionally avoid JSON-parsing the file here — the whole point is
+    that this endpoint fires every few seconds, and iterating bytes is an
+    order of magnitude faster than :func:`load_recent`. If the caller wants
+    the entries themselves, they'll fetch ``/api/history`` when mtime
+    changes.
+    """
+    path = history_path(state.target)
+    empty = {"total_findings": 0, "last_mtime": None, "is_active": False}
+    if not path.exists():
+        return empty
+    try:
+        stat = path.stat()
+    except OSError:
+        return empty
+    total = 0
+    try:
+        # Binary mode skips codec work — we only need to count non-empty lines.
+        # A 10 MB history file (~50k findings) counts in well under 20 ms.
+        with path.open("rb") as f:
+            for line in f:
+                if line.strip():
+                    total += 1
+    except OSError:
+        # Transient read failures (e.g. concurrent truncation) shouldn't
+        # break the poll — fall through with total=0 and let the next
+        # tick retry.
+        pass
+    mtime_dt = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+    age_seconds = (datetime.now(timezone.utc) - mtime_dt).total_seconds()
+    return {
+        "total_findings": total,
+        "last_mtime": mtime_dt.isoformat(),
+        "is_active": 0 <= age_seconds < _ACTIVE_WINDOW_SECONDS,
+    }
+
+
 def _target_payload(state: AppState) -> dict[str, Any]:
     return {
         "target": str(state.target),
@@ -305,6 +356,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
             if route == "/api/target":
                 self._send_json(_target_payload(self.state))
+                return
+            if route == "/api/status":
+                self._send_json(_status_payload(self.state))
                 return
             if route == "/api/history":
                 self._send_json(_history_payload(self.state, qs))
