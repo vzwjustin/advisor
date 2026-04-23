@@ -168,7 +168,17 @@ def _config_from_args(args: argparse.Namespace) -> TeamConfig:
     # pipe into the CLI don't silently swallow stdin as context.
     context = args.context or ""
     if context == "-":
-        context = sys.stdin.read().strip()
+        if sys.stdin.isatty():
+            print(
+                _style.warning_box(
+                    "--context -: no data on stdin; pipe the context in or drop the flag",
+                    stream=sys.stderr,
+                ),
+                file=sys.stderr,
+            )
+            context = ""
+        else:
+            context = sys.stdin.read().strip()
     return default_team_config(
         target_dir=args.target,
         team_name=args.team,
@@ -678,7 +688,16 @@ def cmd_plan(args: argparse.Namespace) -> int:
         if rc is not None:
             return rc
 
-    return _emit_plan(args, target, tasks, batches, run_id=saved_run_id)
+    # Thread `cfg` through when we built one for the checkpoint, so
+    # _emit_plan's cost estimate doesn't re-run _config_from_args and
+    # silently lose --context - (stdin already consumed) or any other
+    # args we've resolved. Without this, a `--checkpoint --context -
+    # --estimate` combo produces a checkpoint with the right context
+    # but a cost estimate computed against context="".
+    resolved_cfg = cfg if getattr(args, "checkpoint", False) else None
+    return _emit_plan(
+        args, target, tasks, batches, run_id=saved_run_id, resolved_config=resolved_cfg
+    )
 
 
 def _batches_from_checkpoint(cp: Checkpoint) -> list[FocusBatch]:
@@ -1554,7 +1573,10 @@ def _load_findings_from_input(
             doc = None
         if doc is not None:
             if isinstance(doc, dict):
-                raw = doc.get("findings_in_batch") or doc.get("findings") or []
+                if "findings_in_batch" in doc:
+                    raw = doc.get("findings_in_batch") or []
+                else:
+                    raw = doc.get("findings") or []
             elif isinstance(doc, list):
                 raw = doc
             else:
@@ -2035,13 +2057,6 @@ def build_parser() -> argparse.ArgumentParser:
             "Ignore .advisor/history.jsonl when ranking. Use in CI for "
             "deterministic plans independent of previous run outcomes."
         ),
-    )
-    p_plan.add_argument(
-        "--fail-on",
-        dest="fail_on",
-        choices=_FAIL_ON_CHOICES,
-        default="never",
-        help="Exit 4 if any finding meets/exceeds LEVEL. Default: never (back-compat).",
     )
     p_plan.set_defaults(func=cmd_plan)
 

@@ -89,11 +89,19 @@ def _matches_glob(file_path: str, pattern: str) -> bool:
         try:
             if _double_star_to_regex(pattern).match(p):
                 return True
-        except re.error:
-            # Malformed regex translation — fall through to plain fnmatch
-            # so a suppressions.jsonl with an edge-case glob doesn't crash
-            # the whole load pass.
-            pass
+        except re.error as exc:
+            # Malformed regex translation — fall through to plain fnmatch so a
+            # suppressions.jsonl with an edge-case glob doesn't crash the whole
+            # load pass. Surface the degradation: fnmatch treats ** as two
+            # consecutive ``*`` (matches one path component) rather than as
+            # recursive, so the suppression silently applies to a narrower
+            # set than the user intended.
+            warnings.warn(
+                f"malformed glob pattern {pattern!r}: {exc}; falling back to "
+                "fnmatch semantics (** is not recursive in this mode)",
+                UserWarning,
+                stacklevel=2,
+            )
     return fnmatch.fnmatch(p, pattern)
 
 
@@ -124,10 +132,13 @@ def _parse_until(raw: str | None, *, context: str) -> tuple[str | None, bool]:
 def load_suppressions(path: Path) -> tuple[Suppression, ...]:
     """Load suppressions from a JSONL file.
 
-    Missing file → empty tuple. Malformed lines raise :class:`ValueError`
-    with a pointer to the offending line; entries that fail the
-    "> MEDIUM requires ``until`` + ``reason``" rule raise the same. Use
-    a try/except at the call site if you want graceful fallback.
+    Missing file → empty tuple. Malformed JSON on a single line emits a
+    warning and skips that line, matching ``baseline.read_baseline`` —
+    a typo in one entry does not silently disable the entire suppression
+    file (which would cause the suppressed findings to surface as new).
+    Entries that parse but fail the "> MEDIUM requires ``until`` +
+    ``reason``" rule still raise :class:`ValueError` — that's a
+    structural misuse, not a transient typo.
 
     Expired ``until`` dates are not a hard error — they emit a warning
     and the matching entry keeps ``expired=True`` so callers can choose
@@ -148,7 +159,12 @@ def load_suppressions(path: Path) -> tuple[Suppression, ...]:
         try:
             obj = json.loads(stripped)
         except json.JSONDecodeError as exc:
-            raise ValueError(f"{path}:{line_no}: invalid JSON: {exc}") from exc
+            warnings.warn(
+                f"skipping malformed suppression entry at {path}:{line_no}: {exc}",
+                UserWarning,
+                stacklevel=2,
+            )
+            continue
         if obj.get(_HEADER_KEY):
             version = str(obj.get("schema_version", ""))
             if version and version != SCHEMA_VERSION:

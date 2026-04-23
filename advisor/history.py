@@ -49,6 +49,12 @@ _SEVERITY_WEIGHTS: dict[str, float] = {
 # calculations.
 _MAX_FILE_SCORE = 10.0
 
+# Allowlists for fields that flow unescaped into the advisor prompt label
+# line and the dashboard CSS class suffix. A crafted newline or bracket in
+# these fields would otherwise inject. Unknown values become "UNKNOWN".
+_ALLOWED_SEVERITIES = frozenset({"CRITICAL", "HIGH", "MEDIUM", "LOW"})
+_ALLOWED_STATUSES = frozenset({"CONFIRMED", "FIXED", "REJECTED"})
+
 
 @dataclass(frozen=True, slots=True)
 class HistoryEntry:
@@ -210,7 +216,12 @@ def load_recent_findings(history_path: Path, *, limit: int = 500) -> list[Histor
     # invariant while staying O(limit).
     buffer_size = limit + 16
     try:
-        with history_path.open("r", encoding="utf-8") as f:
+        # utf-8-sig transparently strips a leading BOM on the first line —
+        # some Windows editors write one, and plain utf-8 would otherwise
+        # leave it attached to the first JSON object, triggering
+        # JSONDecodeError and silently dropping what is typically the
+        # newest entry after the reverse-on-read flip.
+        with history_path.open("r", encoding="utf-8-sig") as f:
             lines: deque[tuple[int, str]] = deque(enumerate(f, 1), maxlen=buffer_size)
     except (OSError, UnicodeDecodeError) as exc:
         warnings.warn(f"could not read {history_path}: {exc}", UserWarning, stacklevel=2)
@@ -226,13 +237,18 @@ def load_recent_findings(history_path: Path, *, limit: int = 500) -> list[Histor
             for _f in ("timestamp", "file_path", "severity", "description", "status", "run_id"):
                 if not isinstance(obj.get(_f), str):
                     raise TypeError(f"{_f} must be str, got {type(obj.get(_f)).__name__}")
+            # Allowlist severity/status — they flow unescaped into the advisor
+            # prompt label line (format_history_block) and a CSS class suffix in
+            # the dashboard. A crafted newline in either field would inject.
+            sev = obj["severity"] if obj["severity"] in _ALLOWED_SEVERITIES else "UNKNOWN"
+            status = obj["status"] if obj["status"] in _ALLOWED_STATUSES else "UNKNOWN"
             entries.append(
                 HistoryEntry(
                     timestamp=obj["timestamp"],
                     file_path=obj["file_path"],
-                    severity=obj["severity"],
+                    severity=sev,
                     description=obj["description"],
-                    status=obj["status"],
+                    status=status,
                     run_id=obj["run_id"],
                     schema_version=str(obj.get("schema_version", HISTORY_SCHEMA_VERSION)),
                 )

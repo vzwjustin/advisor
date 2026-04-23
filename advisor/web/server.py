@@ -105,14 +105,17 @@ def _first_int(qs: dict[str, list[str]], key: str, default: int, *, min_value: i
 
     Negative or malformed values fall back to ``default`` — downstream
     handlers assume non-negative counts/limits and sanity-clamp the
-    upper bound separately.
+    upper bound separately. The returned value is also clamped to at
+    least ``min_value`` so a caller that accidentally passes an invalid
+    ``default`` (e.g. ``default=-1, min_value=1``) still gets a legal
+    result rather than propagating the bug downstream.
     """
     try:
         value = int(_first(qs, key, str(default)))
     except ValueError:
-        return default
+        return max(default, min_value)
     if value < min_value:
-        return default
+        return max(default, min_value)
     return value
 
 
@@ -178,7 +181,7 @@ def _plan_payload(state: AppState, qs: dict[str, list[str]]) -> dict[str, Any]:
 def _cost_payload(state: AppState, qs: dict[str, list[str]]) -> dict[str, Any]:
     advisor_model = _first(qs, "advisor_model", state.default_advisor_model)
     runner_model = _first(qs, "runner_model", state.default_runner_model)
-    max_fixes = _first_int(qs, "max_fixes_per_runner", 5)
+    max_fixes = _first_int(qs, "max_fixes_per_runner", 5, min_value=1)
     file_types = _first(qs, "file_types", state.default_file_types)
     min_priority = _first_int(qs, "min_priority", state.default_min_priority)
     tasks = _rank_target(state, file_types, min_priority)
@@ -421,7 +424,11 @@ def run_server(
     # ``server_address`` tuple is the only reliable source for what we
     # actually bound to, so report that instead of the request value.
     actual_port = server.server_address[1]
-    url = f"http://{host}:{actual_port}"
+    # Strip ANSI / newline / CR from the user-supplied host before echoing to
+    # the terminal so a `--host $'\x1b[2J'` or similar can't inject escape
+    # sequences into the startup banner.
+    host_safe = host.replace("\x1b", "").replace("\r", "").replace("\n", "")
+    url = f"http://{host_safe}:{actual_port}"
     print(_style.success_box(f"advisor dashboard serving {state.target} at {url}"))
     print(_style.tip("press Ctrl-C to stop"))
     print(_style.cta("open in browser", url))

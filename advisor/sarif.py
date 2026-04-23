@@ -167,6 +167,12 @@ def findings_to_sarif(
     results: list[dict[str, Any]] = []
 
     for f in findings:
+        # Skip findings with no file_path — an empty path would produce a
+        # SARIF result pointing at the source root, which is misleading.
+        # _dict_to_finding already drops these upstream; this guard covers
+        # directly-constructed Finding objects.
+        if not f.file_path or not f.file_path.strip():
+            continue
         rule_id = _rule_id_for(f, prefix=rule_id_fallback_prefix)
         if rule_id not in rules_seen:
             rule_index_by_id[rule_id] = len(rules_seen)

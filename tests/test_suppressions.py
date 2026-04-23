@@ -42,11 +42,19 @@ class TestLoader:
     def test_missing_file_returns_empty(self, tmp_path: Path) -> None:
         assert load_suppressions(tmp_path / "absent.jsonl") == ()
 
-    def test_malformed_json_raises(self, tmp_path: Path) -> None:
+    def test_malformed_json_warns_and_skips(self, tmp_path: Path) -> None:
+        # A malformed line must not abort the whole load — that would
+        # silently disable the entire suppression file and resurface all
+        # suppressed findings. Matches baseline.read_baseline semantics.
         p = tmp_path / "bad.jsonl"
-        p.write_text("{not valid json\n", encoding="utf-8")
-        with pytest.raises(ValueError, match="invalid JSON"):
-            load_suppressions(p)
+        p.write_text(
+            '{not valid json\n{"rule_id": "r1", "file": "x.py"}\n',
+            encoding="utf-8",
+        )
+        with pytest.warns(UserWarning, match="skipping malformed suppression entry"):
+            result = load_suppressions(p)
+        assert len(result) == 1
+        assert result[0].rule_id == "r1"
 
     def test_non_utf8_file_raises_value_error(self, tmp_path: Path) -> None:
         p = tmp_path / "bad-encoding.jsonl"

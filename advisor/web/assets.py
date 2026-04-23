@@ -679,12 +679,6 @@ APP_JS = r"""(() => {
     return Number(usd).toFixed(4);
   }
 
-  // Resume polling when the user returns to the page after switching away.
-  // The tab-click listener already handles switching back to the findings tab.
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) schedulePoll(0);
-  });
-
   // --- init ---
   (async () => {
     try {

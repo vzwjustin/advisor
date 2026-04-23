@@ -18,6 +18,7 @@ Relationship with `orchestrate.build_verify_message`:
 from __future__ import annotations
 
 import logging
+import warnings
 from dataclasses import dataclass
 
 from ._fs import normalize_path as _normalize_path_impl
@@ -176,6 +177,14 @@ def parse_findings_with_drift(
         normalized_batch = None
     else:
         normalized_batch = {_normalize_path(p) for p in batch_files}
+        if not normalized_batch:
+            warnings.warn(
+                "parse_findings_with_drift: batch_files is an empty set; "
+                "every finding will be dropped. Pass None to disable scope "
+                "filtering instead.",
+                UserWarning,
+                stacklevel=2,
+            )
 
     raw = _parse_blocks(text)
     if normalized_batch is None:
@@ -269,6 +278,11 @@ def _parse_blocks(text: str) -> list[Finding]:
                 if active_key:
                     current[active_key] = current[active_key] + " " + stripped
         elif active_key and stripped and not stripped.startswith("### Finding"):
+            # Skip pure Markdown fence markers — a runner embedding a code
+            # block inside an Evidence value would otherwise pollute the
+            # field with literal ```` ``` ```` text.
+            if stripped == "```" or stripped.startswith("```"):
+                continue
             current[active_key] = current.get(active_key, "") + " " + stripped
 
     if current:
