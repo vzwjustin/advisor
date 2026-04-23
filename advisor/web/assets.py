@@ -438,7 +438,13 @@ APP_JS = r"""(() => {
   // --- live poll loop ---
   // Every POLL_INTERVAL_MS we hit /api/status (cheap). Only when the
   // server reports a changed mtime do we fetch /api/history (expensive).
+  // On consecutive /api/status failures we apply exponential backoff
+  // (doubling up to POLL_MAX_BACKOFF_MS) so a machine under disk-sleep
+  // or a temporarily-down server doesn't eat bandwidth. Any success
+  // resets the backoff to the normal interval.
   const POLL_INTERVAL_MS = 3000;
+  const POLL_MAX_BACKOFF_MS = 30000;
+  let pollErrorStreak = 0;
   let lastMtime = null;
   let pollTimer = null;
   let liveEnabled = true;
@@ -464,6 +470,7 @@ APP_JS = r"""(() => {
     const activeTab = document.querySelector('.tab.active')?.dataset.tab;
     if (activeTab !== 'findings') return;
 
+    let nextDelay = POLL_INTERVAL_MS;
     try {
       const r = await fetch('/api/status', { cache: 'no-store' });
       if (!r.ok) throw new Error('status ' + r.status);
@@ -477,10 +484,17 @@ APP_JS = r"""(() => {
           lastMtime = data.last_mtime;
         }
       }
+      pollErrorStreak = 0;
     } catch (_) {
       setLiveState('error', 'ERROR');
+      pollErrorStreak += 1;
+      // 3s → 6s → 12s → 24s → cap at 30s. Keep it deterministic (no
+      // jitter) since this is a single-client local dashboard; jitter
+      // would only obscure the backoff state during debugging.
+      const backoff = POLL_INTERVAL_MS * Math.pow(2, pollErrorStreak - 1);
+      nextDelay = Math.min(POLL_MAX_BACKOFF_MS, backoff);
     }
-    schedulePoll(POLL_INTERVAL_MS);
+    schedulePoll(nextDelay);
   }
 
   async function refetchFindings() {

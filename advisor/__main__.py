@@ -617,6 +617,19 @@ def cmd_plan(args: argparse.Namespace) -> int:
     # applied here because rank_files takes it as a parameter.
     preset_extras: dict[int, tuple[str, ...]] | None = None
     preset_name = getattr(args, "preset", None)
+    # Reject an explicit empty-string preset (e.g. ``--preset=``) instead of
+    # silently skipping — argparse's default is None, so an empty string here
+    # means the caller typed ``--preset=`` and almost certainly wants an
+    # error, not a stealth "no preset applied".
+    if preset_name == "":
+        print(
+            _style.error_box(
+                "--preset requires a non-empty value; run 'advisor presets' to list available packs",
+                stream=sys.stderr,
+            ),
+            file=sys.stderr,
+        )
+        return 2
     if preset_name:
         from .presets import get_preset
 
@@ -1965,7 +1978,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         default="",
         metavar="FILE",
-        help="Write the (JSON) plan to FILE instead of stdout",
+        help="Write the JSON plan to FILE instead of stdout (requires --json; ignored with a warning otherwise)",
     )
     p_plan.add_argument(
         "--quiet",

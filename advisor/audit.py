@@ -64,7 +64,13 @@ _RUNNER_MENTION_RE = re.compile(r"runner-(\d+)")
 _CONTEXT_PRESSURE_RE = re.compile(r"CONTEXT_PRESSURE", re.IGNORECASE)
 
 _PROTOCOL_VIOLATION_RE = re.compile(
-    r"PROTOCOL_VIOLATION\s*:\s*[^\n]*",
+    # Anchor on line-start so a runner quoting the sentinel inside prose
+    # or a fenced evidence block (e.g. ``**Evidence**: we match on
+    # PROTOCOL_VIOLATION: ...``) doesn't inflate the violation count.
+    # The sentinel is emitted as a standalone top-of-line marker per the
+    # advisor prompt; anchoring tightens the match to that structural form.
+    r"^PROTOCOL_VIOLATION\s*:\s*[^\n]*",
+    re.MULTILINE,
 )
 
 _HANDOFF_RE = re.compile(r"##\s+Handoff\s+from\s+runner-\d+")

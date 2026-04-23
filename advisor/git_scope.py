@@ -55,6 +55,16 @@ def _run_git(cwd: Path, *args: str) -> list[str]:
             cwd=str(cwd),
             capture_output=True,
             text=True,
+            # Pin the decoder — ``text=True`` alone relies on
+            # ``locale.getpreferredencoding()``, which can be ASCII/CP1252
+            # on containers or Windows. A non-ASCII filename from git
+            # would then raise ``UnicodeDecodeError`` outside the caught
+            # exception set and crash the CLI. ``errors="replace"`` keeps
+            # the command scoped-review-usable even on partial encoding
+            # issues; display strings only need to be readable, not
+            # round-trippable.
+            encoding="utf-8",
+            errors="replace",
             check=False,
             timeout=_GIT_TIMEOUT_SECONDS,
         )

@@ -204,6 +204,16 @@ def default_team_config(
                 )
                 print(_style.warning_box(msg), file=sys.stderr)
 
+    # Floor the runner budget integers at 1 — zero/negative would silently
+    # construct a config that then raises inside build_fix_assignment_message
+    # on the very first fix (fix_number=1 > effective_cap=0). Clamping here
+    # turns a runtime ValueError into a soft floor at construction time.
+    max_fixes_per_runner = max(1, max_fixes_per_runner)
+    large_file_max_fixes = max(1, large_file_max_fixes)
+    large_file_line_threshold = max(1, large_file_line_threshold)
+    runner_output_char_ceiling = max(1, runner_output_char_ceiling)
+    runner_file_read_ceiling = max(1, runner_file_read_ceiling)
+
     return TeamConfig(
         team_name=team_name,
         target_dir=target_dir,

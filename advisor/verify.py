@@ -22,6 +22,7 @@ import warnings
 from dataclasses import dataclass
 
 from ._fs import normalize_path as _normalize_path_impl
+from .orchestrate._fence import fence as _fence
 
 _log = logging.getLogger(__name__)
 
@@ -68,15 +69,14 @@ _KEY_PREFIXES: dict[str, tuple[str, ...]] = {
 _LIST_MARKERS = ("- ", "* ")
 
 
-VERIFY_PROMPT_TEMPLATE = (
+_VERIFY_PROMPT_HEAD = (
     "You are the verification agent. Your job is to review findings from "
     "other agents and determine which are real, significant issues versus "
     "false positives or low-value noise.\n\n"
     "## Findings to Verify\n\n"
-    "```\n"
-    "{findings_block}\n"
-    "```\n\n"
-    "## Instructions\n\n"
+)
+_VERIFY_PROMPT_TAIL = (
+    "\n\n## Instructions\n\n"
     "For each finding:\n"
     "1. Read the cited file and line to confirm the issue exists.\n"
     "2. Check whether the issue is exploitable or impactful in practice.\n"
@@ -115,9 +115,15 @@ def format_findings_block(findings: list[Finding]) -> str:
 
 
 def build_verify_prompt(findings: list[Finding]) -> str:
-    """Build the complete verification agent prompt."""
+    """Build the complete verification agent prompt.
+
+    The findings block is wrapped via :func:`orchestrate._fence.fence`, which
+    picks a fence longer than any backtick run inside the payload. This
+    prevents a finding whose evidence/fix field contains ``` from breaking
+    out of the fenced data block and being interpreted as prompt text.
+    """
     block = format_findings_block(findings)
-    return VERIFY_PROMPT_TEMPLATE.format(findings_block=block)
+    return _VERIFY_PROMPT_HEAD + _fence(block) + _VERIFY_PROMPT_TAIL
 
 
 def parse_findings_from_text(
@@ -239,12 +245,26 @@ def _parse_blocks(text: str) -> list[Finding]:
         stripped = line.strip()
 
         # Primary block delimiter: ### Finding headers from format_findings_block.
+        # Guard against a runner embedding "### Finding 3 (see above)" inside
+        # an Evidence or Fix body — that would otherwise flush a partial
+        # in-progress block and silently drop it via _dict_to_finding. Only
+        # honor the header as a boundary when either no block is in progress
+        # (active_key is None) OR the current block already has every required
+        # field (so flushing is safe).
         if stripped.startswith("### Finding"):
-            if current:
-                _flush()
-            current = {}
-            active_key = None
-            in_header_block = True
+            block_is_complete = all(k in current for k in _REQUIRED_FIELDS)
+            if not active_key or block_is_complete:
+                if current:
+                    _flush()
+                current = {}
+                active_key = None
+                in_header_block = True
+                continue
+            # Otherwise we're mid-body for a still-incomplete block — treat
+            # the line as continuation of the active field so it doesn't
+            # vanish into a dropped partial.
+            if active_key:
+                current[active_key] = current[active_key] + " " + stripped
             continue
 
         matched = _match_key(stripped)
@@ -280,8 +300,10 @@ def _parse_blocks(text: str) -> list[Finding]:
         elif active_key and stripped and not stripped.startswith("### Finding"):
             # Skip pure Markdown fence markers — a runner embedding a code
             # block inside an Evidence value would otherwise pollute the
-            # field with literal ```` ``` ```` text.
-            if stripped == "```" or stripped.startswith("```"):
+            # field with literal ```` ``` ```` or ``~~~`` text. Both CommonMark
+            # fence styles are handled so tilde-fenced evidence snippets don't
+            # bleed into parsed field values.
+            if stripped.startswith("```") or stripped.startswith("~~~"):
                 continue
             current[active_key] = current.get(active_key, "") + " " + stripped
 
