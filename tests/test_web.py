@@ -20,6 +20,7 @@ import pytest
 from advisor.__main__ import _NUDGE_SKIP_COMMANDS, build_parser, cmd_ui
 from advisor.history import HistoryEntry, append_entries
 from advisor.web import build_app_state, run_server
+from advisor.web.assets import APP_JS
 from advisor.web.server import (
     DEFAULT_HOST,
     DEFAULT_PORT,
@@ -164,6 +165,34 @@ class TestHistoryPayload:
         payload = _history_payload(state, {})
         assert payload["count"] == 1
         assert payload["entries"][0]["file_path"] == "a.py"
+
+    def test_negative_limit_falls_back_to_default(self, tmp_path):
+        append_entries(
+            tmp_path,
+            [
+                HistoryEntry(
+                    timestamp="2026-04-21T12:00:00+00:00",
+                    file_path="a.py",
+                    severity="HIGH",
+                    description="one",
+                    status="CONFIRMED",
+                    run_id="r1",
+                ),
+                HistoryEntry(
+                    timestamp="2026-04-21T12:00:01+00:00",
+                    file_path="b.py",
+                    severity="HIGH",
+                    description="two",
+                    status="CONFIRMED",
+                    run_id="r2",
+                ),
+            ],
+        )
+        state = build_app_state(tmp_path)
+        payload = _history_payload(state, {"limit": ["-5"]})
+        # Invalid negatives fall back to the default window so they don't
+        # silently look like "no history".
+        assert payload["count"] == 2
 
 
 class TestStatusPayload:
@@ -368,6 +397,42 @@ class TestLiveEndpoints:
 
 
 # ---------------------------------------------------------------------------
+# Static UI behavior
+# ---------------------------------------------------------------------------
+
+
+class TestStaticUiState:
+    def test_findings_filter_empty_state_uses_filtered_count(self):
+        assert "let findingsErrorMessage = '';" in APP_JS
+        assert "const hasVisibleFindings = filtered.length !== 0;" in APP_JS
+        assert "$('#findings-empty').textContent = findingsErrorMessage ||" in APP_JS
+        assert "No findings match the current filters." in APP_JS
+        assert "$('#findings-table').hidden = !hasVisibleFindings;" in APP_JS
+
+    def test_plan_error_clears_stale_rows(self):
+        assert "function showPlanError(message)" in APP_JS
+        assert "$('#plan-table tbody').innerHTML = '';" in APP_JS
+        assert "$('#plan-table').hidden = true;" in APP_JS
+        assert "$('#plan-count').textContent = '';" in APP_JS
+        assert "Error loading plan: network error" in APP_JS
+
+    def test_cost_empty_resets_stale_error_message(self):
+        assert "function showCostError(message)" in APP_JS
+        assert "No plan yet — cost estimate needs ranked files." in APP_JS
+        assert "Error loading cost: network error" in APP_JS
+
+    def test_findings_fetch_errors_show_empty_state(self):
+        assert "function showFindingsError(message)" in APP_JS
+        assert "findingsErrorMessage = message;" in APP_JS
+        assert "findingsErrorMessage = '';" in APP_JS
+        assert "Error loading findings: network error" in APP_JS
+
+    def test_plan_and_cost_json_parse_errors_are_handled(self):
+        assert "data = await r.json();" in APP_JS
+        assert "let data;" in APP_JS
+
+
+# ---------------------------------------------------------------------------
 # CLI wiring
 # ---------------------------------------------------------------------------
 
@@ -379,6 +444,17 @@ class TestUiCommand:
         assert args.command == "ui"
         assert args.port == 9000
         assert args.host == "127.0.0.1"
+
+    def test_parser_accepts_port_zero(self):
+        parser = build_parser()
+        args = parser.parse_args(["ui", ".", "--port", "0"])
+        assert args.port == 0
+
+    def test_json_rejects_port_zero(self, tmp_path, capsys):
+        parser = build_parser()
+        args = parser.parse_args(["ui", str(tmp_path), "--json", "--port", "0"])
+        assert cmd_ui(args) == 2
+        assert "--json cannot be combined with --port 0" in capsys.readouterr().err
 
     def test_ui_skips_nudge(self):
         assert "ui" in _NUDGE_SKIP_COMMANDS

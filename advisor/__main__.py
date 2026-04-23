@@ -347,7 +347,7 @@ def _pos_int_arg(value: str) -> int:
 
 
 def _valid_port(raw: str) -> int:
-    """argparse ``type=`` validator for TCP port numbers (1..65535).
+    """argparse ``type=`` validator for TCP port numbers (0..65535).
 
     Raises ``argparse.ArgumentTypeError`` on out-of-range or non-integer
     input so the CLI shows a clean usage error instead of a cryptic OS
@@ -357,8 +357,8 @@ def _valid_port(raw: str) -> int:
         n = int(raw)
     except ValueError as exc:
         raise argparse.ArgumentTypeError(f"invalid port {raw!r}: {exc}") from exc
-    if not 1 <= n <= 65535:
-        raise argparse.ArgumentTypeError(f"port {n} out of range — must be between 1 and 65535")
+    if not 0 <= n <= 65535:
+        raise argparse.ArgumentTypeError(f"port {n} out of range — must be between 0 and 65535")
     return n
 
 
@@ -1209,6 +1209,15 @@ def cmd_ui(args: argparse.Namespace) -> int:
         return 2
 
     if getattr(args, "json", False):
+        if args.port == 0:
+            print(
+                _style.error_box(
+                    "--json cannot be combined with --port 0 because no server is bound",
+                    stream=sys.stderr,
+                ),
+                file=sys.stderr,
+            )
+            return 2
         url = f"http://{args.host}:{args.port}"
         print(json.dumps({"schema_version": JSON_SCHEMA_VERSION, "url": url}))
         return 0

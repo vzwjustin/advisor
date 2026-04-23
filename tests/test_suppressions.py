@@ -48,6 +48,12 @@ class TestLoader:
         with pytest.raises(ValueError, match="invalid JSON"):
             load_suppressions(p)
 
+    def test_non_utf8_file_raises_value_error(self, tmp_path: Path) -> None:
+        p = tmp_path / "bad-encoding.jsonl"
+        p.write_bytes(b"\x80\x81\x82")
+        with pytest.raises(ValueError, match="could not read"):
+            load_suppressions(p)
+
     def test_above_medium_requires_until(self, tmp_path: Path) -> None:
         p = tmp_path / "s.jsonl"
         _write_jsonl(
