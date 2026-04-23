@@ -247,10 +247,15 @@ def _status_payload(state: AppState) -> dict[str, Any]:
     except OSError:
         return empty
     mtime_dt = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
-    age_seconds = (datetime.now(timezone.utc) - mtime_dt).total_seconds()
+    # Clamp to 0 because on Windows the NTFS mtime resolution (100 ns) is
+    # finer than ``time.time()`` rounding, which can leave ``st_mtime``
+    # microseconds in the "future" of ``datetime.now()`` for a file we
+    # just wrote — yielding a tiny negative age and mis-reporting the
+    # LIVE pill as inactive. A just-touched file is always active.
+    age_seconds = max(0.0, (datetime.now(timezone.utc) - mtime_dt).total_seconds())
     return {
         "last_mtime": mtime_dt.isoformat(),
-        "is_active": 0 <= age_seconds < _ACTIVE_WINDOW_SECONDS,
+        "is_active": age_seconds < _ACTIVE_WINDOW_SECONDS,
     }
 
 
