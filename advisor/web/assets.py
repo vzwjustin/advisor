@@ -37,6 +37,11 @@ INDEX_HTML = """<!doctype html>
         <option>MEDIUM</option>
         <option>LOW</option>
       </select>
+      <span id="live-indicator" class="live idle" title="click to toggle live updates" role="button" tabindex="0">
+        <span class="live-dot"></span>
+        <span class="live-label">IDLE</span>
+      </span>
+      <span id="live-updated" class="live-updated"></span>
       <span id="findings-count" class="count"></span>
     </div>
     <table id="findings-table">
@@ -201,6 +206,69 @@ td code { color: var(--accent); }
 
 .empty { color: var(--muted); font-style: italic; padding: 1rem 0; }
 
+/* --- live indicator --- */
+.live {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  color: var(--muted);
+  background: var(--panel);
+  transition: color 0.15s, border-color 0.15s;
+}
+.live:hover { border-color: var(--accent); }
+.live:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  box-shadow: 0 0 0 0 transparent;
+}
+.live.active { color: var(--low); border-color: var(--low); }
+.live.active .live-dot {
+  background: var(--low);
+  animation: live-pulse 1.4s ease-out infinite;
+}
+.live.paused { color: var(--med); border-color: var(--med); }
+.live.paused .live-dot { background: var(--med); }
+.live.error { color: var(--crit); border-color: var(--crit); }
+.live.error .live-dot { background: var(--crit); }
+
+@keyframes live-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(63, 185, 80, 0.55); }
+  70%  { box-shadow: 0 0 0 7px rgba(63, 185, 80, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(63, 185, 80, 0); }
+}
+
+.live-updated {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Newly-arrived rows briefly flash, then settle. The animation runs once
+   via JS adding the `.row-new` class; JS removes it after ~2s so a row
+   animates again only when it's genuinely new on a later poll. */
+@keyframes row-flash {
+  0%   { background: rgba(88, 166, 255, 0.22); }
+  100% { background: transparent; }
+}
+tr.row-new td { animation: row-flash 2s ease-out; }
+
+/* Respect users who asked the OS for reduced motion — no pulses or flashes. */
+@media (prefers-reduced-motion: reduce) {
+  .live.active .live-dot { animation: none; }
+  tr.row-new td { animation: none; }
+}
+
 form {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
@@ -262,11 +330,56 @@ APP_JS = r"""(() => {
       $$('.panel').forEach((p) => p.classList.remove('active'));
       btn.classList.add('active');
       $('#' + btn.dataset.tab).classList.add('active');
+      // Poll is only useful on the findings tab; kick it immediately when
+      // the user switches to that tab so they don't wait a full interval.
+      if (btn.dataset.tab === 'findings') schedulePoll(0);
     });
   });
 
   // --- findings ---
   let findingsRaw = [];
+  // Keys of entries we've already seen in a previous render. Entries whose
+  // key is NOT in here get the `.row-new` highlight on the next render.
+  // See `findingKey` below for the identity contract.
+  let seenKeys = new Set();
+
+  // --------------------------------------------------------------
+  // USER CONTRIBUTION POINT — identity of a finding for "is this new?"
+  //
+  // Returns a stable string key for one history entry. The poll loop
+  // diffs incoming entries against `seenKeys`; anything whose key isn't
+  // in the set is treated as new and gets the yellow-flash animation.
+  //
+  // Design trade-offs (pick one):
+  //   (a) `${entry.timestamp}|${entry.file_path}|${entry.description}`
+  //       — safest: two entries collide only if they are effectively the
+  //         same finding. Flash is stable across filter changes.
+  //   (b) `${entry.run_id}|${entry.file_path}|${entry.severity}`
+  //       — groups by run, ignores description edits. Cleaner if a
+  //         runner rewrites descriptions mid-run.
+  //   (c) `${entry.timestamp}|${entry.file_path}`
+  //       — loosest: collides when one run flags the same file twice in
+  //         the same second. Cheapest to compute, lossiest correctness.
+  //
+  // Return "" to disable highlighting for this entry.
+  // --------------------------------------------------------------
+  function findingKey(entry) {
+    // Tight identity: two entries are "the same finding" only when
+    // timestamp, file, AND description all match. Rationale:
+    //   - timestamp alone collides when two findings land in the same
+    //     second (common during a noisy run).
+    //   - file_path alone collides across unrelated findings in one file.
+    //   - adding description makes description-rewrites re-flash, which
+    //     is the correct UX: if the user-visible text changed, the row
+    //     really is "new" to the reader.
+    // `\u241f` (SYMBOL FOR UNIT SEPARATOR) is a zero-risk delimiter —
+    // never appears in timestamps, paths, or natural-language descriptions.
+    const ts = entry.timestamp || '';
+    const fp = entry.file_path || '';
+    const desc = entry.description || '';
+    return ts + '\u241f' + fp + '\u241f' + desc;
+  }
+
   function renderFindings() {
     const q = $('#findings-search').value.toLowerCase();
     const sev = $('#findings-severity').value;
@@ -280,8 +393,17 @@ APP_JS = r"""(() => {
     });
     const tbody = $('#findings-table tbody');
     tbody.innerHTML = '';
+    // Snapshot the "seen before this render" set so every entry in THIS
+    // batch that's missing from the snapshot flashes. Then we add all
+    // current keys so they don't re-flash on the next render.
+    const previouslySeen = seenKeys;
+    const nextSeen = new Set(previouslySeen);
     filtered.forEach((e) => {
+      const key = findingKey(e);
+      const isNew = key && !previouslySeen.has(key);
+      if (key) nextSeen.add(key);
       const tr = document.createElement('tr');
+      if (isNew) tr.classList.add('row-new');
       tr.innerHTML = `
         <td>${escapeHtml(e.timestamp || '')}</td>
         <td><code>${escapeHtml(e.file_path || '')}</code></td>
@@ -290,13 +412,104 @@ APP_JS = r"""(() => {
         <td>${escapeHtml(e.description || '')}</td>
       `;
       tbody.appendChild(tr);
+      // Drop the class after the animation completes so the row can
+      // flash again if it truly re-appears on a later poll.
+      if (isNew) {
+        setTimeout(() => tr.classList.remove('row-new'), 2100);
+      }
     });
+    seenKeys = nextSeen;
     $('#findings-count').textContent = `${filtered.length} of ${findingsRaw.length}`;
     $('#findings-empty').hidden = findingsRaw.length !== 0;
     $('#findings-table').hidden = findingsRaw.length === 0;
   }
   $('#findings-search').addEventListener('input', renderFindings);
   $('#findings-severity').addEventListener('change', renderFindings);
+
+  // --- live poll loop ---
+  // Every POLL_INTERVAL_MS we hit /api/status (cheap). Only when the
+  // server reports a changed mtime do we fetch /api/history (expensive).
+  const POLL_INTERVAL_MS = 3000;
+  let lastMtime = null;
+  let pollTimer = null;
+  let liveEnabled = true;
+  let lastStatus = null;      // last successful /api/status payload
+  let lastStatusTs = null;    // wall-clock time of that fetch (ms)
+
+  function setLiveState(state, labelOverride) {
+    const pill = $('#live-indicator');
+    pill.classList.remove('idle', 'active', 'paused', 'error');
+    pill.classList.add(state);
+    $('.live-label', pill).textContent = labelOverride || state.toUpperCase();
+  }
+
+  function schedulePoll(delayMs) {
+    if (pollTimer) clearTimeout(pollTimer);
+    pollTimer = setTimeout(pollTick, Math.max(0, delayMs));
+  }
+
+  async function pollTick() {
+    pollTimer = null;
+    if (!liveEnabled) { setLiveState('paused', 'PAUSED'); return; }
+    if (document.hidden) { schedulePoll(POLL_INTERVAL_MS); return; }
+    const activeTab = document.querySelector('.tab.active')?.dataset.tab;
+    if (activeTab !== 'findings') { schedulePoll(POLL_INTERVAL_MS); return; }
+
+    try {
+      const r = await fetch('/api/status', { cache: 'no-store' });
+      if (!r.ok) throw new Error('status ' + r.status);
+      const data = await r.json();
+      lastStatus = data;
+      lastStatusTs = Date.now();
+      setLiveState(data.is_active ? 'active' : 'idle',
+                   data.is_active ? 'LIVE' : 'IDLE');
+      if (data.last_mtime !== lastMtime) {
+        lastMtime = data.last_mtime;
+        await refetchFindings();
+      }
+    } catch (_) {
+      setLiveState('error', 'ERROR');
+    }
+    schedulePoll(POLL_INTERVAL_MS);
+  }
+
+  async function refetchFindings() {
+    try {
+      const r = await fetch('/api/history', { cache: 'no-store' });
+      if (!r.ok) return;
+      const data = await r.json();
+      findingsRaw = data.entries || [];
+      renderFindings();
+    } catch (_) { /* transient; next tick will retry via mtime change */ }
+  }
+
+  // "Updated Ns ago" ticker — refreshes once per second, independent of
+  // the poll interval, so the label feels live even between fetches.
+  function renderUpdatedLabel() {
+    const el = $('#live-updated');
+    if (!lastStatusTs) { el.textContent = ''; return; }
+    const secs = Math.floor((Date.now() - lastStatusTs) / 1000);
+    el.textContent = 'updated ' + (secs <= 1 ? 'just now' : secs + 's ago');
+  }
+  setInterval(renderUpdatedLabel, 1000);
+
+  // Click / keyboard-toggle the LIVE pill to pause and resume polling.
+  const pill = $('#live-indicator');
+  function togglePolling() {
+    liveEnabled = !liveEnabled;
+    if (liveEnabled) schedulePoll(0); else setLiveState('paused', 'PAUSED');
+  }
+  pill.addEventListener('click', togglePolling);
+  pill.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); togglePolling(); }
+  });
+
+  // Browser pauses setInterval in background tabs anyway, but reacting to
+  // visibilitychange lets us resume *immediately* on tab focus rather than
+  // waiting for the next throttled tick.
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && liveEnabled) schedulePoll(0);
+  });
 
   // --- plan ---
   async function loadPlan() {
@@ -435,14 +648,12 @@ APP_JS = r"""(() => {
       }
     } catch (_) {}
     buildCli();
-    try {
-      const r = await fetch('/api/history');
-      if (r.ok) {
-        const data = await r.json();
-        findingsRaw = data.entries || [];
-        renderFindings();
-      }
-    } catch (_) {}
+    // Kick the poll loop — it fetches /api/status, then /api/history
+    // (only if mtime has changed from the sentinel `null`, which it
+    // always has on first load). This replaces the old single-shot
+    // /api/history fetch so there's exactly one code path that
+    // populates the table.
+    schedulePoll(0);
   })();
 })();
 """
