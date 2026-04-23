@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ..focus import FocusBatch, FocusTask
+from ._fence import fence
 from ._schema import FINDING_SCHEMA
 from .config import TeamConfig
 
@@ -415,7 +416,13 @@ def build_runner_agents(
     agents: list[dict[str, object]] = []
     for batch in batches:
         file_count = len(batch.tasks)
-        first = batch.tasks[0].file_path if batch.tasks else "empty"
+        if not batch.tasks:
+            # Empty batches are a programmer error in the upstream
+            # batcher — masking with an ``"empty"`` placeholder produced
+            # downstream prompts that referenced a fake file. Fail loud
+            # here so the bug surfaces at construction time.
+            raise ValueError(f"runner pool batch {batch.batch_id} has no tasks")
+        first = batch.tasks[0].file_path
         desc = (
             f"Analyze {first}"
             if file_count == 1
@@ -527,12 +534,15 @@ def build_fix_assignment_message(
     else:
         budget_note = f"fix {fix_number} of {effective_cap}"
 
+    # Fence untrusted fields — caller-supplied ``## `` or triple-backticks
+    # would otherwise corrupt the assignment delimiters / escape into
+    # markdown sections the runner treats as advisor instructions.
     body = (
         f"## Fix assignment ({budget_note})\n\n"
         f"File: `{file_path}`\n"
-        f"Problem: {problem.strip()}\n"
-        f"Change: {change.strip()}\n"
-        f"Acceptance: {acceptance.strip()}\n\n"
+        f"Problem:\n{fence(problem.strip())}\n"
+        f"Change:\n{fence(change.strip())}\n"
+        f"Acceptance:\n{fence(acceptance.strip())}\n\n"
         "Make the edit, send the draft diff back for review, and await "
         "CONFIRM / REVISE. Do not drift into unrelated refactors."
     )

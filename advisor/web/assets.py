@@ -392,10 +392,10 @@ APP_JS = r"""(() => {
     $('#cost-summary').innerHTML = `
       <div class="cost-card"><h4>Files</h4><div class="val">${escapeHtml(data.task_count)}</div></div>
       <div class="cost-card"><h4>Runners</h4><div class="val">${escapeHtml(e.runner_count || '—')}</div></div>
-      <div class="cost-card"><h4>Min tokens</h4><div class="val">${formatNum(minTok)}</div></div>
-      <div class="cost-card"><h4>Max tokens</h4><div class="val">${formatNum(maxTok)}</div></div>
-      <div class="cost-card"><h4>Min cost</h4><div class="val">$${formatMoney(e.cost_usd_min)}</div></div>
-      <div class="cost-card"><h4>Max cost</h4><div class="val">$${formatMoney(e.cost_usd_max)}</div></div>
+      <div class="cost-card"><h4>Min tokens</h4><div class="val">${escapeHtml(formatNum(minTok))}</div></div>
+      <div class="cost-card"><h4>Max tokens</h4><div class="val">${escapeHtml(formatNum(maxTok))}</div></div>
+      <div class="cost-card"><h4>Min cost</h4><div class="val">$${escapeHtml(formatMoney(e.cost_usd_min))}</div></div>
+      <div class="cost-card"><h4>Max cost</h4><div class="val">$${escapeHtml(formatMoney(e.cost_usd_max))}</div></div>
     `;
   }
   $('#cost-refresh').addEventListener('click', loadCost);

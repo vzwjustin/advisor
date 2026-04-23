@@ -212,7 +212,14 @@ def audit_transcript(transcript: str, cp: Checkpoint) -> AuditReport:
 
     rotations = sum(1 for _ in _HANDOFF_RE.finditer(transcript))
 
-    protocol_violations = [m.group(0) for m in _PROTOCOL_VIOLATION_RE.finditer(transcript)]
+    # Cap protocol_violations at 1000 entries — a pathological transcript
+    # with thousands of matches would otherwise inflate AuditReport memory
+    # without adding signal. Mirrors the cap on _history_payload.
+    protocol_violations: list[str] = []
+    for m in _PROTOCOL_VIOLATION_RE.finditer(transcript):
+        if len(protocol_violations) >= 1000:
+            break
+        protocol_violations.append(m.group(0))
 
     batch_files = _collect_batch_files(cp)
     in_batch: list[Finding]
@@ -239,7 +246,10 @@ def audit_transcript(transcript: str, cp: Checkpoint) -> AuditReport:
         findings_in_batch=in_batch,
         findings_out_of_batch=out_batch,
         batch_file_count=len(batch_files),
-        fix_numbers=fix_numbers,
+        # Defensive copy — caller could otherwise mutate the local
+        # ``fix_numbers`` dict after construction and silently change the
+        # report's view. AuditReport is intended to be a snapshot.
+        fix_numbers=dict(fix_numbers),
     )
 
 

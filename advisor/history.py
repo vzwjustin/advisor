@@ -148,58 +148,14 @@ def append_entries(target: str | Path, entries: list[HistoryEntry]) -> Path:
 
 
 def load_recent(target: str | Path, limit: int = 20) -> list[HistoryEntry]:
-    """Return the ``limit`` most recent entries from the history file.
+    """Return up to ``limit`` entries from the history file, newest-first.
 
     Malformed lines are skipped with a warning. A missing file returns ``[]``.
-
-    Streams the file through a bounded :class:`collections.deque` so only
-    the tail fits in memory — important once ``.advisor/history.jsonl``
-    accumulates months of findings. We over-sample by ``limit * 2`` lines
-    so that a pathological run of malformed lines near the tail still
-    yields ``limit`` valid entries when possible.
+    Thin wrapper over :func:`load_recent_findings` that resolves the
+    canonical ``<target>/.advisor/history.jsonl`` path so callers don't
+    need to thread the filesystem layout.
     """
-    path = history_path(target)
-    if not path.exists():
-        return []
-    if limit <= 0:
-        return []
-    buffer_size = max(limit * 2, limit + 8)
-    try:
-        with path.open("r", encoding="utf-8") as f:
-            lines: deque[tuple[int, str]] = deque(enumerate(f, 1), maxlen=buffer_size)
-    except (OSError, UnicodeDecodeError) as exc:
-        warnings.warn(f"could not read {path}: {exc}", UserWarning, stacklevel=2)
-        return []
-
-    entries: list[HistoryEntry] = []
-    for line_num, line in lines:
-        stripped = line.strip()
-        if not stripped:
-            continue
-        try:
-            obj = json.loads(stripped)
-            for _f in ("timestamp", "file_path", "severity", "description", "status", "run_id"):
-                if not isinstance(obj.get(_f), str):
-                    raise TypeError(f"{_f} must be str, got {type(obj.get(_f)).__name__}")
-            entries.append(
-                HistoryEntry(
-                    timestamp=obj["timestamp"],
-                    file_path=obj["file_path"],
-                    severity=obj["severity"],
-                    description=obj["description"],
-                    status=obj["status"],
-                    run_id=obj["run_id"],
-                    schema_version=str(obj.get("schema_version", HISTORY_SCHEMA_VERSION)),
-                )
-            )
-        except (json.JSONDecodeError, KeyError, TypeError) as exc:
-            warnings.warn(
-                f"skipping malformed history entry at {path}:{line_num}: {exc}",
-                UserWarning,
-                stacklevel=2,
-            )
-
-    return entries[-limit:]
+    return load_recent_findings(history_path(target), limit=limit)
 
 
 def format_history_block(entries: list[HistoryEntry]) -> str:
@@ -214,7 +170,8 @@ def format_history_block(entries: list[HistoryEntry]) -> str:
         return ""
     lines = ["## Recent findings from prior runs", ""]
     for e in entries:
-        lines.append(f"- `{e.file_path}` [{e.severity}] ({e.status}):")
+        lines.append(f"- [{e.severity}] ({e.status}):")
+        lines.append(fence(e.file_path))
         lines.append(fence(e.description))
     return "\n".join(lines)
 

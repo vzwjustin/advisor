@@ -65,7 +65,10 @@ class TestAppendAndLoad:
         )
         entries = load_recent(tmp_path, limit=2)
         assert len(entries) == 2
-        assert entries[-1].file_path == "f4.py"
+        # Newest-first per the documented contract — f4 was appended
+        # last, so it leads, followed by f3.
+        assert entries[0].file_path == "f4.py"
+        assert entries[1].file_path == "f3.py"
 
 
 class TestFormatHistoryBlock:

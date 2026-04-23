@@ -134,6 +134,17 @@ def estimate_cost(
       budget; each fix is a full read + write round trip.
     """
     pricing = pricing or DEFAULT_PRICING_CENTS_PER_MTOK
+    # Validate required keys before any KeyError-prone lookups below.
+    # Custom ``pricing=`` dicts must cover the families we fall back to —
+    # without this, a partial dict (e.g. {"opus": (...)} with no "sonnet")
+    # raises KeyError mid-calculation rather than the clearer ValueError
+    # the caller is expected to handle.
+    missing = [k for k in ("sonnet", "opus", "haiku") if k not in pricing]
+    if missing:
+        raise ValueError(
+            f"pricing= is missing required keys {missing!r}; "
+            "supply entries for sonnet/opus/haiku or omit pricing= to use defaults"
+        )
     runner_count = len(batches) if batches else min(5, len(tasks)) or 1
     file_count = len(tasks)
 

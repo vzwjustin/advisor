@@ -166,6 +166,7 @@ def update_budget(
     *,
     message_text: str,
     fix_completed: bool = False,
+    file_read: str | None = None,
 ) -> RunnerBudget:
     """Produce a new :class:`RunnerBudget` reflecting ``message_text``.
 
@@ -173,6 +174,14 @@ def update_budget(
     message confirms a completed fix — the fix counter is not parsed
     from the message body because the signal already flows through
     :func:`build_fix_assignment_message` on the dispatch side.
+
+    ``file_read`` lets the caller register a file-read event even when
+    the runner's reply omits the ``SCOPE:`` anchor. Without this, the
+    file-axis ROTATE guard silently under-counts: a runner that reads
+    a file but forgets to emit the anchor contributes nothing to
+    ``files_read`` and can exceed ``file_read_ceiling`` without
+    triggering rotation. Callers that observe a file-read out-of-band
+    (e.g. via Read tool call inspection) should pass it explicitly.
 
     This only accumulates state — it does NOT decide whether to emit a
     nudge. :func:`format_budget_nudge` inspects the resulting budget
@@ -182,6 +191,8 @@ def update_budget(
     new_files = budget.files_read
     if anchor and anchor.file_path and anchor.file_path not in budget.files_read:
         new_files = (*budget.files_read, anchor.file_path)
+    if file_read and file_read not in new_files:
+        new_files = (*new_files, file_read)
 
     return replace(
         budget,

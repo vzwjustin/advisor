@@ -26,7 +26,7 @@ Agent(
   name="advisor",
   description="Investigate, rank, and dispatch runners",
   model="{config.advisor_model}",
-  subagent_type="deep-reasoning",
+  subagent_type="advisor-executor",
   team_name="{config.team_name}",
   prompt=<build_advisor_prompt(config)>
 )

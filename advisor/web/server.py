@@ -106,20 +106,41 @@ def _validate_file_types(pattern: str) -> None:
     ``..`` blocks directory traversal (``../../../etc/*.conf``).
     A leading ``/`` or ``\\`` blocks absolute paths on POSIX and Windows.
     Interior ``/`` is allowed so recursive globs like ``**/*.py`` work.
+
+    Each comma-separated sub-pattern is validated independently so an
+    input like ``*.py,../etc/*`` fails on the second piece rather than
+    silently slipping through because the whole string does not start
+    with a suspicious character.
     """
-    if ".." in pattern or pattern.startswith("/") or pattern.startswith("\\"):
-        raise ValueError(f"unsafe file_types pattern: {pattern!r}")
+    for piece in pattern.split(","):
+        piece = piece.strip()
+        if not piece:
+            continue
+        if "\x00" in piece:
+            raise ValueError(f"file_types pattern contains NUL byte: {piece!r}")
+        if ".." in piece or piece.startswith("/") or piece.startswith("\\"):
+            raise ValueError(f"unsafe file_types pattern: {piece!r}")
 
 
 def _rank_target(state: AppState, file_types: str, min_priority: int) -> list[FocusTask]:
     """Discover + rank + filter files under the target, honoring ``.advisorignore``.
 
     Shared by the ``/api/plan`` and ``/api/cost`` handlers so they can't
-    drift on which files are in scope.
+    drift on which files are in scope. ``file_types`` may be a comma-
+    separated list (e.g. ``*.py,*.ts``); each piece is expanded
+    independently and the results are merged + deduped, matching the
+    CLI's ``--file-types`` behavior.
     """
     min_priority = max(1, min(5, min_priority))
     _validate_file_types(file_types)
-    paths = _safe_rglob(state.target, file_types)
+    patterns = [p.strip() for p in file_types.split(",") if p.strip()]
+    seen: set[str] = set()
+    paths: list[str] = []
+    for pat in patterns:
+        for fp in _safe_rglob(state.target, pat):
+            if fp not in seen:
+                seen.add(fp)
+                paths.append(fp)
     ignore_patterns = load_advisorignore(state.target)
     ranked = rank_files(paths, read_fn=_read_head, ignore_patterns=ignore_patterns)
     return create_focus_tasks(ranked, max_tasks=None, min_priority=min_priority)
@@ -232,6 +253,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        # CSP on JSON responses too — defense in depth in case a browser
+        # sniffs and renders the JSON as HTML despite the nosniff header.
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'none'; base-uri 'none'; form-action 'none'",
+        )
         self.end_headers()
         self.wfile.write(body)
 

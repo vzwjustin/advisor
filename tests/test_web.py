@@ -104,6 +104,22 @@ class TestPlanPayload:
         assert any("auth.py" in p for p in paths)
         assert not any("secrets.py" in p for p in paths)
 
+    def test_comma_separated_file_types(self, tmp_path):
+        """``file_types=*.py,*.ts`` should match BOTH extensions."""
+        (tmp_path / "a.py").write_text("x = 1")
+        (tmp_path / "b.ts").write_text("const x = 1;")
+        (tmp_path / "c.md").write_text("# ignore me")
+        state = build_app_state(tmp_path, min_priority=1)
+        payload = _plan_payload(state, {"file_types": ["*.py,*.ts"]})
+        names = sorted(Path(t["file_path"]).name for t in payload["tasks"])
+        assert names == ["a.py", "b.ts"]
+
+    def test_comma_split_validates_each_piece(self, tmp_path):
+        """A traversal segment in any comma-piece must be rejected."""
+        state = build_app_state(tmp_path, min_priority=1)
+        with pytest.raises(ValueError):
+            _plan_payload(state, {"file_types": ["*.py,../etc/*"]})
+
 
 class TestCostPayload:
     def test_returns_null_estimate_when_empty(self, tmp_path):

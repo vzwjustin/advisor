@@ -85,12 +85,21 @@ def _parse_file_path(raw: str) -> tuple[str, int | None]:
     ``src/auth.py:42``. SARIF wants the two fields separate.
     """
     stripped = raw.strip().strip("`").rstrip()
-    parts = stripped.rsplit(":", 2)
+    # Detect a Windows drive-letter prefix (``C:`` / ``c:``) and peel it
+    # off before splitting so paths like ``C:\src\auth.py:42`` aren't
+    # decomposed into ``["C", "\\src\\auth.py", "42"]``. Re-apply the
+    # prefix to the path component before returning.
+    drive_prefix = ""
+    body = stripped
+    if len(stripped) >= 2 and stripped[1] == ":" and stripped[0].isalpha():
+        drive_prefix = stripped[:2]
+        body = stripped[2:]
+    parts = body.rsplit(":", 2)
     # Scan from the right: accept ``path:line`` and ``path:line:col``.
     if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
-        return parts[0], int(parts[1])
+        return drive_prefix + parts[0], int(parts[1])
     if len(parts) >= 2 and parts[-1].isdigit():
-        return ":".join(parts[:-1]), int(parts[-1])
+        return drive_prefix + ":".join(parts[:-1]), int(parts[-1])
     return stripped, None
 
 

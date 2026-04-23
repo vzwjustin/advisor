@@ -58,20 +58,24 @@ __VERSION_BADGE__
 
 **Step 3 (BEFORE any Bash):** Call `TeamCreate(name="review")` — creates team
 
-**Step 4 (only AFTER steps 2+3 complete):** Build the prompt via the Python
-tool — NOT Bash. Hold the returned string in a variable; do NOT print it
-and do NOT write it to a file and Read it back (Read renders all ~170
-lines of prompt text as visible user output):
+**Step 4 (only AFTER steps 2+3 complete):** Build the prompt via Bash —
+write it to `/tmp/advisor_prompt.txt`, then Read it back and pass the
+content directly as the `prompt` parameter to Agent:
 
-```python
+```bash
+python3 -c "
 from advisor import default_team_config, build_advisor_prompt
-config = default_team_config(target_dir="TARGET", context="CONTEXT")
-prompt = build_advisor_prompt(config)  # keep in-memory; do not print
+config = default_team_config(target_dir='TARGET', context='CONTEXT')
+with open('/tmp/advisor_prompt.txt', 'w') as f:
+    f.write(build_advisor_prompt(config))
+print('done')
+"
 ```
 
-**Step 5:** Spawn Agent passing `prompt` straight through as the `prompt`
-parameter. **NEVER use the Read tool to read back a temp file — it renders
-the full prompt (~170 lines) to the user as visible conversation output.**
+Then `Read("/tmp/advisor_prompt.txt")` and use its content as the Agent
+`prompt` parameter verbatim.
+
+**Step 5:** Spawn Agent with the prompt content from Step 4.
 
 **Step 6 (immediately after Step 5):** Send a begin trigger — agents in
 mailbox mode go idle until a message arrives. Without this, the advisor's
@@ -83,9 +87,8 @@ SendMessage({ to: "advisor", message: "Begin." })
 
 **Keep ALL output minimal:**
 - NO file listings, NO ls, NO cat
-- NO verbose Python in output
 - NO long explanations
-- ONLY: TeamDelete → TeamCreate → (quiet bash) → Agent spawns → SendMessage begin
+- ONLY: TeamDelete → TeamCreate → Bash build → Read prompt → Agent spawn → SendMessage begin
 
 A one-command entry point for a multi-agent review (and optional fix loop)
 driven entirely by Opus with Sonnet runners as its hands. Runs through
@@ -93,8 +96,6 @@ Claude Code's native team tools — no external API calls.
 
 Target directory: if the user did not specify one, default to the current
 working directory.
-
-**IMPORTANT: Build prompts using the Python tool (NOT Bash python -c).**
 
 **Correct API signature:**
 ```python
@@ -111,21 +112,30 @@ default_team_config(
 ```
 
 **Concrete example (use this pattern verbatim):**
-```python
+```bash
+python3 -c "
 from advisor import default_team_config, build_advisor_prompt
 config = default_team_config(
-    target_dir="/Users/.../project",
-    context="Audit codebase for UI enhancements"  # user's request as context
+    target_dir='/Users/.../project',
+    context='Audit codebase for UI enhancements'
 )
-prompt = build_advisor_prompt(config)
-# Now pass `prompt` to Agent() — DO NOT print
+with open('/tmp/advisor_prompt.txt', 'w') as f:
+    f.write(build_advisor_prompt(config))
+print('done')
+"
 ```
 
-**NEVER do these (they dump verbose text to user output):**
+**NEVER do these:**
 - ❌ `advisor prompt advisor ./src` (CLI dumps prompt text)
-- ❌ `Bash(python3 -c "...")` (shows code in output)
 - ❌ Use kwarg `user_request` (it doesn't exist — use `context`)
-- ❌ `Read(temp_file)` to read the prompt back — renders ~170 lines to user
+- ❌ Pass Python code as the Agent prompt — the prompt must be the built string, not the code that builds it
+
+**Stale-mailbox recovery (if you must re-spawn after a bad spawn):**
+If you sent a `shutdown_request` to a badly-spawned advisor and need to
+re-spawn, **always TeamDelete → TeamCreate first** before re-spawning.
+A shutdown_request queued in the mailbox survives the old agent's death
+and will be delivered to any new agent with the same name on the same
+team — causing it to immediately shut down. TeamDelete clears all mailboxes.
 
 User sees only: `**Advisor mode**` → `[TeamCreate]` → `[Agent...]`
 

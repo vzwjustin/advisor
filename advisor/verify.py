@@ -211,13 +211,17 @@ def _normalize_path(path: str) -> str:
         p = p[2:]
     # Strip ``:line`` and ``:line:col`` suffixes without eating drive
     # letters (``C:\Users\...``) or scheme-like prefixes — we only
-    # strip when the tail is all digits.
-    while ":" in p:
-        head, _, tail = p.rpartition(":")
+    # strip when the tail is all digits. Cap the loop at 2 iterations
+    # so a pathological input like ``file:42:43:44:45`` does not strip
+    # past the line/col pair into the actual path segments.
+    for _ in range(2):
+        if ":" not in p:
+            break
+        head, _sep, tail = p.rpartition(":")
         if tail.isdigit() and head:
             p = head
-            continue
-        break
+        else:
+            break
     return p
 
 

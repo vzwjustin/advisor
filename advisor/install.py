@@ -506,6 +506,12 @@ def uninstall_skill(path: Path | None = None) -> InstallResult:
     target = path or default_skill_path()
     if not target.exists():
         return InstallResult(path=target, action=InstallAction.ABSENT.value)
+    # Reject symlinks for symmetry with ``_atomic_write_text``: the
+    # install path refuses to write through a symlink, so the uninstall
+    # path refuses to delete one. Better to require the user to clean up
+    # an unexpected symlink themselves than to silently follow it.
+    if target.is_symlink():
+        raise OSError(f"refusing to unlink symlink at {target}; remove it manually if intended")
     target.unlink()
     parent = target.parent
     try:

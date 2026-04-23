@@ -11,6 +11,7 @@ import json
 import os
 import sys
 import time
+import warnings
 from collections.abc import Callable, Sequence
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
@@ -330,6 +331,21 @@ def _safe_rglob(target: Path, pattern: str) -> tuple[list[str] | None, str | Non
     return results, None
 
 
+def _pos_int_arg(value: str) -> int:
+    """argparse ``type=`` validator — accept positive (>=1) integers only.
+
+    Centralized so flags like ``--runner-id`` reject ``0`` instead of
+    silently re-mapping it to ``1`` via a falsy guard at the call site.
+    """
+    try:
+        n = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"expected positive integer, got {value!r}") from exc
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"must be >= 1, got {n}")
+    return n
+
+
 def _valid_port(raw: str) -> int:
     """argparse ``type=`` validator for TCP port numbers (1..65535).
 
@@ -514,6 +530,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
                 prompt=str(t.get("prompt", "")),
             )
             for t in cp.tasks
+            if isinstance(t, dict) and "file_path" in t and "priority" in t
         ]
         batches_from_cp = _batches_from_checkpoint(cp) if cp.batches else None
         # Rebuild the TeamConfig from the checkpoint so downstream surfaces
@@ -680,9 +697,18 @@ def _batches_from_checkpoint(cp: Checkpoint) -> list[FocusBatch]:
             for t in raw_tasks
             if isinstance(t, dict) and "file_path" in t and "priority" in t
         )
+        try:
+            batch_id_val = int(str(b.get("batch_id", 0)))
+        except ValueError:
+            warnings.warn(
+                f"skipping checkpoint batch with non-numeric batch_id {b.get('batch_id')!r}",
+                UserWarning,
+                stacklevel=2,
+            )
+            continue
         out.append(
             FocusBatch(
-                batch_id=int(str(b.get("batch_id", 0))),
+                batch_id=batch_id_val,
                 tasks=batch_tasks,
                 complexity=str(b.get("complexity", "")),
             )
@@ -791,9 +817,13 @@ def _emit_plan(
         return 0
 
     if not tasks:
+        # The git-scope hint applies to any non-resumed run that used a
+        # git scope flag — earlier this gated on ``context == ""`` which
+        # masked the hint on the ``"resumed"`` path even when the resumed
+        # plan was itself git-scoped. Use a positive predicate instead.
         hint = (
             "--since/--staged/--branch selection"
-            if context == "" and _is_git_scoped(args)
+            if context != "resumed" and _is_git_scoped(args)
             else None
         )
         if hint:
@@ -874,7 +904,7 @@ def cmd_prompt(args: argparse.Namespace) -> int:
                 history_block = ""
         text = build_advisor_prompt(config, history_block=history_block)
     elif args.step == "runner":
-        runner_id = getattr(args, "runner_id", 1) or 1
+        runner_id = getattr(args, "runner_id", 1)
         if show_frame:
             print(_style.dim(f"# runner-{runner_id} prompt — paste into Claude Code"))
             print()
@@ -1329,20 +1359,24 @@ def cmd_checkpoints(args: argparse.Namespace) -> int:
     if clear:
         ids = list_checkpoints(target)
         removed = 0
+        failed = 0
         for rid in ids:
             path = checkpoint_path(target, rid)
             try:
                 path.unlink()
                 removed += 1
             except OSError:
-                pass
+                failed += 1
         if not getattr(args, "quiet", False):
-            if removed:
+            if removed or failed:
                 noun = "checkpoint" if removed == 1 else "checkpoints"
-                print(_style.success_box(f"removed {removed} {noun}"))
+                msg = f"removed {removed} {noun}"
+                if failed:
+                    msg += f", failed {failed}"
+                print(_style.success_box(msg) if not failed else _style.warning_box(msg))
             else:
                 print(_style.dim("no checkpoints to remove"))
-        return 0
+        return 0 if failed == 0 else 1
 
     ids = list_checkpoints(target)
     if getattr(args, "json", False):
@@ -1566,9 +1600,17 @@ def cmd_baseline(args: argparse.Namespace) -> int:
             print(_style.success_box(f"baseline saved: {output} ({len(entries)} finding(s))"))
         return 0
     if action == "diff":
-        baseline_path = Path(
-            getattr(args, "baseline_path", None) or (target / ".advisor" / "baseline.jsonl")
-        )
+        explicit_baseline = getattr(args, "baseline_path", None)
+        baseline_path = Path(explicit_baseline or (target / ".advisor" / "baseline.jsonl"))
+        if explicit_baseline and not baseline_path.exists():
+            print(
+                _style.error_box(
+                    f"--baseline path not found: {baseline_path}",
+                    stream=sys.stderr,
+                ),
+                file=sys.stderr,
+            )
+            return 2
         baseline = read_baseline(baseline_path)
         findings, rc = _load_findings_from_input(getattr(args, "from_file", None))
         if rc is not None:
@@ -1759,6 +1801,15 @@ def cmd_audit(args: argparse.Namespace) -> int:
     if baseline_path:
         from .baseline import filter_against_baseline, read_baseline
 
+        if not Path(baseline_path).exists():
+            print(
+                _style.error_box(
+                    f"--baseline path not found: {baseline_path}",
+                    stream=sys.stderr,
+                ),
+                file=sys.stderr,
+            )
+            return 2
         baseline = read_baseline(Path(baseline_path))
         kept, _ = filter_against_baseline(list(report.findings_in_batch), baseline)
         report = _replace_findings(report, kept)
@@ -1965,19 +2016,6 @@ def build_parser() -> argparse.ArgumentParser:
             "Write SARIF 2.1.0 output to PATH. For Code Scanning, pair with `actions/upload-sarif`."
         ),
     )
-    # CI gating — exit non-zero if any finding at/above the threshold
-    # is present. ``never`` (default) keeps exit 0 on a clean plan.
-    p_plan.add_argument(
-        "--fail-on",
-        dest="fail_on",
-        choices=_FAIL_ON_CHOICES,
-        default="never",
-        help=(
-            "Exit 4 if any finding meets/exceeds LEVEL. Thresholds are "
-            "inclusive: `--fail-on high` trips on HIGH and CRITICAL. "
-            "Default: never (back-compat)."
-        ),
-    )
     # History-informed ranking — repeat-offender boost. Disabled on
     # --no-history for deterministic CI plans.
     p_plan.add_argument(
@@ -1988,11 +2026,23 @@ def build_parser() -> argparse.ArgumentParser:
             "deterministic plans independent of previous run outcomes."
         ),
     )
+    p_plan.add_argument(
+        "--fail-on",
+        dest="fail_on",
+        choices=_FAIL_ON_CHOICES,
+        default="never",
+        help="Exit 4 if any finding meets/exceeds LEVEL. Default: never (back-compat).",
+    )
     p_plan.set_defaults(func=cmd_plan)
 
     p_prompt = sub.add_parser("prompt", help="Print a step prompt for pasting into Claude Code")
     p_prompt.add_argument("step", choices=["advisor", "runner", "verify"])
-    p_prompt.add_argument("--runner-id", type=int, default=1, help="Runner ID for the runner step")
+    p_prompt.add_argument(
+        "--runner-id",
+        type=_pos_int_arg,
+        default=1,
+        help="Runner ID for the runner step (>=1)",
+    )
     _add_common(p_prompt)
     p_prompt.add_argument(
         "--file-count",
