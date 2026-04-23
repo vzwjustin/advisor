@@ -93,11 +93,20 @@ def _first(qs: dict[str, list[str]], key: str, default: str) -> str:
     return default
 
 
-def _first_int(qs: dict[str, list[str]], key: str, default: int) -> int:
+def _first_int(qs: dict[str, list[str]], key: str, default: int, *, min_value: int = 0) -> int:
+    """Parse a query-string int with a lower bound.
+
+    Negative or malformed values fall back to ``default`` — downstream
+    handlers assume non-negative counts/limits and sanity-clamp the
+    upper bound separately.
+    """
     try:
-        return int(_first(qs, key, str(default)))
+        value = int(_first(qs, key, str(default)))
     except ValueError:
         return default
+    if value < min_value:
+        return default
+    return value
 
 
 def _validate_file_types(pattern: str) -> None:

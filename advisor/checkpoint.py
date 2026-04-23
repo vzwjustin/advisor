@@ -231,6 +231,12 @@ def list_checkpoints(target: str | Path) -> list[str]:
     ids: list[str] = []
     for p in d.iterdir():
         name = p.name
-        if name.startswith(CHECKPOINT_PREFIX) and name.endswith(CHECKPOINT_SUFFIX):
-            ids.append(name[len(CHECKPOINT_PREFIX) : -len(CHECKPOINT_SUFFIX)])
+        if not (name.startswith(CHECKPOINT_PREFIX) and name.endswith(CHECKPOINT_SUFFIX)):
+            continue
+        try:
+            if not p.is_file():
+                continue
+        except OSError:
+            continue
+        ids.append(name[len(CHECKPOINT_PREFIX) : -len(CHECKPOINT_SUFFIX)])
     return sorted(ids, reverse=True)

@@ -204,7 +204,11 @@ def load_recent_findings(history_path: Path, *, limit: int = 500) -> list[Histor
         return []
     if not history_path.exists():
         return []
-    buffer_size = max(limit * 2, limit + 8)
+    # Small overshoot so a handful of malformed lines in the tail still
+    # yield ``limit`` well-formed entries. The previous ``limit * 2``
+    # doubled memory for no good reason — this bounded margin keeps the
+    # invariant while staying O(limit).
+    buffer_size = limit + 16
     try:
         with history_path.open("r", encoding="utf-8") as f:
             lines: deque[tuple[int, str]] = deque(enumerate(f, 1), maxlen=buffer_size)
@@ -248,17 +252,19 @@ def load_recent_findings(history_path: Path, *, limit: int = 500) -> list[Histor
 
 
 def _age_days(entry: HistoryEntry, *, now: datetime | None = None) -> float:
-    """Return the age of ``entry`` in days. Unparseable timestamps → 0.
+    """Return the age of ``entry`` in days. Unparseable timestamps → +inf.
 
-    Unparseable entries are treated as brand-new (0 days) — more
-    conservative than discarding them, since an entry that's in the
-    history file at all is evidence of a past finding.
+    Unparseable entries return ``math.inf`` so they decay to ~0 in
+    ``file_repeat_scores`` rather than being treated as brand-new and
+    inflating the score with maximum recency weight. An entry we cannot
+    date is not evidence of a recent finding — it is evidence of a
+    corrupted record.
     """
     now_dt = now or datetime.now(UTC)
     try:
         ts = datetime.fromisoformat(entry.timestamp)
     except ValueError:
-        return 0.0
+        return math.inf
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=UTC)
     delta = now_dt - ts

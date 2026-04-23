@@ -99,14 +99,19 @@ def files_since(target: Path, ref: str) -> list[str]:
     the working copy — the full diff a reviewer would see.
     """
     repo = _repo_root(target)
-    lines = _run_git(repo, "diff", "--name-only", ref)
+    # ``--`` terminates the option list so any future value-from-input that
+    # looked option-like (``--name-only``, ``-p``, etc.) would be rejected
+    # by git as a path rather than parsed as a flag. The boundary check in
+    # ``resolve_git_scope`` already filters leading-dash refs; this is
+    # defense-in-depth for callers that bypass that boundary.
+    lines = _run_git(repo, "diff", "--name-only", ref, "--")
     return _resolve_files(repo, lines)
 
 
 def files_staged(target: Path) -> list[str]:
     """Files currently staged for commit (``git diff --cached``)."""
     repo = _repo_root(target)
-    lines = _run_git(repo, "diff", "--name-only", "--cached")
+    lines = _run_git(repo, "diff", "--name-only", "--cached", "--")
     return _resolve_files(repo, lines)
 
 
@@ -119,7 +124,7 @@ def files_branch(target: Path, base_ref: str) -> list[str]:
     This is what a GitHub PR UI shows.
     """
     repo = _repo_root(target)
-    lines = _run_git(repo, "diff", "--name-only", f"{base_ref}...HEAD")
+    lines = _run_git(repo, "diff", "--name-only", f"{base_ref}...HEAD", "--")
     return _resolve_files(repo, lines)
 
 
