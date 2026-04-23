@@ -330,9 +330,7 @@ def format_audit_report(report: AuditReport) -> str:
 
     lines.append("## CONTEXT_PRESSURE pings")
     if report.context_pressure_runners:
-        runner_word = (
-            "runner" if len(report.context_pressure_runners) == 1 else "runners"
-        )
+        runner_word = "runner" if len(report.context_pressure_runners) == 1 else "runners"
         lines.append(
             f"- total occurrences: {report.context_pressure_count} "
             f"(from {len(report.context_pressure_runners)} {runner_word})"

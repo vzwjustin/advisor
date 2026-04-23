@@ -1598,11 +1598,7 @@ def cmd_baseline(args: argparse.Namespace) -> int:
             return 2
         if not getattr(args, "quiet", False):
             finding_word = "finding" if len(entries) == 1 else "findings"
-            print(
-                _style.success_box(
-                    f"baseline saved: {output} ({len(entries)} {finding_word})"
-                )
-            )
+            print(_style.success_box(f"baseline saved: {output} ({len(entries)} {finding_word})"))
         return 0
     if action == "diff":
         explicit_baseline = getattr(args, "baseline_path", None)
