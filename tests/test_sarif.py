@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 
 import pytest
+
+_hypothesis = pytest.importorskip("hypothesis")
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
