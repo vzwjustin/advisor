@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+
+_hypothesis = pytest.importorskip("hypothesis")
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
