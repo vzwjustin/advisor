@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-04-25
+
+### Fixed
+- `rank.py`: PHP superglobal regex (`$_GET`/`$_POST`/`$_REQUEST`/`$_FILES`) now uses lookaround anchors (`(?<!\w)`/`(?!\w)`) so `$`-prefixed keywords match correctly (plain `\b` never fires on non-word boundary)
+- `verify.py`: continuation branches now call `.strip()` to prevent leading-space from corrupting baseline SHA1 fingerprints; `in_header_block` latch resets on `## ` report boundary
+- `history.py`: Windows `msvcrt.locking` now calls `LK_UNLCK` in `try/finally` via new `_unlock_exclusive`/`_unlock_windows` helpers
+- `__main__.py`: `ADVISOR_MAX_RUNNERS` env var clamped to ceiling of 20; stdin transcript read capped at 50 MiB
+- `sarif.py`: rule ID hash extended from `sha1[:10]` to `sha1[:16]`
+- `_style.py`: `paint()` guards against `None`/non-str style arguments (mypy safety)
+- `orchestrate/runner_prompts.py`: read-count threshold uses `config.runner_file_read_ceiling` instead of hardcoded `~15`
+- `orchestrate/config.py`: `max_runners` ceiling added; opus/sonnet sentinel behaviour documented
+- `rank.py`: ruby and php missing P2 env-keys tier entries added
+- `audit.py`, `baseline.py`, `sarif.py`, `web/server.py`: doc comments clarifying design decisions
+
 ## [0.5.0] - 2026-04-22
 
 ### Added — runner budget + scope anchors (drift + exhaustion defense)
