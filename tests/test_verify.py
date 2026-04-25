@@ -233,6 +233,20 @@ class TestParseFindingsFromText:
         assert len(findings) == 1
         assert findings[0].fix == "Use parameterized queries"
 
+    def test_parses_plain_bold_labels(self):
+        """Agents that omit list markers entirely still produce findings."""
+        text = """### Finding 1
+**File**: src/plain.py:12
+**Severity**: HIGH
+**Description**: Hardcoded token
+**Evidence**: TOKEN = "abc"
+**Fix**: Read it from configuration
+"""
+        findings = parse_findings_from_text(text)
+        assert len(findings) == 1
+        assert findings[0].file_path == "src/plain.py:12"
+        assert findings[0].fix == "Read it from configuration"
+
 
 class TestRoundTrip:
     """``format_findings_block`` and ``parse_findings_from_text`` must be

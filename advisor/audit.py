@@ -276,13 +276,16 @@ def audit_to_dict(report: AuditReport) -> dict[str, object]:
     """
 
     def _f(f: Finding) -> dict[str, str]:
-        return {
+        row = {
             "file_path": f.file_path,
             "severity": f.severity,
             "description": f.description,
             "evidence": f.evidence,
             "fix": f.fix,
         }
+        if f.rule_id:
+            row["rule_id"] = f.rule_id
+        return row
 
     return {
         "run_id": report.run_id,

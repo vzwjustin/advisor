@@ -187,6 +187,24 @@ def test_cta_ascii_fallback_under_no_color(monkeypatch):
     assert "\033[" not in out
 
 
+def test_cta_ascii_fallback_when_stream_cannot_encode_glyphs():
+    class Cp1252Stream:
+        encoding = "cp1252"
+
+    out = _style.cta("/advisor <dir>", "Start a code review", stream=Cp1252Stream())
+    assert "→" not in out
+    assert ">" in out
+    assert "\033[" not in out
+
+
+def test_banner_ascii_fallback_when_stream_cannot_encode_box_drawing():
+    class Cp1252Stream:
+        encoding = "cp1252"
+
+    out = _style.banner("advisor", stream=Cp1252Stream())
+    assert out == "== advisor =="
+
+
 def test_codes_covers_every_color_used_in_package():
     """Regression guard: every color literal passed to paint() in the package
     must exist in _CODES, or paint() silently no-ops and the UI loses color.

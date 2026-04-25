@@ -124,6 +124,7 @@ def estimate_cost(
     advisor_model: str,
     runner_model: str,
     max_fixes_per_runner: int,
+    max_runners: int | None = None,
     pricing: dict[str, tuple[int, int]] | None = None,
 ) -> CostEstimate:
     """Estimate token usage + USD cost for a planned run.
@@ -145,7 +146,8 @@ def estimate_cost(
             f"pricing= is missing required keys {missing!r}; "
             "supply entries for sonnet/opus/haiku or omit pricing= to use defaults"
         )
-    runner_count = len(batches) if batches else min(5, len(tasks)) or 1
+    runner_limit = 5 if max_runners is None else max(1, max_runners)
+    runner_count = len(batches) if batches else min(runner_limit, len(tasks)) or 1
     file_count = len(tasks)
 
     # Sum of per-file read tokens (runners read every file once during explore).

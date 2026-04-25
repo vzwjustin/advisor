@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from advisor.pr_comment import format_pr_comment
+from advisor.pr_comment import _GITHUB_BODY_LIMIT, format_pr_comment
 from advisor.verify import Finding
 
 
@@ -54,3 +54,28 @@ class TestFormatPrComment:
         assert "\\|" in summary_line or "|" not in summary_line.split("—", 1)[1]
         # Triple-backticks inside evidence should be neutralized.
         assert "'''code'''" in out
+
+    def test_neutralizes_details_tags_case_insensitively(self) -> None:
+        finding = Finding(
+            file_path="src/x.py:1",
+            severity="HIGH",
+            description="</DETAILS><Details open>",
+            evidence="</DeTaIlS>",
+            fix="<DETAILS>",
+        )
+        out = format_pr_comment([finding])
+        assert out.lower().count("<details>") == 1
+        assert out.lower().count("</details>") == 1
+        assert "<details open>" not in out.lower()
+
+    def test_single_oversized_finding_is_truncated_under_body_limit(self) -> None:
+        finding = Finding(
+            file_path="src/x.py:1",
+            severity="HIGH",
+            description="large finding",
+            evidence="x" * (_GITHUB_BODY_LIMIT * 2),
+            fix="use env",
+        )
+        out = format_pr_comment([finding])
+        assert len(out) < _GITHUB_BODY_LIMIT
+        assert "Output truncated" in out

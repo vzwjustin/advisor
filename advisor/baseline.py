@@ -36,16 +36,6 @@ SCHEMA_VERSION = "1.0"
 _HEADER_KEY = "__advisor_baseline__"
 
 
-def _atomic_write_text(target: Path, text: str) -> None:
-    """Atomic write helper — thin alias over :func:`advisor._fs.atomic_write_text`.
-
-    Baseline files live under the user's own target directory and don't
-    need the symlink-rejection or 0o644 chmod that the shared-host
-    install path applies.
-    """
-    _shared_atomic_write(target, text)
-
-
 @dataclass(frozen=True, slots=True)
 class BaselineEntry:
     """A single captured finding identity."""
@@ -57,7 +47,15 @@ class BaselineEntry:
     description: str = ""
 
     def key(self) -> tuple[str, str, str]:
-        return (self.file_path, self.rule_id, self.description_hash)
+        return (_normalize_identity_path(self.file_path), self.rule_id, self.description_hash)
+
+
+def _normalize_identity_path(path: str) -> str:
+    """Normalize superficial path spelling while preserving line identity."""
+    normalized = path.strip().strip("`").replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized
 
 
 def _rule_id_for(f: Finding) -> str:
@@ -73,7 +71,7 @@ def _finding_key(f: Finding) -> tuple[str, str, str]:
     the baseline write and diff paths cannot drift on how a finding is
     identified.
     """
-    return (f.file_path, _rule_id_for(f), _description_hash(f.description))
+    return (_normalize_identity_path(f.file_path), _rule_id_for(f), _description_hash(f.description))
 
 
 def _description_hash(description: str) -> str:
@@ -122,7 +120,7 @@ def write_baseline(path: Path, entries: list[BaselineEntry]) -> None:
                 }
             )
         )
-    _atomic_write_text(path, "\n".join(lines) + "\n")
+    _shared_atomic_write(path, "\n".join(lines) + "\n")
 
 
 def read_baseline(path: Path) -> list[BaselineEntry]:

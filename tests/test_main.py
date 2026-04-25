@@ -60,6 +60,43 @@ class TestCmdPromptVerifyEmptyStdin:
         assert "<paste findings here>" in pipe_out
 
 
+class TestLoadFindingsFromInput:
+    def test_json_rule_id_must_be_string(self, tmp_path):
+        import json
+
+        from advisor.__main__ import _load_findings_from_input
+
+        p = tmp_path / "findings.json"
+        p.write_text(
+            json.dumps(
+                {
+                    "findings_in_batch": [
+                        {
+                            "file_path": "a.py",
+                            "severity": "HIGH",
+                            "description": "d",
+                            "evidence": "e",
+                            "fix": "f",
+                            "rule_id": ["not", "a", "string"],
+                        },
+                        {
+                            "file_path": "b.py",
+                            "severity": "LOW",
+                            "description": "d",
+                            "rule_id": "  custom/rule  ",
+                        },
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        findings, rc = _load_findings_from_input(p)
+        assert rc is None
+        assert findings[0].rule_id is None
+        assert findings[1].rule_id == "custom/rule"
+
+
 class TestNudgeSkipCommands:
     """Only commands that explicitly manage the nudge should skip ensure_nudge.
 
@@ -106,6 +143,13 @@ class TestSafeRglob:
         paths, err = _safe_rglob(tmp_path, "*.py")
         assert paths is None
         assert err is not None and "symlink loop" in err
+
+    def test_reports_absolute_drive_pattern_as_invalid(self, tmp_path):
+        from advisor.__main__ import _safe_rglob
+
+        paths, err = _safe_rglob(tmp_path, "C:\\*.py")
+        assert paths is None
+        assert err is not None and "pattern" in err.lower()
 
 
 class TestConfigFromArgs:
@@ -587,6 +631,14 @@ class TestCmdPlanErrorPaths:
         if rc == 1:
             assert "pattern" in err.lower() or "filesystem" in err.lower()
 
+    def test_absolute_file_types_pattern_errors_cleanly(self, tmp_path, capsys):
+        from advisor import __main__ as cli
+
+        rc = cli.main(["plan", str(tmp_path), "--file-types", "C:\\*.py"])
+        assert rc == 2
+        err = capsys.readouterr().err
+        assert "pattern" in err.lower()
+
 
 class TestStatusJsonFlag:
     """`advisor status --json` is the scripting-friendly variant."""
@@ -956,6 +1008,14 @@ class TestCmdCheckpoints:
         err = capsys.readouterr().err
         assert "mutually exclusive" in err
 
+    def test_rm_rejects_path_traversal_run_id(self, tmp_path, capsys):
+        from advisor import __main__ as cli
+
+        rc = cli.main(["checkpoints", str(tmp_path), "--rm", "..\\..\\victim"])
+        assert rc == 2
+        err = capsys.readouterr().err
+        assert "invalid run_id" in err
+
     def test_list_shows_relative_age(self, tmp_path, capsys, monkeypatch):
         """The list gains an ``Xm ago`` column sourced from mtime.
 
@@ -1075,6 +1135,31 @@ class TestCmdPlanExclude:
 
 class TestCmdPlanPricing:
     """``--pricing FILE`` overrides the default per-family pricing."""
+
+    def test_estimate_honors_max_runners(self, tmp_path, capsys):
+        import json as _json
+
+        from advisor import __main__ as cli
+
+        for i in range(4):
+            (tmp_path / f"auth{i}.py").write_text("password = 'x'\n")
+
+        rc = cli.main(
+            [
+                "plan",
+                str(tmp_path),
+                "--min-priority",
+                "1",
+                "--max-runners",
+                "2",
+                "--estimate",
+                "--json",
+            ]
+        )
+
+        assert rc == 0
+        payload = _json.loads(capsys.readouterr().out)
+        assert payload["estimate"]["runner_count"] == 2
 
     def test_pricing_file_overrides_estimate(self, tmp_path, capsys):
         import json as _json

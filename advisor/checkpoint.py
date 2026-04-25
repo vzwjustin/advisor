@@ -12,6 +12,7 @@ history file. They are human-readable JSON — diffable and auditable.
 from __future__ import annotations
 
 import json
+import re
 import warnings
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -26,6 +27,7 @@ UTC = timezone.utc
 CHECKPOINT_SCHEMA_VERSION = "1.0"
 CHECKPOINT_PREFIX = "run-"
 CHECKPOINT_SUFFIX = ".json"
+_RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,21 +57,17 @@ def _dir(target: str | Path) -> Path:
     return Path(target) / HISTORY_DIR_NAME
 
 
+def _validate_run_id(run_id: str) -> None:
+    if not _RUN_ID_RE.fullmatch(run_id):
+        raise ValueError(
+            "invalid run_id: use only letters, digits, underscore, dot, and hyphen"
+        )
+
+
 def checkpoint_path(target: str | Path, run_id: str) -> Path:
     """Absolute path for a checkpoint file with the given run_id."""
+    _validate_run_id(run_id)
     return _dir(target) / f"{CHECKPOINT_PREFIX}{run_id}{CHECKPOINT_SUFFIX}"
-
-
-def _atomic_write_text(target: Path, text: str) -> None:
-    """Atomic write helper — thin alias over :func:`advisor._fs.atomic_write_text`.
-
-    Checkpoints live under the user's own target directory. Unlike the
-    hardened ``install._atomic_write_text`` path, we don't enable
-    symlink rejection here — the user's target directory is trusted and
-    the extra check would reject legitimate setups where the user
-    symlinks ``.advisor/`` to a shared cache.
-    """
-    _shared_atomic_write(target, text)
 
 
 def save_checkpoint(
@@ -131,7 +129,7 @@ def save_checkpoint(
         batches=batch_dicts,
     )
     path = checkpoint_path(target, run_id)
-    _atomic_write_text(path, json.dumps(asdict(checkpoint), indent=2))
+    _shared_atomic_write(path, json.dumps(asdict(checkpoint), indent=2))
     return path
 
 
@@ -140,14 +138,14 @@ def load_checkpoint(target: str | Path, run_id: str) -> Checkpoint:
     :class:`ValueError` on missing / malformed content.
     """
     path = checkpoint_path(target, run_id)
-    if not path.exists():
-        raise FileNotFoundError(f"no checkpoint at {path}")
     try:
         obj = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise FileNotFoundError(f"no checkpoint at {path}") from None
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"could not read checkpoint {path}: {exc}") from exc
 
-    version = str(obj.get("schema_version", CHECKPOINT_SCHEMA_VERSION))
+    version = str(obj.get("schema_version", ""))
     if version and version != CHECKPOINT_SCHEMA_VERSION:
         warnings.warn(
             f"{path}: schema_version {version!r} does not match "

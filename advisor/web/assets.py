@@ -637,6 +637,7 @@ APP_JS = r"""(() => {
     qs.set('min_priority', form.get('min_priority') || '3');
     qs.set('advisor_model', form.get('advisor_model') || 'opus');
     qs.set('runner_model', form.get('runner_model') || 'sonnet');
+    qs.set('max_runners', form.get('max_runners') || '5');
     let data;
     try {
       const r = await fetch('/api/cost?' + qs.toString());

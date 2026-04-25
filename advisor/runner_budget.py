@@ -191,10 +191,12 @@ def update_budget(
     """
     anchor = parse_scope_anchor(message_text)
     new_files = budget.files_read
-    if anchor and anchor.file_path and anchor.file_path not in budget.files_read:
-        new_files = (*budget.files_read, anchor.file_path)
-    if file_read and file_read not in new_files:
-        new_files = (*new_files, file_read)
+    anchor_path = _normalize(anchor.file_path) if anchor and anchor.file_path else None
+    if anchor_path and anchor_path not in new_files:
+        new_files = (*new_files, anchor_path)
+    file_read_path = _normalize(file_read) if file_read else None
+    if file_read_path and file_read_path not in new_files:
+        new_files = (*new_files, file_read_path)
 
     return replace(
         budget,
@@ -202,7 +204,7 @@ def update_budget(
         files_read=new_files,
         fixes_done=budget.fixes_done + (1 if fix_completed else 0),
         last_stage=anchor.stage if anchor else budget.last_stage,
-        last_file=anchor.file_path if anchor else budget.last_file,
+        last_file=anchor_path if anchor_path else budget.last_file,
     )
 
 

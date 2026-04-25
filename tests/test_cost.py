@@ -82,6 +82,44 @@ class TestEstimateCost:
         assert d["file_count"] == 1
         assert d["advisor_model"] == "opus"
 
+    def test_max_runners_limits_unbatched_estimate(self, tmp_path: Path) -> None:
+        tasks = []
+        for i in range(8):
+            p = tmp_path / f"f{i}.py"
+            p.write_text("x" * 100)
+            tasks.append(_task(str(p)))
+
+        e = estimate_cost(
+            tasks,
+            None,
+            advisor_model="opus",
+            runner_model="sonnet",
+            max_fixes_per_runner=5,
+            max_runners=2,
+        )
+
+        assert e.runner_count == 2
+
+    def test_batches_still_determine_runner_count(self, tmp_path: Path) -> None:
+        from advisor.focus import FocusBatch
+
+        tasks = [_task(str(tmp_path / f"f{i}.py")) for i in range(3)]
+        batches = [
+            FocusBatch(batch_id=1, tasks=(tasks[0],), complexity="low"),
+            FocusBatch(batch_id=2, tasks=(tasks[1], tasks[2]), complexity="low"),
+        ]
+
+        e = estimate_cost(
+            tasks,
+            batches,
+            advisor_model="opus",
+            runner_model="sonnet",
+            max_fixes_per_runner=5,
+            max_runners=9,
+        )
+
+        assert e.runner_count == 2
+
 
 class TestLoadPricing:
     """``load_pricing`` parses both object and array shapes."""

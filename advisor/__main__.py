@@ -27,9 +27,7 @@ from .checkpoint import (
     load_checkpoint,
     save_checkpoint,
 )
-from .checkpoint import (
-    _atomic_write_text as _atomic_write,
-)
+from ._fs import atomic_write_text as _atomic_write
 from .cost import estimate_cost, format_estimate, load_pricing
 from .doctor import format_report, run_doctor
 from .focus import (
@@ -329,7 +327,7 @@ def _safe_rglob(target: Path, pattern: str) -> tuple[list[str] | None, str | Non
     for pat in patterns:
         try:
             iterator = resolved_target.rglob(pat)
-        except ValueError as exc:
+        except (ValueError, NotImplementedError) as exc:
             return None, f"invalid --file-types pattern {pat!r}: {exc}"
         except OSError as exc:
             return None, f"filesystem error scanning {target}: {exc}"
@@ -835,6 +833,7 @@ def _emit_plan(
                 advisor_model=cfg.advisor_model,
                 runner_model=cfg.runner_model,
                 max_fixes_per_runner=cfg.max_fixes_per_runner,
+                max_runners=cfg.max_runners,
                 pricing=pricing_override,
             )
         payload = _plan_to_dict(target, tasks, batches, estimate=estimate, run_id=run_id)
@@ -892,6 +891,7 @@ def _emit_plan(
             advisor_model=cfg.advisor_model,
             runner_model=cfg.runner_model,
             max_fixes_per_runner=cfg.max_fixes_per_runner,
+            max_runners=cfg.max_runners,
             pricing=pricing_override,
         )
         print()
@@ -1278,6 +1278,7 @@ def cmd_ui(args: argparse.Namespace) -> int:
         target,
         file_types=args.file_types,
         min_priority=args.min_priority,
+        max_runners=_resolve_max_runners(args.max_runners),
         advisor_model=args.advisor_model,
         runner_model=args.runner_model,
     )
@@ -1391,7 +1392,11 @@ def cmd_checkpoints(args: argparse.Namespace) -> int:
         return 2
 
     if rm_id:
-        path = checkpoint_path(target, rm_id)
+        try:
+            path = checkpoint_path(target, rm_id)
+        except ValueError as exc:
+            print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
+            return 2
         if path.exists():
             try:
                 path.unlink()
@@ -1606,6 +1611,12 @@ def _load_findings_from_input(
                 if not isinstance(f, dict):
                     continue
                 try:
+                    raw_rule_id = f.get("rule_id")
+                    rule_id = (
+                        raw_rule_id.strip()
+                        if isinstance(raw_rule_id, str) and raw_rule_id.strip()
+                        else None
+                    )
                     findings.append(
                         Finding(
                             file_path=str(f["file_path"]),
@@ -1613,7 +1624,7 @@ def _load_findings_from_input(
                             description=str(f["description"]),
                             evidence=str(f.get("evidence", "")),
                             fix=str(f.get("fix", "")),
-                            rule_id=f.get("rule_id") or None,
+                            rule_id=rule_id,
                         )
                     )
                 except KeyError:

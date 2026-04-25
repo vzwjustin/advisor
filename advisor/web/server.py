@@ -66,6 +66,7 @@ class AppState:
     target: Path
     default_file_types: str = "*.py"
     default_min_priority: int = 3
+    default_max_runners: int = 5
     default_advisor_model: str = "opus"
     default_runner_model: str = "sonnet"
 
@@ -75,6 +76,7 @@ def build_app_state(
     *,
     file_types: str = "*.py",
     min_priority: int = 3,
+    max_runners: int = 5,
     advisor_model: str = "opus",
     runner_model: str = "sonnet",
 ) -> AppState:
@@ -88,6 +90,7 @@ def build_app_state(
         target=path,
         default_file_types=file_types,
         default_min_priority=min_priority,
+        default_max_runners=max(1, max_runners),
         default_advisor_model=advisor_model,
         default_runner_model=runner_model,
     )
@@ -137,7 +140,12 @@ def _validate_file_types(pattern: str) -> None:
             continue
         if "\x00" in piece:
             raise ValueError(f"file_types pattern contains NUL byte: {piece!r}")
-        if ".." in piece or piece.startswith("/") or piece.startswith("\\"):
+        if (
+            ".." in piece
+            or piece.startswith("/")
+            or piece.startswith("\\")
+            or (len(piece) >= 2 and piece[1] == ":" and piece[0].isalpha())
+        ):
             raise ValueError(f"unsafe file_types pattern: {piece!r}")
 
 
@@ -181,6 +189,7 @@ def _plan_payload(state: AppState, qs: dict[str, list[str]]) -> dict[str, Any]:
 def _cost_payload(state: AppState, qs: dict[str, list[str]]) -> dict[str, Any]:
     advisor_model = _first(qs, "advisor_model", state.default_advisor_model)
     runner_model = _first(qs, "runner_model", state.default_runner_model)
+    max_runners = _first_int(qs, "max_runners", state.default_max_runners, min_value=1)
     max_fixes = _first_int(qs, "max_fixes_per_runner", 5, min_value=1)
     file_types = _first(qs, "file_types", state.default_file_types)
     min_priority = _first_int(qs, "min_priority", state.default_min_priority)
@@ -199,6 +208,7 @@ def _cost_payload(state: AppState, qs: dict[str, list[str]]) -> dict[str, Any]:
         advisor_model=advisor_model,
         runner_model=runner_model,
         max_fixes_per_runner=max_fixes,
+        max_runners=max_runners,
     )
     return {
         "target": str(state.target),
@@ -270,6 +280,7 @@ def _target_payload(state: AppState) -> dict[str, Any]:
         "defaults": {
             "file_types": state.default_file_types,
             "min_priority": state.default_min_priority,
+            "max_runners": state.default_max_runners,
             "advisor_model": state.default_advisor_model,
             "runner_model": state.default_runner_model,
         },
