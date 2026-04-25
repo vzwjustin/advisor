@@ -57,7 +57,7 @@ Requires Python ≥ 3.10. Package name: `advisor-agent`. Import: `advisor`. CLI:
 <summary>Manage the nudge / skill manually</summary>
 
 ```bash
-advisor status               # health check (alias: advisor doctor)
+advisor status               # install health check
 advisor install              # append / update the nudge + skill (idempotent)
 advisor install --check      # dry-run: print status, exit 3 if anything missing
 advisor uninstall            # cleanly remove the nudge + skill
@@ -84,6 +84,7 @@ Or use the standalone CLI to inspect the prompts and plans:
 
 ```bash
 advisor pipeline src/                  # full pipeline reference
+advisor protocol                       # print the strict team-lifecycle protocol
 advisor plan src/                      # rank local files, print dispatch plan
 advisor plan src/ --json               # same, machine-readable for `jq` etc.
 advisor plan src/ --sarif out.sarif    # SARIF 2.1.0 output for Code Scanning
@@ -91,15 +92,21 @@ advisor audit RUN_ID [TARGET]          # post-hoc diagnostic for a completed run
 advisor prompt advisor src/            # the advisor's prompt body
 advisor prompt runner src/ --runner-id 1   # a runner's bootstrap prompt
 advisor prompt verify src/ < findings  # verify-pass prompt
-advisor status                         # health check (alias: doctor)
+advisor status                         # install health check
 advisor status --json                  # JSON-formatted health for scripting
+advisor doctor                         # extended diagnostic: git/claude/python/env checks
 advisor install                        # install nudge + /advisor skill
 advisor uninstall                      # remove nudge + /advisor skill
+advisor ui                             # launch local web dashboard on 127.0.0.1:8765
 advisor history                        # recent findings from .advisor/history.jsonl
 advisor baseline create                # snapshot current findings as baseline
 advisor baseline diff                  # compare current run vs. baseline
+advisor checkpoints                    # list saved plan checkpoints
+advisor checkpoints --rm RUN_ID        # delete a single checkpoint
+advisor checkpoints --clear            # delete all checkpoints
 advisor presets                        # list available rule-pack presets
 advisor suppressions --list            # list active false-positive suppressions
+advisor version                        # print version + environment info
 ```
 
 Every subcommand's `target` defaults to `.` (current directory). Piping a
@@ -186,6 +193,19 @@ Code `Agent(...)` or `SendMessage(...)` call.
 - `advisor/verify.py` — `Finding`, `parse_findings_from_text`, verify-pass builders
 - `advisor/runner_budget.py` — `RunnerBudget`, scope-anchor parsing, per-runner output-char budget and rotation logic
 - `advisor/install.py` — idempotent CLAUDE.md nudge + `/advisor` skill install/uninstall
+- `advisor/doctor.py` — `DoctorReport`, extended git/claude/python/env diagnostics
+- `advisor/audit.py` — `audit_transcript`, `format_audit_report`, post-hoc run diagnostics
+- `advisor/baseline.py` — `read_baseline`, `write_baseline`, `diff_against_baseline`
+- `advisor/checkpoint.py` — `Checkpoint`, save/load/list plan checkpoints for `--resume`
+- `advisor/cost.py` — `CostEstimate`, rough token and cost range estimator
+- `advisor/git_scope.py` — `resolve_git_scope`, git-incremental scoping (`--since`/`--staged`/`--branch`)
+- `advisor/history.py` — `HistoryEntry`, confirmed findings log at `.advisor/history.jsonl`
+- `advisor/pr_comment.py` — `format_pr_comment`, PR-body markdown formatter
+- `advisor/presets.py` — `PRESETS`, `RulePack`, curated rule-pack bundles
+- `advisor/sarif.py` — `findings_to_sarif`, SARIF 2.1.0 serializer
+- `advisor/suppressions.py` — `Suppression`, per-rule false-positive suppressions
+- `advisor/skill_asset.py` — `SKILL_MD`, bundled `/advisor` skill content
+- `advisor/web/` — local web dashboard served by `advisor ui`
 - `advisor/_style.py` — zero-dep ANSI styling (colors on by default)
 
 ## Orchestration rules
@@ -226,7 +246,7 @@ on:
 
 jobs:
   advisor:
-    uses: vzwjustin/advisor/.github/workflows/advisor.yml@v0.5.0
+    uses: vzwjustin/advisor/.github/workflows/advisor.yml@v0.5.1
     with:
       target: "."
       min-priority: 3
