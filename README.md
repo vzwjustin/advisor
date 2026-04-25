@@ -1,6 +1,6 @@
 # advisor
 
-![advisor demo](assets/demo.gif)
+![advisor demo](assets/demo.png)
 
 A one-command, Opus-led code review-and-fix pipeline for Claude Code. The
 advisor (Opus) goes first, does its own Glob+Grep discovery, ranks files
