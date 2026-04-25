@@ -244,6 +244,18 @@ def _parse_blocks(text: str) -> list[Finding]:
     for line in text.split("\n"):
         stripped = line.strip()
 
+        # Report boundary: an H2 heading (e.g. "## Summary") closes the
+        # current findings region. Reset the latch so any later headerless
+        # findings region in the same text re-arms the second-File safety
+        # net correctly instead of staying permanently disabled.
+        if stripped.startswith("## ") and not stripped.startswith("### "):
+            if current:
+                _flush()
+            current = {}
+            active_key = None
+            in_header_block = False
+            continue
+
         # Primary block delimiter: ### Finding headers from format_findings_block.
         # Guard against a runner embedding "### Finding 3 (see above)" inside
         # an Evidence or Fix body — that would otherwise flush a partial
@@ -264,7 +276,7 @@ def _parse_blocks(text: str) -> list[Finding]:
             # the line as continuation of the active field so it doesn't
             # vanish into a dropped partial.
             if active_key:
-                current[active_key] = current[active_key] + " " + stripped
+                current[active_key] = (current[active_key] + " " + stripped).strip()
             continue
 
         matched = _match_key(stripped)
@@ -296,7 +308,7 @@ def _parse_blocks(text: str) -> list[Finding]:
                 # Key already set — this label text appeared inside a body
                 # value. Treat as continuation of the active field.
                 if active_key:
-                    current[active_key] = current[active_key] + " " + stripped
+                    current[active_key] = (current[active_key] + " " + stripped).strip()
         elif active_key and stripped and not stripped.startswith("### Finding"):
             # Skip pure Markdown fence markers — a runner embedding a code
             # block inside an Evidence value would otherwise pollute the
@@ -305,7 +317,7 @@ def _parse_blocks(text: str) -> list[Finding]:
             # bleed into parsed field values.
             if stripped.startswith("```") or stripped.startswith("~~~"):
                 continue
-            current[active_key] = current.get(active_key, "") + " " + stripped
+            current[active_key] = (current.get(active_key, "") + " " + stripped).strip()
 
     if current:
         _flush()

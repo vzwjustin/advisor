@@ -108,6 +108,18 @@ def _lock_exclusive(fh: IO[str]) -> None:
     _lock_windows(fh)  # type: ignore[unreachable]
 
 
+def _unlock_exclusive(fh: IO[str]) -> None:
+    """Release the lock acquired by :func:`_lock_exclusive`, best-effort.
+
+    On POSIX, closing the file descriptor releases ``fcntl.flock`` so we
+    only need an explicit unlock for the Windows ``msvcrt.locking`` path —
+    that lock survives close until LK_UNLCK runs.
+    """
+    if sys.platform != "win32":
+        return
+    _unlock_windows(fh)  # type: ignore[unreachable]
+
+
 def _lock_windows(fh: IO[str]) -> None:
     if sys.platform != "win32":  # pragma: no cover - platform guard
         return
@@ -117,6 +129,26 @@ def _lock_windows(fh: IO[str]) -> None:
         return
     try:
         msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 0x7FFFFFFF)
+    except OSError:
+        pass
+
+
+def _unlock_windows(fh: IO[str]) -> None:
+    """Release a Windows ``msvcrt.locking`` lock acquired by :func:`_lock_windows`.
+
+    ``msvcrt.locking`` does not auto-release on close — the OS keeps the
+    region locked until the process exits or LK_UNLCK is called. Always
+    pair :func:`_lock_windows` with this in a try/finally so the next
+    appender on the same file isn't blocked.
+    """
+    if sys.platform != "win32":  # pragma: no cover - platform guard
+        return
+    try:  # type: ignore[unreachable]
+        import msvcrt
+    except ImportError:
+        return
+    try:
+        msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 0x7FFFFFFF)
     except OSError:
         pass
 
@@ -149,7 +181,13 @@ def append_entries(target: str | Path, entries: list[HistoryEntry]) -> Path:
     payload = "".join(entry.to_json_line() + "\n" for entry in entries)
     with path.open("a", encoding="utf-8") as f:
         _lock_exclusive(f)
-        f.write(payload)
+        try:
+            f.write(payload)
+        finally:
+            # On Windows, msvcrt.locking does NOT auto-release on close —
+            # explicit LK_UNLCK is required or the next appender blocks.
+            # No-op on POSIX (fcntl.flock releases at close).
+            _unlock_exclusive(f)
     return path
 
 

@@ -140,6 +140,9 @@ def _relative_age(mtime_epoch: float, now_epoch: float | None = None) -> str:
     return f"{min(days, 99)}d ago"
 
 
+_MAX_RUNNERS_CEILING = 20
+
+
 def _resolve_max_runners(raw: int | None) -> int:
     """Resolve the CLI ``--max-runners`` value to a concrete int.
 
@@ -147,17 +150,20 @@ def _resolve_max_runners(raw: int | None) -> int:
     that need the runner count directly (without building a full
     :class:`TeamConfig`) see the same value the config would. Argparse
     defaults to ``None``; env var ``ADVISOR_MAX_RUNNERS`` (if set to a
-    valid positive int) fills in; final fallback is 5.
+    valid positive int) fills in; final fallback is 5. The result is
+    clamped to ``_MAX_RUNNERS_CEILING`` so a typo or experimental value
+    can't spawn an unbounded runner pool.
     """
     if raw is not None and raw >= 1:
-        return raw
+        return min(raw, _MAX_RUNNERS_CEILING)
     env_raw = os.environ.get("ADVISOR_MAX_RUNNERS", "").strip()
     if env_raw:
         try:
             parsed = int(env_raw)
         except ValueError:
             parsed = 5
-        return parsed if parsed >= 1 else 5
+        resolved = parsed if parsed >= 1 else 5
+        return min(resolved, _MAX_RUNNERS_CEILING)
     return 5
 
 
@@ -1831,7 +1837,21 @@ def cmd_audit(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 2
-        transcript = sys.stdin.read()
+        # Cap stdin transcripts at 50 MiB — a piped Claude Code conversation
+        # tops out near a few MB, so anything larger is almost certainly a
+        # mis-pipe (e.g. an entire log directory) and would otherwise be
+        # buffered into RAM in one shot.
+        _STDIN_LIMIT = 50 * 1024 * 1024
+        transcript = sys.stdin.read(_STDIN_LIMIT + 1)
+        if len(transcript) > _STDIN_LIMIT:
+            print(
+                _style.error_box(
+                    f"audit: transcript exceeds {_STDIN_LIMIT // (1024 * 1024)} MiB cap",
+                    stream=sys.stderr,
+                ),
+                file=sys.stderr,
+            )
+            return 2
     else:
         try:
             transcript = Path(transcript_arg).read_text(encoding="utf-8", errors="replace")

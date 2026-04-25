@@ -82,6 +82,11 @@ def _description_hash(description: str) -> str:
     Used to identity-match findings across runs. First 120 chars so a
     trivially reworded description still collides — stricter would
     defeat the baseline's "accept known noise" purpose.
+
+    The hash is the first 16 hex chars of SHA-1 (64 bits). Birthday-bound
+    collision probability stays under 1 in 2^32 even for tens of thousands
+    of distinct (file, rule_id) keys, well above any realistic baseline
+    size. SHA-1 is used for stability, not security.
     """
     return hashlib.sha1(description[:120].encode("utf-8")).hexdigest()[:16]
 

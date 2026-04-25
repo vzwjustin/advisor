@@ -61,8 +61,14 @@ def synthesize_rule_id(severity: str, description: str, *, prefix: str = "adviso
     repeated findings (same description text, same severity) group under
     the same rule on GitHub Code Scanning. The severity is lowercased so
     ``CRITICAL``/``critical`` collapse to one id.
+
+    The slug is the first 16 hex chars of SHA-1 (64 bits) — at that width
+    the birthday-bound collision probability stays under 1 in 2^32 even
+    for ~65k distinct rule keys per run, which exceeds any realistic
+    finding count by orders of magnitude. SHA-1 is used for stability,
+    not security; the input is severity-bucketed description prefix.
     """
-    slug = hashlib.sha1(description[:80].encode("utf-8")).hexdigest()[:10]
+    slug = hashlib.sha1(description[:80].encode("utf-8")).hexdigest()[:16]
     return f"{prefix}/{severity.lower()}/{slug}"
 
 

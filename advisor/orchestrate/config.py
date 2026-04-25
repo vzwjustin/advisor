@@ -153,6 +153,14 @@ def default_team_config(
     min_priority_is_default = min_priority == 3
     test_command_is_default = test_command == ""
 
+    # NOTE: ``advisor_model="opus"`` and ``runner_model="sonnet"`` are
+    # the documented default *sentinels* — when a caller leaves these as
+    # the literal strings ``"opus"`` / ``"sonnet"``, env vars are allowed
+    # to override. A caller who explicitly wants the bare aliases must
+    # instead pass them via the env vars or a different surface, since
+    # the equality check here treats them as "not set". This is a known
+    # ergonomic trade-off: it lets ``ADVISOR_MODEL`` work without forcing
+    # every test/caller to thread a ``warn_unknown_model=False``.
     if advisor_model == "opus":
         advisor_model = _env_or("ADVISOR_MODEL", advisor_model)
     if runner_model == "sonnet":
@@ -162,6 +170,9 @@ def default_team_config(
         max_runners = raw if raw >= 1 else 5
     elif max_runners < 1:
         max_runners = 1
+    # Match the CLI's _MAX_RUNNERS_CEILING clamp so the env-var path and
+    # explicit-API path can't spawn an unbounded pool through a typo.
+    max_runners = min(max_runners, 20)
     if file_types_is_default:
         file_types = _env_or("ADVISOR_FILE_TYPES", file_types)
     if min_priority_is_default:

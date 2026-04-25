@@ -56,11 +56,19 @@ _FIX_ASSIGNMENT_RE = re.compile(
 # Heuristic attribution: a ``runner-N`` mention within this many characters
 # immediately before a fix-assignment header is treated as the recipient.
 # Chosen to span a typical SendMessage(to='runner-N', message='...') call
-# plus a little slack, without reaching across unrelated blocks.
+# plus a little slack, without reaching across unrelated blocks. The
+# 500-char window is also wide enough that a fenced JSON-like dispatch
+# blob with embedded prose still attributes correctly; tighter windows
+# (≤200) under-attribute on real transcripts.
 _RUNNER_ATTRIBUTION_WINDOW = 500
 
 _RUNNER_MENTION_RE = re.compile(r"runner-(\d+)")
 
+# Matches the ``CONTEXT_PRESSURE`` self-report token wherever it appears in
+# the transcript. Unlike fix-assignment attribution, the count here is the
+# raw mention count across the whole transcript — attribution to a specific
+# runner is handled by ``context_pressure_runners`` (first-mention order),
+# not by proximity windowing, so this regex stays unanchored on purpose.
 _CONTEXT_PRESSURE_RE = re.compile(r"CONTEXT_PRESSURE", re.IGNORECASE)
 
 _PROTOCOL_VIOLATION_RE = re.compile(

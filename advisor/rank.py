@@ -156,11 +156,13 @@ LANGUAGE_EXTRA_KEYWORDS: dict[str, dict[int, tuple[str, ...]]] = {
         5: ("devise", "omniauth", "warden"),
         4: ("params", "marshal.load", "yaml.load"),
         3: ("rails", "rack", "sinatra", "activerecord"),
+        2: ("env",),
     },
     "php": {
         5: ("password_hash", "password_verify"),
         4: ("$_get", "$_post", "$_request", "$_files", "unserialize"),
         3: ("mysqli", "pdo", "wp_", "laravel", "symfony"),
+        2: ("getenv",),
     },
 }
 
@@ -506,6 +508,20 @@ def _regex_with_extras(
     return _regex_with_extras_cached(language, extras_key)
 
 
+def _anchored_keyword_pattern(group: str, kw: str) -> str:
+    """Build a regex alternative for ``kw`` with correct word-boundary anchors.
+
+    Plain ``\\b`` only fires between word and non-word chars, so it never
+    matches at the start of a token like ``$_GET`` (``$`` is non-word).
+    Use lookaround anchors when the keyword's leading or trailing char is
+    not a word char; fall back to ``\\b`` otherwise.
+    """
+    escaped = re.escape(kw)
+    left = r"(?<!\w)" if not kw[:1].isalnum() and kw[:1] != "_" else r"\b"
+    right = r"(?!\w)" if not kw[-1:].isalnum() and kw[-1:] != "_" else r"\b"
+    return rf"(?P<{group}>{left}{escaped}{right})"
+
+
 @lru_cache(maxsize=16)
 def _regex_with_extras_cached(
     language: str | None,
@@ -529,7 +545,7 @@ def _regex_with_extras_cached(
     for priority, kws in merged.items():
         for idx, kw in enumerate(kws):
             group = f"p{priority}_{idx}"
-            parts.append(rf"(?P<{group}>\b{re.escape(kw)}\b)")
+            parts.append(_anchored_keyword_pattern(group, kw))
             mapping[group] = (priority, kw)
     if not parts:
         return re.compile(r"(?!)"), mapping
@@ -551,7 +567,7 @@ def _combined_regex_for(language: str | None) -> tuple[re.Pattern[str], dict[str
     for priority, kws in keywords.items():
         for idx, kw in enumerate(kws):
             group = f"p{priority}_{idx}"
-            parts.append(rf"(?P<{group}>\b{re.escape(kw)}\b)")
+            parts.append(_anchored_keyword_pattern(group, kw))
             mapping[group] = (priority, kw)
     if not parts:
         return re.compile(r"(?!)"), mapping

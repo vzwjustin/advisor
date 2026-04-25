@@ -426,7 +426,10 @@ def run_server(
     actual_port = server.server_address[1]
     # Strip ANSI / newline / CR from the user-supplied host before echoing to
     # the terminal so a `--host $'\x1b[2J'` or similar can't inject escape
-    # sequences into the startup banner.
+    # sequences into the startup banner. NOTE: this is for the printed
+    # banner only — the actual socket bind above used the original
+    # ``host`` string. If the caller passed escapes, the bind already
+    # succeeded or failed on its own merits; this purely sanitizes echo.
     host_safe = host.replace("\x1b", "").replace("\r", "").replace("\n", "")
     url = f"http://{host_safe}:{actual_port}"
     print(_style.success_box(f"advisor dashboard serving {state.target} at {url}"))

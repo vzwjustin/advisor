@@ -85,7 +85,12 @@ def supports_color(stream: IO[str] | None = None) -> bool:
 def paint(text: str, *styles: str, stream: IO[str] | None = None) -> str:
     if not styles or not supports_color(stream):
         return text
-    prefix = "".join(_CODES[s] for s in styles if s in _CODES)
+    # Defensive: callers reading STATE_GLYPHS / ACTION_GLYPHS pass a
+    # ``str | None`` color through positionally. The signature says ``str``,
+    # but a ``None`` slipping past mypy (e.g. via a tuple unpack on a
+    # broader-typed dict) would raise ``KeyError`` on ``_CODES[None]``.
+    # Filter ``None`` and non-str entries here so the call is total.
+    prefix = "".join(_CODES[s] for s in styles if isinstance(s, str) and s in _CODES)
     return f"{prefix}{text}{_RESET}" if prefix else text
 
 

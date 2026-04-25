@@ -425,7 +425,8 @@ class TestMaxFixesPerRunner:
         prompt = build_runner_pool_prompt(1, config)
         lowered = prompt.lower()
         assert "read-count proxy" in lowered
-        assert "15" in prompt  # the threshold hint
+        # The threshold is the configured runner_file_read_ceiling (default 20).
+        assert str(config.runner_file_read_ceiling) in prompt
 
     def test_runner_prompt_acknowledges_no_direct_context_signal(self):
         """Runner must be told it has no direct read on remaining context."""
