@@ -114,8 +114,12 @@ def _lock_windows(fh: IO[str]) -> None:
         import msvcrt
     except ImportError:
         return
+    locking = getattr(msvcrt, "locking", None)
+    lk_lock = getattr(msvcrt, "LK_LOCK", None)
+    if not callable(locking) or not isinstance(lk_lock, int):
+        return
     try:
-        msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 0x7FFFFFFF)
+        locking(fh.fileno(), lk_lock, 0x7FFFFFFF)
     except OSError:
         pass
 
