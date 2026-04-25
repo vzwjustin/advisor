@@ -13,9 +13,10 @@ advisory — treat the output as "order of magnitude", not invoice-accurate.
 from __future__ import annotations
 
 import json
+import os
 import warnings
 from dataclasses import dataclass
-from functools import cache
+from functools import cache, lru_cache
 from pathlib import Path
 
 from .focus import FocusBatch, FocusTask
@@ -77,13 +78,25 @@ def _warn_unknown_family(model: str) -> None:
     )
 
 
+@lru_cache(maxsize=4096)
+def _tokens_for_file_stat(path: str, size: int, mtime_ns: int) -> int:
+    """Return cached token estimate for a specific file identity.
+
+    ``mtime_ns`` participates in the key so changed files naturally invalidate
+    stale estimates while repeated dashboard polls reuse the cheap arithmetic
+    result for unchanged files.
+    """
+    del path, mtime_ns
+    return int(size / CHARS_PER_TOKEN)
+
+
 def _tokens_for_file(path: str) -> int:
-    """Best-effort token estimate for a file's content (single Read call)."""
+    """Best-effort token estimate for a file's content (single stat call)."""
     try:
-        size = Path(path).stat().st_size
+        stat = os.stat(path)
     except OSError:
         return 0
-    return int(size / CHARS_PER_TOKEN)
+    return _tokens_for_file_stat(path, stat.st_size, stat.st_mtime_ns)
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,7 +164,13 @@ def estimate_cost(
     file_count = len(tasks)
 
     # Sum of per-file read tokens (runners read every file once during explore).
-    content_tokens = sum(_tokens_for_file(t.file_path) for t in tasks)
+    # De-dupe within an estimate so duplicated focus tasks don't repeat stats.
+    token_cache: dict[str, int] = {}
+    content_tokens = 0
+    for task in tasks:
+        if task.file_path not in token_cache:
+            token_cache[task.file_path] = _tokens_for_file(task.file_path)
+        content_tokens += token_cache[task.file_path]
 
     # ---- MIN: one explore pass, no fixes ----
     advisor_in_min = ADVISOR_SYSTEM_TOKENS + (PER_MESSAGE_OVERHEAD_TOKENS * runner_count * 2)

@@ -27,6 +27,7 @@ from advisor.web.server import (
     _cost_payload,
     _history_payload,
     _plan_payload,
+    _rank_target,
     _status_payload,
     _target_payload,
     find_free_port,
@@ -128,6 +129,18 @@ class TestPlanPayload:
         state = build_app_state(tmp_path, min_priority=1)
         with pytest.raises(ValueError, match="unsafe file_types pattern"):
             _plan_payload(state, {"file_types": ["C:\\*.py"]})
+
+    def test_rank_target_discovers_files_deterministically(self, tmp_path, monkeypatch):
+        a = tmp_path / "a.py"
+        b = tmp_path / "b.py"
+        a.write_text("x = 1")
+        b.write_text("x = 1")
+        state = build_app_state(tmp_path, min_priority=1)
+
+        monkeypatch.setattr("advisor.web.server._safe_rglob", lambda *_a, **_kw: [str(b), str(a)])
+
+        tasks = _rank_target(state, "*.py", 1)
+        assert [Path(t.file_path).name for t in tasks] == ["a.py", "b.py"]
 
 
 class TestCostPayload:
@@ -647,6 +660,37 @@ class TestErrorHandler:
             assert "supersecret" not in body.decode()
             # The traceback must still reach the server-side log so devs can debug.
             assert any("supersecret" in rec.message for rec in caplog.records)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_filesystem_error_body(self, tmp_path, monkeypatch, caplog):
+        state = build_app_state(tmp_path)
+
+        def boom(*a, **kw):
+            raise OSError("filesystem detail")
+
+        monkeypatch.setattr("advisor.web.server._target_payload", boom)
+
+        from http.server import ThreadingHTTPServer
+
+        from advisor.web.server import _make_handler_class
+
+        handler_cls = _make_handler_class(state, log_requests=False)
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler_cls)
+        port = server.server_address[1]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with caplog.at_level("ERROR", logger="advisor.web.server"):
+                status, _, body = _get("127.0.0.1", port, "/api/target")
+            assert status == 500
+            data = json.loads(body)
+            assert data["error"] == "internal server error"
+            assert "filesystem detail" not in body.decode()
+            assert any("filesystem error serving" in rec.message for rec in caplog.records)
+            assert any("filesystem detail" in rec.message for rec in caplog.records)
         finally:
             server.shutdown()
             server.server_close()

@@ -292,6 +292,27 @@ class TestAdvisorIgnore:
         ranked = rank_files(["src/auth.py"], read_fn=bad)
         assert ranked[0].priority == 5  # still matched on "auth" in path
 
+    def test_double_star_ignore_regex_compiled_once_per_rank(self, monkeypatch):
+        import advisor.rank as rank_module
+
+        calls = 0
+        real = rank_module._double_star_to_regex
+
+        def counted(pattern: str):
+            nonlocal calls
+            calls += 1
+            return real(pattern)
+
+        monkeypatch.setattr(rank_module, "_double_star_to_regex", counted)
+
+        ranked = rank_files(
+            ["src/a.py", "src/nested/b.py", "tests/c.py"],
+            ignore_patterns=["src/**/*.py"],
+        )
+
+        assert [r.path for r in ranked] == ["tests/c.py"]
+        assert calls == 1
+
 
 class TestLanguageAwareKeywords:
     """E2 — per-language keyword sets extend the core priority map."""
