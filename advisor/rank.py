@@ -445,7 +445,7 @@ def _compile_ignore_patterns(patterns: list[str]) -> tuple[_IgnorePatternMatcher
             try:
                 recursive_re = _double_star_to_regex(pattern)
             except re.error:
-                recursive_re = re.compile(r"(?!)")
+                recursive_re = re.compile(r"$.^")
         compiled.append(
             _IgnorePatternMatcher(
                 pattern=pattern,
@@ -457,7 +457,10 @@ def _compile_ignore_patterns(patterns: list[str]) -> tuple[_IgnorePatternMatcher
     return tuple(compiled)
 
 
-def _matches_compiled_pattern(file_path: str, matchers: tuple[_IgnorePatternMatcher, ...]) -> bool:
+def _matches_compiled_pattern(
+    file_path: str | PurePath,
+    matchers: tuple[_IgnorePatternMatcher, ...],
+) -> bool:
     """Check if a file path matches any glob pattern.
 
     Supports:
@@ -470,7 +473,7 @@ def _matches_compiled_pattern(file_path: str, matchers: tuple[_IgnorePatternMatc
     """
     if not matchers:
         return False
-    path = PurePath(file_path)
+    path = file_path if isinstance(file_path, PurePath) else PurePath(file_path)
     # Normalize path separators: glob patterns always use ``/`` (including
     # user-authored ``.advisorignore`` entries), but ``str(PurePath)`` uses
     # the OS separator — ``\`` on Windows. Without normalization,
@@ -503,16 +506,14 @@ def _matches_compiled_pattern(file_path: str, matchers: tuple[_IgnorePatternMatc
         # or full-path strategies above, not as directory components,
         # otherwise a single dir named `foo.py/` would shadow every file
         # beneath it.
-        if matcher.bare_component and any(
-            fnmatch.fnmatch(part, pattern.rstrip("/")) for part in path.parts
-        ):
+        if matcher.bare_component and any(fnmatch.fnmatch(part, pattern) for part in path.parts):
             return True
     return False
 
 
 def _matches_any_pattern(file_path: str, patterns: list[str]) -> bool:
     """Compatibility wrapper for tests/importers that pass raw patterns."""
-    return _matches_compiled_pattern(file_path, _compile_ignore_patterns(patterns))
+    return _matches_compiled_pattern(PurePath(file_path), _compile_ignore_patterns(patterns))
 
 
 def _merged_keywords_for(language: str | None) -> dict[int, tuple[str, ...]]:
@@ -736,7 +737,7 @@ def rank_files(
             p.name.endswith(s) for s in (".min.js", ".min.mjs", ".min.cjs", ".min.css")
         ):
             continue
-        if _matches_compiled_pattern(fp, patterns):
+        if _matches_compiled_pattern(p, patterns):
             continue
         kept_paths.append(fp)
 
