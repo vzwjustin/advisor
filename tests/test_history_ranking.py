@@ -195,6 +195,41 @@ class TestRankFilesHistoryBoost:
         combined = " ".join(boosted[0].reasons)
         assert "3 findings in last 90d" in combined
 
+    def test_repo_relative_history_key_matches_absolute_scan_path(self, tmp_path: Path) -> None:
+        src = tmp_path / "src"
+        src.mkdir()
+        f = src / "util.py"
+        f.write_text("# stub\n")
+        boosted = rank_files(
+            [str(f)],
+            read_fn=lambda p: Path(p).read_text(),
+            history_scores={"src/util.py": 5.0},
+            history_counts={"src/util.py": 2},
+        )
+
+        assert boosted[0].priority == 2
+        combined = " ".join(boosted[0].reasons)
+        assert "repeat offender" in combined
+        assert "2 findings in last 90d" in combined
+
+    def test_basename_history_key_does_not_boost_absolute_siblings(self, tmp_path: Path) -> None:
+        src = tmp_path / "src"
+        tests = tmp_path / "tests"
+        src.mkdir()
+        tests.mkdir()
+        first = src / "util.py"
+        second = tests / "util.py"
+        first.write_text("# stub\n")
+        second.write_text("# stub\n")
+
+        ranked = rank_files(
+            [str(first), str(second)],
+            read_fn=lambda p: Path(p).read_text(),
+            history_scores={"util.py": 5.0},
+        )
+
+        assert all("repeat offender" not in r.reasons for r in ranked)
+
 
 @settings(
     deadline=1500, max_examples=30, suppress_health_check=[HealthCheck.function_scoped_fixture]

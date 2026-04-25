@@ -32,6 +32,7 @@ UTC = timezone.utc
 HISTORY_DIR_NAME = ".advisor"
 HISTORY_FILE_NAME = "history.jsonl"
 HISTORY_SCHEMA_VERSION = "1.0"
+_IS_WINDOWS = sys.platform == "win32"
 
 # Severity weights for repeat-offender scoring. Higher-severity findings
 # should dominate the per-file score so a file with one CRITICAL
@@ -89,23 +90,21 @@ def _lock_exclusive(fh: IO[str]) -> None:
     ``.write`` typically flushes short records atomically, so the
     unlocked path is still well-behaved in practice.
     """
-    # Branch on platform so mypy can see both paths — ``fcntl`` is
-    # unconditionally importable on POSIX and unconditionally absent on
-    # Windows; the reverse holds for ``msvcrt``.
-    if sys.platform != "win32":
+    if not _IS_WINDOWS:
         try:
             import fcntl
         except ImportError:
             return
+        flock = getattr(fcntl, "flock", None)
+        lock_ex = getattr(fcntl, "LOCK_EX", None)
+        if not callable(flock) or not isinstance(lock_ex, int):
+            return
         try:
-            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            flock(fh.fileno(), lock_ex)
         except OSError:
             pass
         return
-    # Windows branch — mypy on POSIX considers this unreachable because
-    # ``sys.platform`` is a literal in the stubs. The runtime still
-    # executes it on actual Windows.
-    _lock_windows(fh)  # type: ignore[unreachable]
+    _lock_windows(fh)
 
 
 def _unlock_exclusive(fh: IO[str]) -> None:
@@ -121,14 +120,18 @@ def _unlock_exclusive(fh: IO[str]) -> None:
 
 
 def _lock_windows(fh: IO[str]) -> None:
-    if sys.platform != "win32":  # pragma: no cover - platform guard
+    if not _IS_WINDOWS:  # pragma: no cover - platform guard
         return
-    try:  # type: ignore[unreachable]
+    try:
         import msvcrt
     except ImportError:
         return
+    locking = getattr(msvcrt, "locking", None)
+    lk_lock = getattr(msvcrt, "LK_LOCK", None)
+    if not callable(locking) or not isinstance(lk_lock, int):
+        return
     try:
-        msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 0x7FFFFFFF)
+        locking(fh.fileno(), lk_lock, 0x7FFFFFFF)
     except OSError:
         pass
 

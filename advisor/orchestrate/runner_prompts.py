@@ -569,14 +569,14 @@ def build_runner_handoff_message(
     ``CONTEXT_PRESSURE``. The brief gives the incoming runner the minimum
     context it needs without replaying the full conversation.
     """
-    files_block = "\n".join(f"- {p}" for p in files_touched) if files_touched else "- (none yet)"
-    invariants_block = "\n".join(f"- {inv}" for inv in invariants) if invariants else "- (none)"
+    files_block = fence("\n".join(files_touched)) if files_touched else "- (none yet)"
+    invariants_block = fence("\n".join(invariants)) if invariants else "- (none)"
     remaining_block = (
-        "\n".join(f"- {fx}" for fx in remaining_fixes)
+        fence("\n".join(remaining_fixes))
         if remaining_fixes
         else "- (none — you're taking the verify pass)"
     )
-    extra = f"\n\n## Extra context\n{extra_context.strip()}" if extra_context.strip() else ""
+    extra = f"\n\n## Extra context\n{fence(extra_context.strip())}" if extra_context.strip() else ""
     body = (
         f"## Handoff from runner-{outgoing_runner_id}\n\n"
         f"You are runner-{new_runner_id}. runner-{outgoing_runner_id} is "

@@ -25,6 +25,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path, PurePath
+from typing import TypeVar
 
 # Bytes scanned per file for keyword matching — covers typical import block + first function/class.
 CONTENT_SCAN_LIMIT = 2000
@@ -301,6 +302,7 @@ SKIP_EXTENSIONS = frozenset(
 )
 
 ADVISORIGNORE_FILENAME = ".advisorignore"
+T = TypeVar("T")
 
 
 @dataclass(frozen=True, slots=True)
@@ -736,48 +738,88 @@ def rank_files(
 _HISTORY_BOOST_THRESHOLD = 1.5
 
 
+def _normalize_history_key(path: str) -> str:
+    """Normalize a history path key for exact/suffix matching.
+
+    History entries are commonly repo-relative POSIX paths, while the
+    scanner often ranks absolute OS-native paths. Keep normalization
+    lexical only: no resolving, no filesystem access, no basename fallback.
+    """
+    normalized = path.strip().strip("`").replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized
+
+
+def _is_repo_relative_history_key(key: str) -> bool:
+    """True when ``key`` looks like a multi-component repo-relative path."""
+    if "/" not in key:
+        return False
+    if key.startswith("/"):
+        return False
+    if re.match(r"^[A-Za-z]:/", key):
+        return False
+    return True
+
+
+def _history_values_for(file_path: str, values_by_path: dict[str, T]) -> list[T]:
+    """Return history values matching ``file_path``.
+
+    Exact aliases are checked first. Repo-relative keys such as
+    ``src/auth.py`` also match absolute scanner paths that end with that
+    component sequence. Bare basenames intentionally do not match absolute
+    paths: ``util.py`` is ambiguous in a repo with multiple files by that
+    name and used to boost every sibling.
+    """
+    path_norm = _normalize_history_key(file_path)
+    exact_candidates = tuple(
+        dict.fromkeys(
+            (
+                file_path,
+                str(Path(file_path)),
+                Path(file_path).as_posix(),
+                path_norm,
+            )
+        )
+    )
+    matches: list[T] = []
+    for candidate in exact_candidates:
+        if candidate in values_by_path:
+            matches.append(values_by_path[candidate])
+
+    for key, value in values_by_path.items():
+        key_norm = _normalize_history_key(key)
+        if not _is_repo_relative_history_key(key_norm):
+            continue
+        if path_norm == key_norm or path_norm.endswith(f"/{key_norm}"):
+            matches.append(value)
+    return matches
+
+
 def _history_boost(file_path: str, history_scores: dict[str, float]) -> float:
     """Return the history score for ``file_path`` above the boost threshold.
 
-    The caller may pass scores keyed by absolute path, repo-relative path,
-    or filename-only — we check all three. Returns 0.0 when no score
-    meets the boost threshold.
+    The caller may pass scores keyed by absolute path or repo-relative
+    path. Repo-relative keys match absolute scanner paths by path suffix
+    on a component boundary. Filename-only keys match only filename-only
+    input paths, avoiding ambiguous boosts across same-named siblings.
+    Returns 0.0 when no score meets the boost threshold.
     """
-    candidates = (
-        file_path,
-        str(Path(file_path)),
-        Path(file_path).as_posix(),
-        Path(file_path).name,
-    )
-    best = 0.0
-    for k in candidates:
-        score = history_scores.get(k, 0.0)
-        if score > best:
-            best = score
+    best = max(_history_values_for(file_path, history_scores), default=0.0)
     if best < _HISTORY_BOOST_THRESHOLD:
         return 0.0
     return best
 
 
 def _history_count_for(file_path: str, history_counts: dict[str, int]) -> int:
-    """Return the max count across alias keys for ``file_path`` (abs, posix, name).
+    """Return the max count across exact or repo-relative keys for ``file_path``.
 
-    Takes the max (not the sum) so a file that appears under multiple
-    alias keys — e.g. absolute and repo-relative — is counted once rather
-    than inflated.
+    Takes the max (not the sum) so a file that appears under multiple alias
+    keys — e.g. absolute and repo-relative — is counted once rather than
+    inflated. Bare basenames do not match absolute paths because they are
+    ambiguous across same-named siblings.
     """
-    candidates = (
-        file_path,
-        str(Path(file_path)),
-        Path(file_path).as_posix(),
-        Path(file_path).name,
-    )
-    best = 0
-    for k in candidates:
-        n = history_counts.get(k, 0)
-        if n > best:
-            best = n
-    return best
+    return max(_history_values_for(file_path, history_counts), default=0)
 
 
 def _read_contents_parallel(

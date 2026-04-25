@@ -78,7 +78,7 @@ from .orchestrate import (
     default_team_config,
     render_pipeline,
 )
-from .rank import rank_files
+from .rank import load_advisorignore, rank_files
 from .sarif import findings_to_sarif
 
 # Top-level schema version for JSON outputs. Bump when the shape of any
@@ -649,6 +649,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
     ranked = rank_files(
         paths or [],
         read_fn=_read_head,
+        ignore_patterns=load_advisorignore(target),
         extra_keywords=preset_extras,
         history_scores=history_bonus,
         history_counts=history_count_map,

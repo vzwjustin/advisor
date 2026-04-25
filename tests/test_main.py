@@ -203,6 +203,29 @@ class TestCmdPlanJson:
         assert data["task_count"] >= 1
         assert all("file_path" in t and "priority" in t for t in data["tasks"])
 
+    def test_plan_json_respects_advisorignore(self, tmp_path, capsys):
+        from advisor.__main__ import cmd_plan
+
+        (tmp_path / "auth.py").write_text("password = 'x'\n")
+        (tmp_path / "secrets.py").write_text("api_key = 'y'\n")
+        (tmp_path / ".advisorignore").write_text("secrets.py\n")
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "plan",
+                str(tmp_path),
+                "--json",
+                "--min-priority",
+                "1",
+            ]
+        )
+        assert cmd_plan(args) == 0
+        import json
+
+        data = json.loads(capsys.readouterr().out)
+        names = sorted(Path(t["file_path"]).name for t in data["tasks"])
+        assert names == ["auth.py"]
+
 
 class TestCmdStatusStrict:
     """``advisor status --strict`` returns 3 when install is unhealthy."""
