@@ -10,6 +10,8 @@ Pure string-in, string-out. No I/O.
 
 from __future__ import annotations
 
+import re
+
 from .verify import Finding
 
 _SEVERITY_ORDER = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
@@ -17,6 +19,7 @@ _SEVERITY_ORDER = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
 # GitHub rejects PR/issue bodies and comments above 65,536 characters with a
 # 422 error. Leave headroom for the trailing truncation notice.
 _GITHUB_BODY_LIMIT = 60_000
+_DETAILS_TAG_RE = re.compile(r"<(/?)details\b", re.IGNORECASE)
 
 
 def _escape_table_cell(text: str) -> str:
@@ -38,11 +41,13 @@ def _neutralize_details(text: str) -> str:
     When finding descriptions or fixes are interpolated into a
     ``<details>``-wrapped body, a ``</details>`` substring inside them
     closes our outer block early, cascading into subsequent findings and
-    breaking the GitHub PR render. We replace the angle brackets with
-    zero-width-escaped equivalents so the text still reads as intended
-    but the tag no longer parses.
+    breaking the GitHub PR render. We replace the leading ``<`` with the
+    HTML entity ``&lt;`` so GitHub renders the literal text and never
+    parses the tag — robust under copy-paste and across renderers,
+    unlike the zero-width-space trick which depends on the parser
+    rejecting non-letter tag-name starts.
     """
-    return text.replace("</details>", "<​/details>").replace("<details>", "<​details>")
+    return _DETAILS_TAG_RE.sub(lambda m: f"&lt;{m.group(1)}details", text)
 
 
 def format_pr_comment(findings: list[Finding]) -> str:
@@ -86,7 +91,7 @@ def format_pr_comment(findings: list[Finding]) -> str:
     rendered_count = 0
     truncated = False
     for f in findings:
-        title = _escape_table_cell(f.description)[:100] or "(no description)"
+        title = _neutralize_details(_escape_table_cell(f.description))[:100] or "(no description)"
         block: list[str] = [
             (
                 f"<details><summary><strong>[{f.severity}]</strong> "
@@ -113,7 +118,7 @@ def format_pr_comment(findings: list[Finding]) -> str:
         # Posting a truncated comment with a "run locally" pointer is more
         # useful than a 422 from the API.
         block_chars = sum(len(line) + 1 for line in block)
-        if projected_chars + block_chars > _GITHUB_BODY_LIMIT and rendered_count > 0:
+        if projected_chars + block_chars > _GITHUB_BODY_LIMIT:
             truncated = True
             break
         lines.extend(block)

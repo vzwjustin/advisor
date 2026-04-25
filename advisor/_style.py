@@ -35,6 +35,20 @@ def _compute_supports_color() -> bool:
     return True
 
 
+def _stream_supports_unicode(stream: IO[str] | None) -> bool:
+    """True when ``stream`` can encode the glyphs used by styled helpers."""
+    if stream is None:
+        return True
+    encoding = getattr(stream, "encoding", None)
+    if not encoding:
+        return True
+    try:
+        "✓✗⚠ℹ💡→━┏┓┗┛┃↻·".encode(encoding)
+    except (LookupError, UnicodeEncodeError):
+        return False
+    return True
+
+
 # Cached env snapshot used by ``supports_color``. Each styled span on a
 # rendered pipeline can call this dozens of times; re-reading the two
 # env vars in tight loops is wasteful. The cache is invalidated either
@@ -73,7 +87,8 @@ def supports_color(stream: IO[str] | None = None) -> bool:
     relevant env vars change (covers normal process mutation without
     requiring callers to remember :func:`reset_color_cache`).
     """
-    del stream  # reserved for per-stream policy
+    if not _stream_supports_unicode(stream):
+        return False
     global _CACHED_SUPPORT, _CACHED_ENV_SNAPSHOT
     snap = _env_snapshot()
     if _CACHED_SUPPORT is None or snap != _CACHED_ENV_SNAPSHOT:
@@ -114,6 +129,7 @@ def banner(text: str, width: int = 50, stream: IO[str] | None = None) -> str:
     border always encloses the text — otherwise a 60-char title inside a
     width=50 box would overflow the border, producing a broken banner.
     """
+    stream = stream if stream is not None else sys.stdout
     if not supports_color(stream):
         return f"== {text} =="
     # +4 accounts for the two-space pad on each side of the centered text.
@@ -129,7 +145,8 @@ def banner(text: str, width: int = 50, stream: IO[str] | None = None) -> str:
 
 def success_box(text: str, stream: IO[str] | None = None) -> str:
     """Draw a green success box with checkmark."""
-    mark = glyph("✓", "[OK]")
+    stream = stream if stream is not None else sys.stdout
+    mark = glyph("✓", "[OK]", stream=stream)
     if not supports_color(stream):
         return f"{mark} {text}"
     return f"{paint(mark, 'green', 'bold')} {paint(text, 'green')}"
@@ -137,7 +154,8 @@ def success_box(text: str, stream: IO[str] | None = None) -> str:
 
 def info_box(text: str, stream: IO[str] | None = None) -> str:
     """Draw a blue info box with info symbol."""
-    mark = glyph("ℹ", "[i]")
+    stream = stream if stream is not None else sys.stdout
+    mark = glyph("ℹ", "[i]", stream=stream)
     if not supports_color(stream):
         return f"{mark} {text}"
     return f"{paint(mark, 'blue', 'bold')} {paint(text, 'blue')}"
@@ -145,7 +163,8 @@ def info_box(text: str, stream: IO[str] | None = None) -> str:
 
 def warning_box(text: str, stream: IO[str] | None = None) -> str:
     """Draw a yellow warning box with warning symbol."""
-    mark = glyph("⚠", "[!]")
+    stream = stream if stream is not None else sys.stdout
+    mark = glyph("⚠", "[!]", stream=stream)
     if not supports_color(stream):
         return f"{mark} {text}"
     return f"{paint(mark, 'yellow', 'bold')} {paint(text, 'yellow')}"
@@ -153,7 +172,8 @@ def warning_box(text: str, stream: IO[str] | None = None) -> str:
 
 def error_box(text: str, stream: IO[str] | None = None) -> str:
     """Draw a red error line with an error glyph — symmetric with success/info/warning_box."""
-    mark = glyph("✗", "[x]")
+    stream = stream if stream is not None else sys.stdout
+    mark = glyph("✗", "[x]", stream=stream)
     if not supports_color(stream):
         return f"{mark} {text}"
     return f"{paint(mark, 'red', 'bold')} {paint(text, 'red')}"
@@ -161,7 +181,8 @@ def error_box(text: str, stream: IO[str] | None = None) -> str:
 
 def tip(text: str, stream: IO[str] | None = None) -> str:
     """Inline hint line — dim body with a bold cyan lightbulb lead."""
-    mark = glyph("💡", "tip:")
+    stream = stream if stream is not None else sys.stdout
+    mark = glyph("💡", "tip:", stream=stream)
     if not supports_color(stream):
         return f"  {mark} {text}"
     return f"  {paint(mark, 'cyan', 'bold', stream=stream)} {dim(text, stream=stream)}"
@@ -169,7 +190,8 @@ def tip(text: str, stream: IO[str] | None = None) -> str:
 
 def cta(action: str, description: str = "", stream: IO[str] | None = None) -> str:
     """Call-to-action row — bold primary `action` plus optional dim description."""
-    bullet = glyph("→", ">")
+    stream = stream if stream is not None else sys.stdout
+    bullet = glyph("→", ">", stream=stream)
     if not supports_color(stream):
         sep = "  " if description else ""
         return f"  {bullet} {action}{sep}{description}"

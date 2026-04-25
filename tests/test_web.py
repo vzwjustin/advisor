@@ -57,11 +57,13 @@ class TestBuildAppState:
             tmp_path,
             file_types="*.ts",
             min_priority=5,
+            max_runners=7,
             advisor_model="sonnet",
             runner_model="haiku",
         )
         assert state.default_file_types == "*.ts"
         assert state.default_min_priority == 5
+        assert state.default_max_runners == 7
         assert state.default_advisor_model == "sonnet"
         assert state.default_runner_model == "haiku"
 
@@ -122,6 +124,11 @@ class TestPlanPayload:
         with pytest.raises(ValueError):
             _plan_payload(state, {"file_types": ["*.py,../etc/*"]})
 
+    def test_rejects_windows_drive_file_type_pattern(self, tmp_path):
+        state = build_app_state(tmp_path, min_priority=1)
+        with pytest.raises(ValueError, match="unsafe file_types pattern"):
+            _plan_payload(state, {"file_types": ["C:\\*.py"]})
+
 
 class TestCostPayload:
     def test_returns_null_estimate_when_empty(self, tmp_path):
@@ -138,6 +145,15 @@ class TestCostPayload:
         assert payload["estimate"] is not None
         assert "cost_usd_min" in payload["estimate"]
         assert "cost_usd_max" in payload["estimate"]
+
+    def test_cost_payload_honors_max_runners(self, tmp_path):
+        for i in range(4):
+            (tmp_path / f"auth{i}.py").write_text("password = 'x'\n" * 10)
+        state = build_app_state(tmp_path, min_priority=1)
+        payload = _cost_payload(state, {"max_runners": ["2"]})
+
+        assert payload["task_count"] == 4
+        assert payload["estimate"]["runner_count"] == 2
 
 
 class TestHistoryPayload:
@@ -265,6 +281,7 @@ class TestTargetPayload:
         assert set(payload["defaults"]) == {
             "file_types",
             "min_priority",
+            "max_runners",
             "advisor_model",
             "runner_model",
         }
@@ -430,6 +447,9 @@ class TestStaticUiState:
     def test_plan_and_cost_json_parse_errors_are_handled(self):
         assert "data = await r.json();" in APP_JS
         assert "let data;" in APP_JS
+
+    def test_cost_request_sends_max_runners(self):
+        assert "qs.set('max_runners', form.get('max_runners') || '5');" in APP_JS
 
 
 # ---------------------------------------------------------------------------

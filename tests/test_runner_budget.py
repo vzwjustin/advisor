@@ -109,6 +109,13 @@ class TestUpdateBudget:
         b = update_budget(b, message_text="SCOPE: b.py · reading\n...")
         assert b.files_read == ("a.py", "b.py")
 
+    def test_files_read_deduped_after_path_normalization(self) -> None:
+        b = new_budget("runner-1")
+        b = update_budget(b, message_text="SCOPE: ./src\\auth.py · reading\n...")
+        b = update_budget(b, message_text="SCOPE: src/auth.py · confirming\n...")
+        b = update_budget(b, message_text="no anchor", file_read="src\\auth.py:42")
+        assert b.files_read == ("src/auth.py",)
+
     def test_fix_counter_bumps_only_on_flag(self) -> None:
         b = new_budget("runner-1")
         b = update_budget(b, message_text="done")

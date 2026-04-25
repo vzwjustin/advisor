@@ -251,6 +251,7 @@ SKIP_DIRS = frozenset(
     {
         "__pycache__",
         "node_modules",
+        ".claude",
         ".git",
         ".venv",
         "venv",

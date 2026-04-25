@@ -236,6 +236,22 @@ class TestAuditToDict:
         assert rehydrated["fix_counts"]["runner-1"] == 1
         assert rehydrated["protocol_violations"][0].startswith("PROTOCOL_VIOLATION")
 
+    def test_preserves_rule_id_in_finding_json(self):
+        """audit --json is a handoff format for baseline/SARIF consumers."""
+        report = audit_transcript(
+            """### Finding 1
+- **File**: auth.py
+- **Severity**: HIGH
+- **Description**: d
+- **Evidence**: e
+- **Fix**: f
+- **Rule**: custom/rule
+""",
+            _mk_checkpoint(batch_files=[["auth.py"]]),
+        )
+        payload = audit_to_dict(report)
+        assert payload["findings_in_batch"][0]["rule_id"] == "custom/rule"
+
 
 class TestFormatAuditReport:
     def test_clean_run_renders_no_findings_sections_with_none(self):

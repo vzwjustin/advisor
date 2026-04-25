@@ -36,6 +36,15 @@ class TestRankFiles:
         assert "src/app.py" in paths
         assert len(paths) == 1
 
+    def test_skips_claude_worktrees(self):
+        files = [
+            ".claude/worktrees/copy/advisor/rank.py",
+            "advisor/rank.py",
+        ]
+        ranked = rank_files(files)
+
+        assert [r.path for r in ranked] == ["advisor/rank.py"]
+
     def test_returns_empty_for_empty_input(self):
         assert rank_files([]) == []
 

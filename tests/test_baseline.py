@@ -70,6 +70,18 @@ class TestFilterAgainstBaseline:
         assert len(new) == 1
         assert dropped == []
 
+    def test_path_aliases_match_without_changing_line_identity(self) -> None:
+        baseline = findings_to_entries([_f("src/auth.py:10", "issue")])
+        current = [_f("./src\\auth.py:10", "issue")]
+        new, dropped = filter_against_baseline(current, baseline)
+        assert new == []
+        assert dropped == current
+
+        moved = [_f("src/auth.py:11", "issue")]
+        new, dropped = filter_against_baseline(moved, baseline)
+        assert new == moved
+        assert dropped == []
+
 
 class TestDiff:
     def test_partitions_are_disjoint_and_complete(self) -> None:
@@ -88,4 +100,12 @@ class TestDiff:
         diff = diff_against_baseline(findings, [])
         assert diff.new == findings
         assert diff.persisting == []
+        assert diff.fixed == []
+
+    def test_path_aliases_are_persisting(self) -> None:
+        baseline = findings_to_entries([_f("src/auth.py:10", "old1")])
+        current = [_f("./src\\auth.py:10", "old1")]
+        diff = diff_against_baseline(current, baseline)
+        assert diff.new == []
+        assert diff.persisting == current
         assert diff.fixed == []

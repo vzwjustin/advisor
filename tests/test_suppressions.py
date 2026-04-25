@@ -163,6 +163,19 @@ class TestApply:
         assert kept[0].file_path == "y.py"
         assert len(dropped) == 1
 
+    def test_exact_file_match_normalizes_finding_paths(self) -> None:
+        supp = (
+            Suppression(
+                rule_id="custom/rule",
+                reason="r",
+                file="src/app.py",
+            ),
+        )
+        findings = [_f(path="./src\\app.py:42", rule_id="custom/rule")]
+        kept, dropped = apply_suppressions(findings, supp)
+        assert kept == []
+        assert len(dropped) == 1
+
     def test_expired_suppression_does_not_drop(self) -> None:
         supp = (
             Suppression(
@@ -187,6 +200,19 @@ class TestApply:
             ),
         )
         findings = [_f(path="tests/unit/x.py", rule_id="custom/rule")]
+        kept, dropped = apply_suppressions(findings, supp)
+        assert kept == []
+        assert len(dropped) == 1
+
+    def test_file_glob_match_normalizes_finding_paths(self) -> None:
+        supp = (
+            Suppression(
+                rule_id="custom/rule",
+                reason="r",
+                file_glob="tests/**/*.py",
+            ),
+        )
+        findings = [_f(path="tests\\unit\\x.py:9", rule_id="custom/rule")]
         kept, dropped = apply_suppressions(findings, supp)
         assert kept == []
         assert len(dropped) == 1

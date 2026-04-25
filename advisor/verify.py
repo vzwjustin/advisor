@@ -227,6 +227,8 @@ def _parse_blocks(text: str) -> list[Finding]:
     findings: list[Finding] = []
     current: dict[str, str] = {}
     active_key: str | None = None
+    # "list" or "plain"; keeps body labels from stealing slots.
+    field_style: str | None = None
     in_header_block: bool = False  # True once we see any ### Finding header
 
     def _flush() -> None:
@@ -258,6 +260,7 @@ def _parse_blocks(text: str) -> list[Finding]:
                     _flush()
                 current = {}
                 active_key = None
+                field_style = None
                 in_header_block = True
                 continue
             # Otherwise we're mid-body for a still-incomplete block — treat
@@ -268,22 +271,26 @@ def _parse_blocks(text: str) -> list[Finding]:
             continue
 
         matched = _match_key(stripped)
-        # A key-label only OPENS a new field if the line is a proper list
-        # item (starts with one of the recognized markers — ``- `` or ``* ``).
-        # Bold labels embedded in body prose — e.g. a narrative that happens
-        # to contain "**Fix**: something" inside an Evidence value — must NOT
-        # steal the field slot. We still match them (``matched is not None``)
-        # so the branch below can treat them as continuation of the active
-        # field rather than dropping to the generic continuation branch, which
-        # would double-count the label.
+        # A key-label opens a new field when it is a proper list item, or when
+        # the block started in the plain ``**Key**:`` form. Plain labels inside
+        # a list-style block remain narrative text, so an Evidence value that
+        # includes ``**Fix**: ...`` does not steal the real fix slot.
         is_list_item = stripped.startswith(_LIST_MARKERS)
+        is_plain_item = stripped.startswith("**")
+        opens_plain_block = (
+            matched is not None
+            and is_plain_item
+            and (field_style == "plain" or (field_style is None and not current))
+        )
 
-        if matched is not None and is_list_item:
+        if matched is not None and (is_list_item or opens_plain_block):
             key, value = matched
             if key not in current:
                 # New field for this block — record it.
                 current[key] = value
                 active_key = key
+                if field_style is None:
+                    field_style = "list" if is_list_item else "plain"
             elif key == "file_path" and not in_header_block:
                 # Safety-net: second file_path signals a new block in
                 # header-less output. Only active when no ### Finding headers
@@ -292,6 +299,7 @@ def _parse_blocks(text: str) -> list[Finding]:
                 _flush()
                 current = {key: value}
                 active_key = key
+                field_style = "list" if is_list_item else "plain"
             else:
                 # Key already set — this label text appeared inside a body
                 # value. Treat as continuation of the active field.

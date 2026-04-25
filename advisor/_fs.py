@@ -40,7 +40,7 @@ def safe_rglob_paths(target: Path, pattern: str) -> list[str]:
     try:
         resolved_target = target.resolve()
         iterator = resolved_target.rglob(pattern)
-    except (OSError, ValueError):
+    except (OSError, ValueError, NotImplementedError):
         return []
 
     results: list[str] = []

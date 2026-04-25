@@ -40,6 +40,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path, PurePath
 
+from ._fs import normalize_path
 from .rank import _double_star_to_regex
 from .verify import Finding
 
@@ -69,9 +70,13 @@ class Suppression:
     def matches(self, finding_path: str, finding_rule_id: str) -> bool:
         if finding_rule_id != self.rule_id:
             return False
-        if self.file is not None and finding_path != self.file:
+        normalized_finding_path = normalize_path(finding_path)
+        if self.file is not None and normalized_finding_path != normalize_path(self.file):
             return False
-        if self.file_glob is not None and not _matches_glob(finding_path, self.file_glob):
+        if self.file_glob is not None and not _matches_glob(
+            normalized_finding_path,
+            normalize_path(self.file_glob),
+        ):
             return False
         return True
 

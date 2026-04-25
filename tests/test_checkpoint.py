@@ -123,6 +123,25 @@ class TestSaveAndLoad:
         with pytest.raises(ValueError):
             load_checkpoint(tmp_path, "missing")
 
+    def test_run_id_rejects_path_separators(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError):
+            checkpoint_path(tmp_path, "..\\..\\victim")
+
+    def test_save_rejects_path_traversal_run_id(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError):
+            save_checkpoint(
+                tmp_path,
+                run_id="..\\..\\victim",
+                tasks=_tasks(),
+                batches=None,
+                team_name="t",
+                file_types="*.py",
+                min_priority=3,
+                max_runners=5,
+                advisor_model="opus",
+                runner_model="sonnet",
+            )
+
 
 class TestListCheckpoints:
     def test_empty_when_no_dir(self, tmp_path: Path) -> None:
