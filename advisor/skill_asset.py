@@ -300,6 +300,12 @@ before finalizing. Opus CONFIRMs or sends REVISE.
 
 ### 6. Final report + shutdown
 
+**HOLD until Opus's final report arrives.** Do NOT send `shutdown_request`
+to any runner (or the advisor) until the advisor has sent its final
+structured report to you. Sending shutdown early creates a dead dispatch —
+Opus may still be routing work when you pull the plug. Wait for the
+`## Summary` block, then shut down.
+
 When Opus sends its final structured report to team-lead, the work is
 done. Shut down individually (broadcast to `"*"` with structured
 messages fails):
