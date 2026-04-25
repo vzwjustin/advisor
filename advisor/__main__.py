@@ -20,6 +20,7 @@ from pathlib import Path
 from . import _style
 from ._fs import atomic_write_text as _atomic_write
 from ._fs import read_head as _read_head
+from ._fs import validate_file_types
 from .audit import AuditReport, audit_to_dict, audit_transcript, format_audit_report
 from .checkpoint import (
     Checkpoint,
@@ -312,6 +313,11 @@ def _safe_rglob(target: Path, pattern: str) -> tuple[list[str] | None, str | Non
     patterns = [p.strip() for p in pattern.split(",") if p.strip()]
     if not patterns:
         return [], None
+
+    try:
+        validate_file_types(pattern)
+    except ValueError as exc:
+        return None, f"invalid --file-types pattern: {exc}"
 
     try:
         # Resolve before walking — `Path.rglob` on an unresolved path

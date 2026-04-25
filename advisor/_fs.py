@@ -14,6 +14,40 @@ from pathlib import Path
 from .rank import CONTENT_SCAN_LIMIT
 
 
+def validate_file_types(pattern: str) -> None:
+    """Reject path-traversal, NUL bytes, or absolute-path patterns in user-supplied
+    file_types globs.
+
+    ``..`` blocks directory traversal (``../../../etc/*.conf``).
+    A leading ``/`` or ``\\`` blocks absolute paths on POSIX and Windows.
+    A leading drive letter (``C:``) blocks absolute Windows paths whose
+    rejection would otherwise depend on ``pathlib.rglob`` raising — and
+    that behavior was only introduced in Python 3.13's pathlib rewrite,
+    so older Pythons (and POSIX runtimes that treat ``C:\\*.py`` as a
+    literal filename) would silently accept it.
+
+    Interior ``/`` is allowed so recursive globs like ``**/*.py`` work.
+
+    Each comma-separated sub-pattern is validated independently so an
+    input like ``*.py,../etc/*`` fails on the second piece rather than
+    silently slipping through because the whole string does not start
+    with a suspicious character.
+    """
+    for piece in pattern.split(","):
+        piece = piece.strip()
+        if not piece:
+            continue
+        if "\x00" in piece:
+            raise ValueError(f"file_types pattern contains NUL byte: {piece!r}")
+        if (
+            ".." in piece
+            or piece.startswith("/")
+            or piece.startswith("\\")
+            or (len(piece) >= 2 and piece[1] == ":" and piece[0].isalpha())
+        ):
+            raise ValueError(f"unsafe file_types pattern: {piece!r}")
+
+
 def read_head(path: str, limit: int = CONTENT_SCAN_LIMIT) -> str:
     """Return the first ``limit`` characters of ``path`` or ``""`` on any OS error.
 
