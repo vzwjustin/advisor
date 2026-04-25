@@ -128,7 +128,8 @@ print('done')
 **NEVER do these:**
 - ❌ `advisor prompt advisor ./src` (CLI dumps prompt text)
 - ❌ Use kwarg `user_request` (it doesn't exist — use `context`)
-- ❌ Pass Python code as the Agent prompt — the prompt must be the built string, not the code that builds it
+- ❌ Pass Python code as the Agent prompt — the prompt must be the built string,
+  not the code that builds it
 
 **Stale-mailbox recovery (if you must re-spawn after a bad spawn):**
 If you sent a `shutdown_request` to a badly-spawned advisor and need to

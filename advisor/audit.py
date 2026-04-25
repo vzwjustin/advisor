@@ -211,7 +211,8 @@ def audit_transcript(transcript: str, cp: Checkpoint) -> AuditReport:
     for runner, count in sorted(fix_counts.items()):
         if count > cap:
             cap_overruns.append(
-                f"{runner}: observed {count} fix assignments (cap={cap}) — rotation was late or missed"
+                f"{runner}: observed {count} fix assignments (cap={cap}) "
+                "— rotation was late or missed"
             )
 
     # Context-pressure: per-runner first-mention order + raw total count.

@@ -634,7 +634,8 @@ def cmd_plan(args: argparse.Namespace) -> int:
     if preset_name == "":
         print(
             _style.error_box(
-                "--preset requires a non-empty value; run 'advisor presets' to list available packs",
+                "--preset requires a non-empty value; "
+                "run 'advisor presets' to list available packs",
                 stream=sys.stderr,
             ),
             file=sys.stderr,
@@ -2016,7 +2017,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         default="",
         metavar="FILE",
-        help="Write the JSON plan to FILE instead of stdout (requires --json; ignored with a warning otherwise)",
+        help=(
+            "Write the JSON plan to FILE instead of stdout "
+            "(requires --json; ignored with a warning otherwise)"
+        ),
     )
     p_plan.add_argument(
         "--quiet",

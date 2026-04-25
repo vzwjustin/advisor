@@ -153,7 +153,9 @@ def _check_install(
                     Check(
                         f"install-{name}",
                         "warn",
-                        f"{name} is outdated (installed: {installed_version}, available: {current_version}) — run: advisor install",
+                        f"{name} is outdated "
+                        f"(installed: {installed_version}, available: {current_version}) "
+                        "— run: advisor install",
                     )
                 )
             else:
