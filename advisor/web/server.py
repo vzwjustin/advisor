@@ -36,6 +36,7 @@ from urllib.parse import parse_qs, urlparse
 from .. import _style
 from .._fs import read_head as _read_head
 from .._fs import safe_rglob_paths as _safe_rglob
+from .._fs import validate_file_types as _validate_file_types
 from ..cost import estimate_cost
 from ..focus import FocusTask, create_focus_tasks
 from ..history import HISTORY_SCHEMA_VERSION, history_path, load_recent
@@ -120,33 +121,6 @@ def _first_int(qs: dict[str, list[str]], key: str, default: int, *, min_value: i
     if value < min_value:
         return max(default, min_value)
     return value
-
-
-def _validate_file_types(pattern: str) -> None:
-    """Reject path-traversal or absolute-path patterns in user-supplied file_types.
-
-    ``..`` blocks directory traversal (``../../../etc/*.conf``).
-    A leading ``/`` or ``\\`` blocks absolute paths on POSIX and Windows.
-    Interior ``/`` is allowed so recursive globs like ``**/*.py`` work.
-
-    Each comma-separated sub-pattern is validated independently so an
-    input like ``*.py,../etc/*`` fails on the second piece rather than
-    silently slipping through because the whole string does not start
-    with a suspicious character.
-    """
-    for piece in pattern.split(","):
-        piece = piece.strip()
-        if not piece:
-            continue
-        if "\x00" in piece:
-            raise ValueError(f"file_types pattern contains NUL byte: {piece!r}")
-        if (
-            ".." in piece
-            or piece.startswith("/")
-            or piece.startswith("\\")
-            or (len(piece) >= 2 and piece[1] == ":" and piece[0].isalpha())
-        ):
-            raise ValueError(f"unsafe file_types pattern: {piece!r}")
 
 
 def _rank_target(state: AppState, file_types: str, min_priority: int) -> list[FocusTask]:
