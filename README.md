@@ -1,5 +1,7 @@
 # advisor
 
+![advisor demo](assets/demo.gif)
+
 A one-command, Opus-led code review-and-fix pipeline for Claude Code. The
 advisor (Opus) goes first, does its own Glob+Grep discovery, ranks files
 P1–P5, decides how many Sonnet runners to spawn, and **writes a unique,
