@@ -353,6 +353,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
             return
+        except OSError:
+            # Filesystem races (deleted target, permission changes, stale
+            # symlink) are operational server failures. Keep the response
+            # generic while preserving details in logs.
+            logger.error("filesystem error serving %s\n%s", route, traceback.format_exc())
+            self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "internal server error")
         except Exception:
             # Full traceback goes to the server log so developers can
             # debug. The response body carries only a generic message —

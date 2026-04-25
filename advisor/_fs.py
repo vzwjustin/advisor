@@ -86,7 +86,7 @@ def safe_rglob_paths(target: Path, pattern: str) -> list[str]:
                 results.append(str(p))
         except (OSError, ValueError):
             continue
-    return results
+    return sorted(results)
 
 
 def atomic_write_text(

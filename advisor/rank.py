@@ -315,6 +315,16 @@ class RankedFile:
     reasons: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _IgnorePatternMatcher:
+    """Preprocessed matcher for one ``.advisorignore`` pattern."""
+
+    pattern: str
+    recursive_re: re.Pattern[str] | None = None
+    dir_pattern: str | None = None
+    bare_component: bool = False
+
+
 def load_advisorignore(base_dir: str | Path) -> list[str]:
     """Load ignore patterns from .advisorignore file if it exists.
 
@@ -420,7 +430,34 @@ def _double_star_to_regex(pattern: str) -> re.Pattern[str]:
     return re.compile("^" + "".join(parts) + "$")
 
 
-def _matches_any_pattern(file_path: str, patterns: list[str]) -> bool:
+def _compile_ignore_patterns(patterns: list[str]) -> tuple[_IgnorePatternMatcher, ...]:
+    """Compile ignore patterns once for a ranking run.
+
+    ``**`` globs are the expensive case because they require regex
+    translation; doing that per file made large ignore lists scale poorly.
+    Malformed translated regexes are retained as inert matchers to preserve
+    the historical "ignore invalid pattern and keep going" behavior.
+    """
+    compiled: list[_IgnorePatternMatcher] = []
+    for pattern in patterns:
+        recursive_re: re.Pattern[str] | None = None
+        if "**" in pattern:
+            try:
+                recursive_re = _double_star_to_regex(pattern)
+            except re.error:
+                recursive_re = re.compile(r"(?!)")
+        compiled.append(
+            _IgnorePatternMatcher(
+                pattern=pattern,
+                recursive_re=recursive_re,
+                dir_pattern=pattern.rstrip("/") if pattern.endswith("/") else None,
+                bare_component=not any(c in pattern for c in "*?[."),
+            )
+        )
+    return tuple(compiled)
+
+
+def _matches_compiled_pattern(file_path: str, matchers: tuple[_IgnorePatternMatcher, ...]) -> bool:
     """Check if a file path matches any glob pattern.
 
     Supports:
@@ -431,7 +468,7 @@ def _matches_any_pattern(file_path: str, patterns: list[str]) -> bool:
       component equals the pattern
     - bare-word patterns (no glob metacharacters) match any path component
     """
-    if not patterns:
+    if not matchers:
         return False
     path = PurePath(file_path)
     # Normalize path separators: glob patterns always use ``/`` (including
@@ -441,22 +478,18 @@ def _matches_any_pattern(file_path: str, patterns: list[str]) -> bool:
     # ``src\a\b\c.py``. Normalize once, apply everywhere.
     path_str = path.as_posix()
     name = path.name
-    for pattern in patterns:
+    for matcher in matchers:
+        pattern = matcher.pattern
         # Pattern ending with / matches directories only
-        if pattern.endswith("/"):
-            dir_pattern = pattern.rstrip("/")
-            if any(fnmatch.fnmatch(part, dir_pattern) for part in path.parts):
+        if matcher.dir_pattern is not None:
+            if any(fnmatch.fnmatch(part, matcher.dir_pattern) for part in path.parts):
                 return True
             continue
         # ``**`` recursive glob — PurePath.match treats ``**`` as a single
         # component on Python <3.13, so translate to a regex ourselves.
-        if "**" in pattern:
-            try:
-                if _double_star_to_regex(pattern).match(path_str):
-                    return True
-            except re.error:
-                # Malformed regex translation; fall through to other strategies
-                pass
+        if matcher.recursive_re is not None:
+            if matcher.recursive_re.match(path_str):
+                return True
             continue
         # Match against filename only
         if fnmatch.fnmatch(name, pattern):
@@ -470,11 +503,16 @@ def _matches_any_pattern(file_path: str, patterns: list[str]) -> bool:
         # or full-path strategies above, not as directory components,
         # otherwise a single dir named `foo.py/` would shadow every file
         # beneath it.
-        if not any(c in pattern for c in "*?[.") and any(
+        if matcher.bare_component and any(
             fnmatch.fnmatch(part, pattern.rstrip("/")) for part in path.parts
         ):
             return True
     return False
+
+
+def _matches_any_pattern(file_path: str, patterns: list[str]) -> bool:
+    """Compatibility wrapper for tests/importers that pass raw patterns."""
+    return _matches_compiled_pattern(file_path, _compile_ignore_patterns(patterns))
 
 
 def _merged_keywords_for(language: str | None) -> dict[int, tuple[str, ...]]:
@@ -685,7 +723,7 @@ def rank_files(
     For small repos (< ~20 files) the pool is skipped to avoid its
     startup overhead.
     """
-    patterns = ignore_patterns or []
+    patterns = _compile_ignore_patterns(ignore_patterns or [])
 
     # Skip directory / extension / ignore-pattern filters first so we
     # don't pay for reading a file we'll drop anyway.
@@ -698,7 +736,7 @@ def rank_files(
             p.name.endswith(s) for s in (".min.js", ".min.mjs", ".min.cjs", ".min.css")
         ):
             continue
-        if _matches_any_pattern(fp, patterns):
+        if _matches_compiled_pattern(fp, patterns):
             continue
         kept_paths.append(fp)
 
@@ -772,13 +810,14 @@ def _history_values_for(file_path: str, values_by_path: dict[str, T]) -> list[T]
     paths: ``util.py`` is ambiguous in a repo with multiple files by that
     name and used to boost every sibling.
     """
+    path_obj = Path(file_path)
     path_norm = _normalize_history_key(file_path)
     exact_candidates = tuple(
         dict.fromkeys(
             (
                 file_path,
-                str(Path(file_path)),
-                Path(file_path).as_posix(),
+                str(path_obj),
+                path_obj.as_posix(),
                 path_norm,
             )
         )

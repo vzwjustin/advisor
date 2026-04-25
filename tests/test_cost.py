@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import advisor.cost as cost
 from advisor.cost import CostEstimate, estimate_cost, format_estimate, load_pricing
 from advisor.focus import FocusTask
 
@@ -119,6 +120,37 @@ class TestEstimateCost:
         )
 
         assert e.runner_count == 2
+
+    def test_duplicate_tasks_only_stat_once_per_estimate(self, tmp_path: Path, monkeypatch) -> None:
+        p = tmp_path / "dup.py"
+        p.write_text("x" * 100)
+        calls = 0
+        real_stat = cost.os.stat
+
+        def counting_stat(path):
+            nonlocal calls
+            calls += 1
+            return real_stat(path)
+
+        monkeypatch.setattr(cost.os, "stat", counting_stat)
+
+        estimate_cost(
+            [_task(str(p)), _task(str(p))],
+            None,
+            advisor_model="opus",
+            runner_model="sonnet",
+            max_fixes_per_runner=5,
+        )
+
+        assert calls == 1
+
+    def test_stat_cache_invalidates_when_file_changes(self, tmp_path: Path) -> None:
+        p = tmp_path / "changing.py"
+        p.write_text("x" * 35)
+        first = cost._tokens_for_file(str(p))
+        p.write_text("x" * 3500)
+
+        assert cost._tokens_for_file(str(p)) > first
 
 
 class TestLoadPricing:
