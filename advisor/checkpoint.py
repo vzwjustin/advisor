@@ -59,9 +59,7 @@ def _dir(target: str | Path) -> Path:
 
 def _validate_run_id(run_id: str) -> None:
     if not _RUN_ID_RE.fullmatch(run_id):
-        raise ValueError(
-            "invalid run_id: use only letters, digits, underscore, dot, and hyphen"
-        )
+        raise ValueError("invalid run_id: use only letters, digits, underscore, dot, and hyphen")
 
 
 def checkpoint_path(target: str | Path, run_id: str) -> Path:

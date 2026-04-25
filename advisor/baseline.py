@@ -71,7 +71,11 @@ def _finding_key(f: Finding) -> tuple[str, str, str]:
     the baseline write and diff paths cannot drift on how a finding is
     identified.
     """
-    return (_normalize_identity_path(f.file_path), _rule_id_for(f), _description_hash(f.description))
+    return (
+        _normalize_identity_path(f.file_path),
+        _rule_id_for(f),
+        _description_hash(f.description),
+    )
 
 
 def _description_hash(description: str) -> str:

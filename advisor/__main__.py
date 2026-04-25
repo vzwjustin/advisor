@@ -18,6 +18,7 @@ from importlib.metadata import version as pkg_version
 from pathlib import Path
 
 from . import _style
+from ._fs import atomic_write_text as _atomic_write
 from ._fs import read_head as _read_head
 from .audit import AuditReport, audit_to_dict, audit_transcript, format_audit_report
 from .checkpoint import (
@@ -27,7 +28,6 @@ from .checkpoint import (
     load_checkpoint,
     save_checkpoint,
 )
-from ._fs import atomic_write_text as _atomic_write
 from .cost import estimate_cost, format_estimate, load_pricing
 from .doctor import format_report, run_doctor
 from .focus import (
