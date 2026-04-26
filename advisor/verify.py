@@ -18,7 +18,6 @@ Relationship with `orchestrate.build_verify_message`:
 from __future__ import annotations
 
 import logging
-import warnings
 from dataclasses import dataclass
 
 from ._fs import normalize_path as _normalize_path_impl
@@ -184,12 +183,10 @@ def parse_findings_with_drift(
     else:
         normalized_batch = {_normalize_path(p) for p in batch_files}
         if not normalized_batch:
-            warnings.warn(
+            _log.warning(
                 "parse_findings_with_drift: batch_files is an empty set; "
                 "every finding will be dropped. Pass None to disable scope "
-                "filtering instead.",
-                UserWarning,
-                stacklevel=2,
+                "filtering instead."
             )
 
     raw = _parse_blocks(text)
@@ -250,12 +247,26 @@ def _parse_blocks(text: str) -> list[Finding]:
         # current findings region. Reset the latch so any later headerless
         # findings region in the same text re-arms the second-File safety
         # net correctly instead of staying permanently disabled.
+        # Mirror the ### Finding guard below: only flush a block that is
+        # already complete. An incomplete in-progress block followed by an
+        # H2 heading was previously _flush()ed unconditionally and lost via
+        # _dict_to_finding's missing-fields drop — the H2 line itself was
+        # almost certainly continuation of the active body (e.g. a runner
+        # pasted "## relevant section" inside an Evidence block).
         if stripped.startswith("## ") and not stripped.startswith("### "):
-            if current:
-                _flush()
-            current = {}
-            active_key = None
-            in_header_block = False
+            block_is_complete = all(k in current for k in _REQUIRED_FIELDS)
+            if not active_key or block_is_complete:
+                if current:
+                    _flush()
+                current = {}
+                active_key = None
+                field_style = None
+                in_header_block = False
+                continue
+            # Mid-body for a still-incomplete block — treat the H2 line as
+            # continuation of the active field so it doesn't vanish.
+            if active_key:
+                current[active_key] = (current[active_key] + " " + stripped).strip()
             continue
 
         # Primary block delimiter: ### Finding headers from format_findings_block.

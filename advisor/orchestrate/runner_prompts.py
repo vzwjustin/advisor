@@ -268,7 +268,7 @@ def build_runner_pool_prompt(runner_id: int, config: TeamConfig) -> str:
         "signals; the two proxies above are what you actually trust.\n\n"
         "Ping format:\n"
         "    SendMessage(to='advisor', message='CONTEXT_PRESSURE — "
-        "N fixes, M reads, recommend rotation')\n"
+        "{your runner name, e.g. runner-2}: N fixes, M reads, recommend rotation')\n"
         "The advisor will spawn a fresh runner and hand off. Flagging "
         "early is cheaper than stalling silently mid-fix.\n\n"
         "## Rules\n\n"

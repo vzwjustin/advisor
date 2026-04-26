@@ -209,6 +209,74 @@ def _attribute_fix_to_runner(transcript: str, match_start: int) -> str:
     return f"runner-{mentions[-1].group(1)}"
 
 
+# CONTEXT_PRESSURE attribution differs from fix-assignment attribution.
+# Fix assignments are dispatches *to* a runner — the most recent
+# ``runner-N`` mention before the marker is the recipient (and that's the
+# correct actor). CONTEXT_PRESSURE is a self-report *from* a runner, sent
+# via ``SendMessage(to='advisor', message='...')``, so the envelope's
+# ``to=`` field points at the advisor, not the runner. Reusing the
+# fix-attribution helper here misattributes the ping to whichever runner
+# was last addressed by the advisor.
+#
+# Strategy, in order:
+#   1. Parse the enclosing ``SendMessage(...)`` call. If the message body
+#      contains a ``runner-N`` mention (the runner self-identifying inline,
+#      e.g. ``'runner-1 CONTEXT_PRESSURE — ...'``), that is the actor.
+#   2. Otherwise scan backwards for the most recent ``to='runner-N'`` —
+#      the runner currently being addressed by the advisor is the one
+#      doing the work, and therefore the one pinging.
+#   3. Fall back to ``runner-?``.
+
+_SENDMESSAGE_TO_RUNNER_RE = re.compile(r"to\s*=\s*['\"]runner-(\d+)['\"]")
+# Capture the message body of a SendMessage(...) call when the marker is
+# inside it. Bounded scan — we look in a fixed window before/after the
+# marker, not the whole transcript, to avoid pulling identifiers from
+# unrelated calls.
+_SENDMESSAGE_OPEN_RE = re.compile(r"SendMessage\s*\(")
+
+
+def _attribute_context_pressure_to_runner(transcript: str, match_start: int) -> str:
+    """Return the ``runner-N`` id that emitted a CONTEXT_PRESSURE ping.
+
+    See module-level discussion above. Tries (in order) to read the
+    enclosing ``SendMessage(...)`` call's message body for an inline
+    ``runner-N`` self-identification, then falls back to the most recent
+    ``to='runner-N'`` dispatch envelope as a proxy for the active runner,
+    and finally to ``runner-?``.
+    """
+    window_start = max(0, match_start - _RUNNER_ATTRIBUTION_WINDOW)
+    before = transcript[window_start:match_start]
+
+    # Step 1 — find the most recent ``SendMessage(`` opener in the window.
+    # If found, search the slice from that opener through ``match_start``
+    # for an inline ``runner-N`` mention. That slice is the message body
+    # the runner is emitting; an inline ``runner-N`` token there is the
+    # runner self-identifying, which is the most reliable signal.
+    openers = list(_SENDMESSAGE_OPEN_RE.finditer(before))
+    if openers:
+        body_start = window_start + openers[-1].end()
+        body_slice = transcript[body_start:match_start]
+        # Skip the ``to='runner-X'`` recipient field — that's the addressee
+        # of the SendMessage, not the sender. For a self-report the
+        # addressee is the advisor; if the body still names a runner, it's
+        # the sender identifying itself in the prose.
+        body_without_to = _SENDMESSAGE_TO_RUNNER_RE.sub("", body_slice)
+        body_mentions = list(_RUNNER_MENTION_RE.finditer(body_without_to))
+        if body_mentions:
+            return f"runner-{body_mentions[-1].group(1)}"
+
+    # Step 2 — fall back to the most recent ``to='runner-N'`` dispatch
+    # before the marker. The active runner (the one the advisor most
+    # recently addressed) is the one doing the work and therefore the
+    # one pinging. Less reliable than inline self-id but better than
+    # the proximity heuristic that conflates with prose mentions.
+    to_mentions = list(_SENDMESSAGE_TO_RUNNER_RE.finditer(before))
+    if to_mentions:
+        return f"runner-{to_mentions[-1].group(1)}"
+
+    return "runner-?"
+
+
 def audit_transcript(transcript: str, cp: Checkpoint) -> AuditReport:
     """Produce an :class:`AuditReport` for a transcript / checkpoint pair.
 
@@ -235,11 +303,18 @@ def audit_transcript(transcript: str, cp: Checkpoint) -> AuditReport:
             )
 
     # Context-pressure: per-runner first-mention order + raw total count.
+    # Uses a separate attribution path (SendMessage envelope-aware) because
+    # CONTEXT_PRESSURE pings are self-reports *from* a runner — the message
+    # envelope's ``to=`` field points at the advisor, not the runner —
+    # whereas fix assignments are dispatches *to* a runner. Reusing
+    # ``_attribute_fix_to_runner`` here would attribute the ping to
+    # whichever runner the advisor most recently addressed, not the one
+    # actually pinging.
     cp_matches = list(_CONTEXT_PRESSURE_RE.finditer(transcript))
     cp_runners_ordered: list[str] = []
     seen_cp: set[str] = set()
     for m in cp_matches:
-        runner = _attribute_fix_to_runner(transcript, m.start())
+        runner = _attribute_context_pressure_to_runner(transcript, m.start())
         if runner not in seen_cp:
             seen_cp.add(runner)
             cp_runners_ordered.append(runner)

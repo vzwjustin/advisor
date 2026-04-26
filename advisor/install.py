@@ -149,27 +149,24 @@ def render_block(body: str = NUDGE_BODY) -> str:
     return f"{START_MARKER}\n{body.rstrip()}\n{END_MARKER}\n"
 
 
+_BLOCK_RE = re.compile(
+    re.escape(START_MARKER) + r".*?" + re.escape(END_MARKER),
+    re.DOTALL,
+)
+_ORPHAN_MARKER_RE = re.compile(re.escape(START_MARKER) + r"|" + re.escape(END_MARKER))
+
+
 def _strip_all_blocks(existing: str) -> str:
     """Remove every sentinel-wrapped block, including nested or duplicate ones.
 
-    Iterates until no markers remain at all — including orphaned START markers
-    left behind by pathological interleaving (START-START-END-END).
+    Single non-greedy DOTALL regex strips well-formed START..END blocks in
+    one pass — O(N) in input length regardless of marker count. A second
+    pass clears any orphan markers left by pathological interleaving
+    (e.g. START-START-END-END collapses the inner pair, leaving an outer
+    orphan START + orphan END).
     """
-    cleaned = existing
-    # rpartition picks the LAST end/start pair on each pass; non-nested
-    # multi-block input (START-END-START-END) requires multiple iterations
-    # because each pass strips one block and leaves the others intact.
-    while START_MARKER in cleaned or END_MARKER in cleaned:
-        if START_MARKER in cleaned and END_MARKER in cleaned:
-            before_end, _, after_end = cleaned.rpartition(END_MARKER)
-            before_start, _, _ = before_end.rpartition(START_MARKER)
-            cleaned = f"{before_start.rstrip()}\n{after_end.lstrip()}"
-        elif START_MARKER in cleaned:
-            before, _, after = cleaned.partition(START_MARKER)
-            cleaned = f"{before.rstrip()}\n{after.lstrip()}"
-        else:
-            before, _, after = cleaned.partition(END_MARKER)
-            cleaned = f"{before.rstrip()}\n{after.lstrip()}"
+    cleaned = _BLOCK_RE.sub("", existing)
+    cleaned = _ORPHAN_MARKER_RE.sub("", cleaned)
     return cleaned
 
 
