@@ -219,10 +219,9 @@ The advisor prompt encodes the full six-step flow:
    report to team-lead is always `## Pool size: N — <rationale>`. **No
    hardcoded defaults** — tiny repos get 1, medium get 2–3, large get 4–5,
    huge can justify more.
-3. **Dispatch explore wave** — after team-lead spawns the right-sized pool,
-   Opus SendMessages each batch to `runner-N`. Runners read files end-to-
-   end and report findings back to Opus (not team-lead — the advisor is
-   in the middle).
+3. **Watch for runner reports** — runners have their batch assignments in
+   their initial prompts and start reading immediately. Team-lead relays
+   each runner report to Opus verbatim as it arrives.
 4. **Reason over findings, build fix plan** — Opus reasons across all
    runner reports and decides what to do.
 5. **Dispatch fix wave** (only if user asked for fixes/enhancements).
@@ -246,19 +245,19 @@ written by the strategist who just read the structural map. A runner
 reviewing auth code gets a different prompt than one reviewing CLI
 utilities.
 
-Spawn exactly N runners in a single message so they come up in parallel:
+**CRITICAL: spawn all N runners in ONE single response as parallel Agent tool calls. Never split across turns — runners that come up later miss reports already in flight.**
 
 ```
 Agent({
   name: "runner-1",
-  description: "Pool runner 1 — waits for advisor dispatch",
+  description: "Pool runner 1 — reads batch from initial prompt",
   subagent_type: "code-review",
   model: "sonnet",
   team_name: "review",
   run_in_background: true,
   prompt: <verbatim text from Opus's "### runner-1 / #### Prompt" block>
 })
-Agent({ name: "runner-2", description: "Pool runner 2 — waits for advisor dispatch", ... })   # only if Opus asked for more than 1
+Agent({ name: "runner-2", description: "Pool runner 2 — reads batch from initial prompt", ... })   # only if Opus asked for more than 1
 ...
 ```
 
@@ -266,31 +265,35 @@ The generic `build_runner_pool_prompt` in the Python API is a fallback
 for cases when you're spawning runners without the advisor — the live
 pipeline never uses it.
 
-After spawning the pool, tell Opus they're up:
+After spawning the pool, tell Opus they're up — and that runners already started:
 
 ```
 SendMessage({
   to: "advisor",
-  message: "Pool of N runners is up and waiting for batch assignments."
+  message: "Pool of N runners is up. Runners have their batch assignments from initial prompts and are reading now — do NOT send separate explore dispatch messages. Watch your inbox for runner reports, which team-lead will relay to you verbatim."
 })
 ```
 
-### 4. Watch the live dialogue
+### 4. Watch the live dialogue — relay runner reports to advisor
 
-Once Opus dispatches explore batches, Opus and runners talk continuously:
+Runners send their reports to **team-lead** (not directly to the advisor). When any runner report arrives, relay it verbatim to the advisor immediately — before doing anything else:
 
-- Runners SendMessage Opus with **questions**, **progress pings**, **draft
-  findings**, and **final reports**.
-- Opus SendMessages runners with **answers**, **CONFIRM / NARROW /
-  REDIRECT** replies, **context from other runners**, and **proactive
-  redirects** when they drift off-topic.
-- Opus **verifies each runner's output the moment it lands** — it does
-  NOT wait for a bulk end-of-run verification. Per-runner CONFIRM (for
-  explore) or CONFIRM / REVISE (for fix diffs).
+```
+SendMessage({
+  to: "advisor",
+  message: "Runner-N report (verbatim):\\n\\n<full message body>"
+})
+```
 
-As team-lead, your job in this phase is mostly to stay out of the way.
-Relay anything the user asks into the team, and relay Opus's final report
-back out.
+Do not summarize, filter, or batch. Relay each report the moment it arrives. This is the fix for mailbox delivery failures — the advisor sees every finding through the relay even when direct delivery drops.
+
+Runners and Opus also talk continuously:
+
+- Runners SendMessage team-lead with **questions**, **progress pings**, **draft findings**, and **final reports** — team-lead relays each to advisor.
+- Opus SendMessages runners directly with **answers**, **CONFIRM / NARROW / REDIRECT** replies, and **proactive redirects**.
+- Opus **verifies each runner's output the moment it lands** — per-runner CONFIRM (for explore) or CONFIRM / REVISE (for fix diffs).
+
+Beyond relay, your job in this phase is to stay out of the way. Relay anything the user asks into the team, and relay Opus's final report back out.
 
 ### 5. Fix wave (if applicable)
 
@@ -325,16 +328,20 @@ TeamDelete()
    right-sized AFTER Opus's first pass, not before.
 3. **No hardcoded pool size** — Opus decides N every time. Never default
    to 5 or any other number.
-4. **Runners work ONLY on what Opus hands them** — notice but never
+4. **All runners spawn in ONE message** — put every Agent call in a single
+   response so they come up in parallel. Splitting across turns means later
+   runners miss reports already in flight.
+5. **Runners work ONLY on what Opus hands them** — notice but never
    chase anything outside the current assignment.
-5. **Live dialogue, not checkpoints** — runners ask questions freely,
+6. **Live dialogue, not checkpoints** — runners ask questions freely,
    send progress pings, and expect Opus to answer in real time. Opus
    watches continuously and verifies each output as it lands.
-6. **Runner reports go to the advisor, not team-lead** — the advisor
-   verifies and relays. Team-lead only sees Opus's final report.
-7. **Every prompt ends with SendMessage-back** — agents go idle silently
+7. **Runner reports go to team-lead; team-lead relays to advisor** —
+   team-lead forwards each report verbatim to the advisor the moment it
+   arrives. Do not batch or summarize.
+8. **Every prompt ends with SendMessage-back** — agents go idle silently
    without an explicit instruction to message back.
-8. **Shutdown individually, not broadcast** — send `shutdown_request` to
+9. **Shutdown individually, not broadcast** — send `shutdown_request` to
    each teammate by name.
 
 ## Quick start

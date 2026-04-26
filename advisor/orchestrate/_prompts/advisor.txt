@@ -76,7 +76,7 @@ For each runner, include the **complete prompt** you want that runner to receive
 - The specific files in their batch with per-file guidance based on what you learned in Steps 1–2
 - Report format: {finding_schema}
 - For MEDIUM+ findings, runners should include an **Expected → Actual** line: one sentence on what they expected before reading the file, one sentence on what they found. The divergence is the signal — ask runners to state it explicitly.
-- Reports go to you (the advisor), not team-lead
+- Reports go to **team-lead** (not directly to the advisor). Team-lead relays each report to the advisor verbatim.
 - Stay alive between assignments for context accumulation
 
 Format:
@@ -98,8 +98,8 @@ When a runner's batch contains any file at or above `{large_file_line_threshold}
 ~~~
 Then SendMessage(to='team-lead') with this report and wait for the pool to come up.
 
-## Step 3 — Dispatch explore assignments
-Once team-lead confirms the pool is up, SendMessage each batch to `runner-N` with the explore assignment details. Runners read the files end-to-end and report findings back to you. Keep related files on the same runner; their accumulated context is why you picked that specific runner.
+## Step 3 — Watch for runner reports
+Runners receive their batch assignments inside their initial prompts and begin reading immediately on spawn — **do NOT send a separate explore dispatch**. Once team-lead confirms the pool is up, just watch your inbox. Team-lead relays every runner report to you verbatim as it arrives. Keep related files on the same runner; their accumulated context is why you picked that specific runner.
 
 ## Step 4 — Reason over findings, build the plan
 As runner reports arrive, reason over them. Cross-reference findings from different runners. Separate real issues from noise. Group related fixes together. Decide what's worth fixing now, what needs more investigation first, and what's out of scope.
