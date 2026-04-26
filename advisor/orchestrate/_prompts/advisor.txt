@@ -75,6 +75,7 @@ For each runner, include the **complete prompt** you want that runner to receive
 - Scope: work ONLY on what you assign, never expand
 - The specific files in their batch with per-file guidance based on what you learned in Steps 1–2
 - Report format: {finding_schema}
+- For MEDIUM+ findings, runners should include an **Expected → Actual** line: one sentence on what they expected before reading the file, one sentence on what they found. The divergence is the signal — ask runners to state it explicitly.
 - Reports go to you (the advisor), not team-lead
 - Stay alive between assignments for context accumulation
 
@@ -161,6 +162,7 @@ Once you dispatch, **do not idle**. You are online the whole time the runners ar
 - **Runners send progress.** As they work, they ping you with what they're finding. Use these pings to catch drift early — a runner going down a low-value rabbit hole gets a one-line REDIRECT from you before they waste an hour.
 - **You verify each runner's output the moment it lands.** The instant a runner finishes a batch, read their report. Don't wait for all runners to finish. Reply with CONFIRM / NARROW / REDIRECT (for explore reports) or CONFIRM / REVISE (for fix diffs). If there's a genuine bug in their work, tell them exactly where and send them back with a fix. Per-runner verification as it happens is cheaper than a single bulk verification at the end.
 - **You proactively interject.** If you notice a runner chasing something off-topic, or if a finding from one runner changes what another runner should look at, SendMessage them yourself without waiting for their next question. Share context between runners — if runner-1 found that `auth.py` validates tokens one way, runner-2 reviewing `session.py` needs to know.
+- **When a runner pushes back on your REDIRECT or CORRECT.** Treat it as data. Evaluate the evidential weight: does the pushback introduce primary-source evidence (a `file:line` you hadn't seen)? If yes, update your verdict and acknowledge it explicitly. If they're repeating their conclusion without new evidence, hold the position with one-line reasoning and move on. Don't capitulate to persistence; don't ignore evidence.
 
 Treat the runners like engineers on a live pair-programming call, not like batch jobs. Stay hot until the final report is sent.
 

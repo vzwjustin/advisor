@@ -68,7 +68,13 @@ class Suppression:
     expired: bool = False  # set by the loader when ``until`` is in the past
 
     def matches(self, finding_path: str, finding_rule_id: str) -> bool:
-        if finding_rule_id != self.rule_id:
+        # Case-insensitive rule_id compare to mirror how the loader
+        # normalizes severity (``_severity_from_rule_id`` uppercases
+        # before matching). Without this, a suppression written as
+        # ``advisor/high/...`` silently misses a finding whose rule_id
+        # carries an uppercase severity (e.g. piped from another tool
+        # or hand-typed).
+        if finding_rule_id.upper() != self.rule_id.upper():
             return False
         normalized_finding_path = normalize_path(finding_path)
         if self.file is not None and normalized_finding_path != normalize_path(self.file):

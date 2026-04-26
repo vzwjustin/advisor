@@ -669,11 +669,17 @@ def cmd_plan(args: argparse.Namespace) -> int:
     if args.batch_size and args.batch_size >= 1:
         batches = create_focus_batches(tasks, files_per_batch=args.batch_size)
 
+    # Resolve config exactly once. _config_from_args may consume stdin
+    # (when ``--context -``); a second resolution would silently see an
+    # empty context. Building it up-front lets every downstream caller
+    # — checkpoint write, SARIF stub, _emit_plan's cost estimate — share
+    # one resolved view of the args.
+    cfg = _config_from_args(args)
+
     # Optional persistence: ``--checkpoint`` writes the full plan to
     # ``.advisor/run-<id>.json`` so a later invocation can ``--resume``.
     saved_run_id: str | None = None
     if getattr(args, "checkpoint", False):
-        cfg = _config_from_args(args)
         saved_run_id = new_run_id()
         save_checkpoint(
             target,
@@ -713,15 +719,8 @@ def cmd_plan(args: argparse.Namespace) -> int:
         if rc is not None:
             return rc
 
-    # Thread `cfg` through when we built one for the checkpoint, so
-    # _emit_plan's cost estimate doesn't re-run _config_from_args and
-    # silently lose --context - (stdin already consumed) or any other
-    # args we've resolved. Without this, a `--checkpoint --context -
-    # --estimate` combo produces a checkpoint with the right context
-    # but a cost estimate computed against context="".
-    resolved_cfg = cfg if getattr(args, "checkpoint", False) else None
     return _emit_plan(
-        args, target, tasks, batches, run_id=saved_run_id, resolved_config=resolved_cfg
+        args, target, tasks, batches, run_id=saved_run_id, resolved_config=cfg
     )
 
 
@@ -1604,11 +1603,18 @@ def _load_findings_from_input(
             # would swallow real findings.
             doc = None
         if doc is not None:
+            unrecognized_dict_keys: list[str] | None = None
             if isinstance(doc, dict):
                 if "findings_in_batch" in doc:
                     raw = doc.get("findings_in_batch") or []
-                else:
+                elif "findings" in doc:
                     raw = doc.get("findings") or []
+                else:
+                    # Top-level dict with neither expected key — record the
+                    # keys we did see so the warning below can hint at the
+                    # mismatch instead of silently returning zero findings.
+                    raw = []
+                    unrecognized_dict_keys = sorted(doc.keys())
             elif isinstance(doc, list):
                 raw = doc
             else:
@@ -1636,6 +1642,31 @@ def _load_findings_from_input(
                     )
                 except KeyError:
                     continue
+            # Surface "parsed JSON but recognized no findings" so a
+            # mis-shaped input (wrong top-level key, or an array of
+            # non-dicts) doesn't silently no-op the audit/baseline/etc.
+            # caller. Stays warning-only — the empty list is still
+            # returned so callers' empty-handling stays in charge.
+            if not findings:
+                if unrecognized_dict_keys is not None:
+                    print(
+                        _style.warning_box(
+                            "JSON input has no 'findings' or 'findings_in_batch' key; "
+                            f"got keys: {unrecognized_dict_keys}",
+                            stream=sys.stderr,
+                        ),
+                        file=sys.stderr,
+                    )
+                elif raw:
+                    print(
+                        _style.warning_box(
+                            f"JSON input contained {len(raw)} entries but none were "
+                            "objects with the expected fields (file_path, severity, "
+                            "description); returning empty findings",
+                            stream=sys.stderr,
+                        ),
+                        file=sys.stderr,
+                    )
             return findings, None
     # Markdown fallback.
     return list(parse_findings_from_text(text)), None
@@ -2556,7 +2587,7 @@ def main(argv: list[str] | None = None) -> int:
         # Downstream pipe closed (e.g. `| head`); exit quietly.
         try:
             sys.stdout.close()
-        except Exception:
+        except OSError:
             pass
         return 0
 

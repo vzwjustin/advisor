@@ -276,17 +276,19 @@ def audit_to_dict(report: AuditReport) -> dict[str, object]:
     scripted consumers don't need to handle a second schema.
     """
 
-    def _f(f: Finding) -> dict[str, str]:
-        row = {
+    def _f(f: Finding) -> dict[str, object]:
+        # Include ``rule_id`` so the JSON round-trip via
+        # ``_load_findings_from_input`` preserves it. Without this,
+        # ``advisor audit --json | advisor ...`` silently drops the
+        # field, breaking suppression matching downstream.
+        return {
             "file_path": f.file_path,
             "severity": f.severity,
             "description": f.description,
             "evidence": f.evidence,
             "fix": f.fix,
+            "rule_id": f.rule_id,
         }
-        if f.rule_id:
-            row["rule_id"] = f.rule_id
-        return row
 
     return {
         "run_id": report.run_id,

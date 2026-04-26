@@ -157,7 +157,6 @@ LANGUAGE_EXTRA_KEYWORDS: dict[str, dict[int, tuple[str, ...]]] = {
         5: ("devise", "omniauth", "warden"),
         4: ("params", "marshal.load", "yaml.load"),
         3: ("rails", "rack", "sinatra", "activerecord"),
-        2: ("env",),
     },
     "php": {
         5: ("password_hash", "password_verify"),
@@ -904,6 +903,6 @@ def rank_to_prompt(ranked: list[RankedFile], top_n: int = 10) -> str:
     for i, rf in enumerate(ranked[:top_n], 1):
         reasons_str = ", ".join(rf.reasons) if rf.reasons else "general"
         lines.append(f"{i}. **P{rf.priority}** `{rf.path}` — {reasons_str}")
-    if len(ranked) > top_n:
+    if len(ranked) > top_n > 0:
         lines.append(f"\n_(Showing top {top_n} of {len(ranked)} ranked files)_")
     return "\n".join(lines)

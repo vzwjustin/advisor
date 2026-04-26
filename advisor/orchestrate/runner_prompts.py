@@ -10,13 +10,25 @@ from .config import TeamConfig
 # ── Helpers ──────────────────────────────────────────────────────
 
 
+def _inline_path(file_path: str) -> str:
+    """Backtick-safe inline rendering of a filesystem path.
+
+    Filenames may contain backticks on POSIX. Embedding them raw inside
+    a single-backtick span breaks the span and lets the path inject
+    arbitrary markdown into the surrounding instruction text — which a
+    runner reads as advisor instructions. Replace any backtick with a
+    visually similar single quote so the inline span stays intact.
+    """
+    return file_path.replace("`", "'")
+
+
 def _format_batch_files(batch: FocusBatch, guidance: dict[str, str] | None = None) -> str:
     g_map = guidance or {}
     lines: list[str] = []
     for t in batch.tasks:
         g = g_map.get(t.file_path, "").strip()
         suffix = f" — {g}" if g else ""
-        lines.append(f"- `{t.file_path}` (P{t.priority}){suffix}")
+        lines.append(f"- `{_inline_path(t.file_path)}` (P{t.priority}){suffix}")
     return "\n".join(lines)
 
 
@@ -182,7 +194,10 @@ def build_runner_pool_prompt(runner_id: int, config: TeamConfig) -> str:
         "## Explore assignment\n"
         "A list of files with one-line guidance on what to look for. Your "
         "job:\n\n"
-        "1. **Read every file in the batch end-to-end.** No skimming. You "
+        "1. **State your prior, then read end-to-end.** Before reading each "
+        "   file, write one sentence on what you expect to find based on the "
+        "   advisor's briefing — lock your prior so that divergence from it "
+        "   surfaces naturally. Then read every file fully; no skimming. You "
         "   are the one person who will actually look at these.\n"
         "2. **Hypothesize — think step by step.** List each candidate issue "
         "   explicitly before chasing any of them. What could go wrong? "
@@ -540,9 +555,12 @@ def build_fix_assignment_message(
     # Fence untrusted fields — caller-supplied ``## `` or triple-backticks
     # would otherwise corrupt the assignment delimiters / escape into
     # markdown sections the runner treats as advisor instructions.
+    # ``file_path`` rides in an inline backtick span, so go through
+    # ``_inline_path`` to neutralize any backticks in the filename
+    # itself (POSIX permits them).
     body = (
         f"## Fix assignment ({budget_note})\n\n"
-        f"File: `{file_path}`\n"
+        f"File: `{_inline_path(file_path)}`\n"
         f"Problem:\n{fence(problem.strip())}\n"
         f"Change:\n{fence(change.strip())}\n"
         f"Acceptance:\n{fence(acceptance.strip())}\n\n"
@@ -576,7 +594,15 @@ def build_runner_handoff_message(
         if remaining_fixes
         else "- (none — you're taking the verify pass)"
     )
-    extra = f"\n\n## Extra context\n{fence(extra_context.strip())}" if extra_context.strip() else ""
+    # Fence ``extra_context`` for the same reason the fix-assignment
+    # builder fences its untrusted fields — caller text containing
+    # ``## `` or triple backticks would otherwise inject synthetic
+    # section headers into the handoff brief.
+    extra = (
+        f"\n\n## Extra context\n{fence(extra_context.strip())}"
+        if extra_context.strip()
+        else ""
+    )
     body = (
         f"## Handoff from runner-{outgoing_runner_id}\n\n"
         f"You are runner-{new_runner_id}. runner-{outgoing_runner_id} is "
