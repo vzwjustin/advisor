@@ -108,7 +108,7 @@ def format_pr_comment(findings: list[Finding]) -> str:
     for f in findings:
         # Truncate before HTML-escape so the slice can't land in the middle of
         # a multi-character entity like ``&lt;``.
-        title_raw = (f.description[:100] or "(no description)")
+        title_raw = f.description[:100] or "(no description)"
         title = _escape_summary(title_raw)
         block: list[str] = [
             (

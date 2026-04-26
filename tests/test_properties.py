@@ -105,8 +105,7 @@ def test_pr_comment_never_emits_unescaped_html_payloads(findings: list[Finding])
     out_no_evidence = _strip_evidence_blocks(out).lower()
     for needle in _INJECTION_PATTERNS:
         assert needle not in out_no_evidence, (
-            f"pr_comment leaked unescaped {needle!r} into HTML body "
-            f"(input findings: {findings!r})"
+            f"pr_comment leaked unescaped {needle!r} into HTML body (input findings: {findings!r})"
         )
 
 
@@ -122,8 +121,7 @@ def test_pr_comment_details_tags_are_balanced(findings: list[Finding]) -> None:
     open_count = out.lower().count("<details>")
     close_count = out.lower().count("</details>")
     assert open_count == close_count, (
-        f"unbalanced <details>/</details> ({open_count} vs {close_count}); "
-        f"input: {findings!r}"
+        f"unbalanced <details>/</details> ({open_count} vs {close_count}); input: {findings!r}"
     )
     # The rendered count is at most len(findings) — could be lower under
     # body-cap truncation.
@@ -137,9 +135,7 @@ def test_pr_comment_respects_github_body_cap(findings: list[Finding]) -> None:
     GitHub PR body limit, regardless of how large any single finding is.
     """
     out = format_pr_comment(findings)
-    assert len(out) < _GITHUB_BODY_LIMIT, (
-        f"output {len(out)} chars >= cap {_GITHUB_BODY_LIMIT}"
-    )
+    assert len(out) < _GITHUB_BODY_LIMIT, f"output {len(out)} chars >= cap {_GITHUB_BODY_LIMIT}"
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -168,21 +164,23 @@ _safe_text = st.text(
     min_size=1,
     max_size=80,
 ).filter(
-    lambda s: bool(s.strip())
-    and not any(
-        marker in s
-        for marker in (
-            "### Finding",
-            "## ",
-            "**File**",
-            "**Severity**",
-            "**Description**",
-            "**Evidence**",
-            "**Fix**",
-            "**Rule**",
-            "- ",
-            "* ",
-            "**",
+    lambda s: (
+        bool(s.strip())
+        and not any(
+            marker in s
+            for marker in (
+                "### Finding",
+                "## ",
+                "**File**",
+                "**Severity**",
+                "**Description**",
+                "**Evidence**",
+                "**Fix**",
+                "**Rule**",
+                "- ",
+                "* ",
+                "**",
+            )
         )
     )
 )
