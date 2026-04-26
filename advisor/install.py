@@ -379,11 +379,17 @@ def install_skill(
     """
     target = path or default_skill_path()
     # Same $HOME guard as ``install()`` — refuse to auto-write outside the
-    # user's home when no explicit path is supplied.
+    # user's home when no explicit path is supplied. Reassign ``target`` to
+    # the resolved path so all subsequent operations (mkdir, exists, write)
+    # land on the canonical location instead of the unresolved one — keeps
+    # behavior identical to ``install()`` and avoids a confusing situation
+    # where the symlink-rejection check resolved one path but the write
+    # then operated on a different one.
     if path is None:
         resolved = target.resolve()
         if not resolved.is_relative_to(Path.home().resolve()):
             raise OSError(f"refusing to install skill outside $HOME: {resolved}")
+        target = resolved
     target.parent.mkdir(parents=True, exist_ok=True)
 
     if target.exists():

@@ -94,6 +94,28 @@ class TestBuildAdvisorPrompt:
 
         assert "team review" in prompt
 
+    def test_no_unsubstituted_brace_placeholders_leak(self):
+        """The rendered advisor prompt must not contain literal ``{name}``
+        tokens — those are template placeholders that should be substituted
+        by build_advisor_prompt. A missing entry in ``_PLACEHOLDERS`` (or
+        an authoring typo in advisor.txt where a meta-placeholder for the
+        advisor to fill in mid-pipeline used ``{}`` instead of ``<>``)
+        would otherwise leak the literal token to the runtime prompt and
+        confuse the advisor.
+
+        Meta-placeholders that the advisor fills in at run time use the
+        ``<name>`` (angle bracket) convention to make the distinction
+        explicit. Anything in ``{name}`` form must be substituted.
+        """
+        import re as _re
+
+        config = default_team_config("/src", context="goal", test_command="pytest -q")
+        prompt = build_advisor_prompt(config)
+        # Match ``{identifier}`` only — leave Python-style format spec
+        # examples (``{x:.2f}``) alone since the template doesn't use them.
+        leaked = _re.findall(r"\{[a-z_][a-z0-9_]*\}", prompt)
+        assert leaked == [], f"unsubstituted placeholders leaked: {leaked}"
+
 
 class TestBuildRunnerAgents:
     def test_creates_one_per_task(self):

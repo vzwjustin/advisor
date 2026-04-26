@@ -84,6 +84,25 @@ _PROTOCOL_VIOLATION_RE = re.compile(
 _HANDOFF_RE = re.compile(r"##\s+Handoff\s+from\s+runner-\d+")
 
 
+def _runner_sort_key(runner_id: str) -> tuple[int, int, str]:
+    """Natural-sort key for ``runner-N`` ids (and the ``runner-?`` sentinel).
+
+    Plain ``sorted(...)`` puts ``runner-10`` before ``runner-2`` because
+    it compares strings lexically. Pool sizes are clamped to 20 in
+    :class:`TeamConfig` / :func:`_resolve_max_runners`, which is enough
+    for the lexical bug to surface in real audit output. Use the parsed
+    integer as the primary sort key, with the unattributed ``runner-?``
+    sentinel sorted last so it doesn't fall between numeric ids on the
+    page. Fallback string compare keeps non-numeric ids stable across
+    runs.
+    """
+    suffix = runner_id[len("runner-") :] if runner_id.startswith("runner-") else runner_id
+    if suffix.isdigit():
+        return (0, int(suffix), runner_id)
+    # ``runner-?`` and any future non-numeric id sort after the numbered ones.
+    return (1, 0, runner_id)
+
+
 @dataclass(frozen=True, slots=True)
 class AuditReport:
     """Structured output of :func:`audit_transcript`.
@@ -208,7 +227,7 @@ def audit_transcript(transcript: str, cp: Checkpoint) -> AuditReport:
 
     cap = cp.max_fixes_per_runner
     cap_overruns: list[str] = []
-    for runner, count in sorted(fix_counts.items()):
+    for runner, count in sorted(fix_counts.items(), key=lambda kv: _runner_sort_key(kv[0])):
         if count > cap:
             cap_overruns.append(
                 f"{runner}: observed {count} fix assignments (cap={cap}) "
@@ -332,7 +351,7 @@ def format_audit_report(report: AuditReport) -> str:
 
     lines.append("## Fix counts per runner")
     if report.fix_counts:
-        for runner in sorted(report.fix_counts):
+        for runner in sorted(report.fix_counts, key=_runner_sort_key):
             nums = report.fix_numbers.get(runner, [])
             nums_str = f" (fix numbers seen: {', '.join(str(n) for n in nums)})" if nums else ""
             lines.append(f"- {runner}: {report.fix_counts[runner]}{nums_str}")

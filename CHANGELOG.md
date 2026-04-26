@@ -10,6 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 - `pr_comment.py`: HTML-escape every user-controlled finding field (severity, file_path, rule_id, description, fix) before it lands inside the generated `<details>` / `<summary>` / `<code>` / `<strong>` markup posted to GitHub. Previously only `<details>` tag-shaped strings were neutralized; arbitrary HTML in any other field flowed through verbatim and could leak past GitHub's user-content sanitizer (e.g. attribute-injection payloads on `<img>`). Defense-in-depth — narrows reliance on the downstream sanitizer. Evidence content (rendered inside a fenced code block) keeps the existing fence-collision neutralizer plus a narrowed `<details>` tag escape so a renderer that mishandles the fence cannot close the wrapper block early.
 
+### Fixed
+- `orchestrate/_prompts/advisor.txt`: Fix unsubstituted `{batch_files}` placeholder leak on the scope-drift instruction line. Templated as `{batch_files}` but never declared in `_PLACEHOLDERS`, the literal token surfaced verbatim in the rendered advisor prompt. Renamed to `<batch_files>` to match the surrounding meta-placeholder convention (`<file>`, `<assigned_file>` — slots the advisor fills in mid-pipeline).
+- `audit.py`: `format_audit_report` now natural-sorts runner ids so `runner-10` sorts after `runner-9` instead of between `runner-1` and `runner-2`. Pool size is clamped to 20, so double-digit runner ids appear in real audit output. The `runner-?` sentinel for unattributed fixes sorts last so numeric runners stay contiguous on the page.
+- `verify.py`: `_extract_value` now re-strips whitespace after the backtick strip, so `` - **File**: ` foo ` `` no longer parses as `' foo '` (with the inner whitespace surviving). Surfaced by a new hypothesis round-trip property test that fed `format_findings_block` → `parse_findings_from_text` and asserted equivalence — the parser quirk would have left trailing whitespace on file paths, severity strings, and rule ids that downstream allowlist / path-matching consumers key on the trimmed value.
+- `install.py`: `install_skill` now reassigns `target = resolved` after the `$HOME`-relative check (matching `install()`) so the subsequent mkdir/exists/write calls operate on the canonical resolved path instead of the unresolved one. No functional change today (the symlink-rejection in `_atomic_write_text` covers the gap), removes a confusing inconsistency between the two install paths.
+
+### Added — property-based fuzz coverage
+- `tests/test_properties.py` — hypothesis property tests for `format_pr_comment` (no unescaped `<script>`/`<iframe>`/on-attribute payloads in HTML body, balanced `<details>` markup, body cap respected), `parse_findings_from_text` (full round-trip with `format_findings_block`), and `_compile_ignore_patterns` (never raises on arbitrary glob input). The pr_comment HTML-injection guarantee and the `_extract_value` whitespace fix above were both surfaced or strengthened by this suite.
+
 ## [0.5.1] - 2026-04-25
 
 ### Fixed
