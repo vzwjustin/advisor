@@ -435,12 +435,11 @@ def run_server(
         server.server_close()
 
 
-def find_free_port(host: str = DEFAULT_HOST, start: int = DEFAULT_PORT, tries: int = 20) -> int:
+def find_free_port(host: str = DEFAULT_HOST) -> int:
     """Return a free port assigned by the OS.
 
     Binds with port 0 so the kernel picks an available port atomically,
     eliminating the bind-close-return TOCTOU race of scanning candidates.
-    ``start`` and ``tries`` are accepted for backward compatibility but unused.
 
     Only used by tests and by the CLI when ``--port 0`` is requested.
     """

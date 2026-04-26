@@ -188,7 +188,10 @@ def normalize_path(path: str) -> str:
     line-number tail (``C`` is not all digits).
     """
     p = path.strip().strip("`").strip().replace("\\", "/")
-    if p.startswith("./"):
+    # Strip *all* leading `./` segments so `./foo.py` and `././foo.py`
+    # produce the same identity key. Mirrors `baseline._normalize_identity_path`
+    # so suppressions and baseline diffs agree on path equality.
+    while p.startswith("./"):
         p = p[2:]
     for _ in range(2):
         if ":" not in p:

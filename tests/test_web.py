@@ -23,7 +23,6 @@ from advisor.web import build_app_state, run_server
 from advisor.web.assets import APP_JS
 from advisor.web.server import (
     DEFAULT_HOST,
-    DEFAULT_PORT,
     _cost_payload,
     _history_payload,
     _plan_payload,
@@ -313,7 +312,7 @@ def live_server(tmp_path):
     won't prevent pytest from exiting; we still explicitly shut down the
     server in a finally block.
     """
-    port = find_free_port(start=DEFAULT_PORT + 1)
+    port = find_free_port()
     state = build_app_state(tmp_path, min_priority=1)
 
     # We can't call run_server() directly because it blocks. Reimplement
@@ -580,7 +579,7 @@ class TestRunServerKeyboardInterrupt:
             "advisor.web.server.ThreadingHTTPServer",
             lambda *a, **kw: self._fake_server_class()(),
         )
-        run_server(state, port=find_free_port(start=DEFAULT_PORT + 100))
+        run_server(state, port=find_free_port())
         assert "shutting down" in capsys.readouterr().out
 
 

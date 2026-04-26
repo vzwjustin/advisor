@@ -193,8 +193,8 @@ EXTENSION_LANGUAGE: dict[str, str] = {
 def language_for_path(path: str) -> str | None:
     """Return canonical language name for a file path, or ``None``.
 
-    Looks up the file extension (including multi-dot forms like ``.d.ts``
-    falling back to ``.ts``) in :data:`EXTENSION_LANGUAGE`.
+    Looks up the suffix returned by ``Path(path).suffix`` (e.g. ``.ts`` for
+    ``foo.d.ts``) in :data:`EXTENSION_LANGUAGE`.
     """
     suffix = Path(path).suffix.lower()
     return EXTENSION_LANGUAGE.get(suffix)

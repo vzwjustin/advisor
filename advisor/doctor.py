@@ -88,6 +88,7 @@ def _check_python_version() -> Check:
     # an older interpreter. Surface it as a hard fail rather than green.
     info = sys.version_info
     label = f"Python {info.major}.{info.minor}"
+    # Keep this threshold in sync with `requires-python` in pyproject.toml.
     if (info.major, info.minor) < (3, 10):
         return Check("python", "fail", f"{label} — advisor requires Python 3.10+")
     return Check("python", "ok", label)

@@ -301,10 +301,16 @@ def audit_transcript(transcript: str, cp: Checkpoint) -> AuditReport:
     cap_overruns: list[str] = []
     for runner, count in sorted(fix_counts.items(), key=lambda kv: _runner_sort_key(kv[0])):
         if count > cap:
-            cap_overruns.append(
-                f"{runner}: observed {count} fix assignments (cap={cap}) "
-                "— rotation was late or missed"
-            )
+            if runner == "runner-?":
+                cap_overruns.append(
+                    f"runner-? (unattributed): {count} fix assignments detected (cap={cap}) "
+                    "— attribution failed; check transcript for dense dispatch blocks"
+                )
+            else:
+                cap_overruns.append(
+                    f"{runner}: observed {count} fix assignments (cap={cap}) "
+                    "— rotation was late or missed"
+                )
 
     # Context-pressure: per-runner first-mention order + raw total count.
     # Uses a separate attribution path (SendMessage envelope-aware) because

@@ -244,6 +244,19 @@ def _parse_blocks(text: str) -> list[Finding]:
     for line in text.split("\n"):
         stripped = line.strip()
 
+        # Track fence state for the entire file, not just inside an active
+        # field. A runner emitting fenced prose before any field would
+        # otherwise leave `in_fence=False` and the H2/`### Finding` guards
+        # below would treat fenced headings as real boundaries.
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            in_fence = not in_fence
+            if active_key:
+                # Fence inside an active field — skip the marker so it doesn't
+                # pollute the value, but the toggle above still counts.
+                continue
+            # Outside any field, also skip; nothing to accumulate.
+            continue
+
         # Report boundary: an H2 heading (e.g. "## Summary") closes the
         # current findings region. Reset the latch so any later headerless
         # findings region in the same text re-arms the second-File safety
@@ -334,15 +347,8 @@ def _parse_blocks(text: str) -> list[Finding]:
                 if active_key:
                     current[active_key] = (current[active_key] + " " + stripped).strip()
         elif active_key and stripped and not stripped.startswith("### Finding"):
-            # Toggle fence state on opening/closing markers and skip the
-            # marker line itself — a runner embedding a code block inside an
-            # Evidence value should not pollute the field with literal ``` text.
-            # Toggling (rather than just skipping) lets the H2/### boundary
-            # checks above know they're inside a fence and must not treat
-            # headings as report-section delimiters.
-            if stripped.startswith("```") or stripped.startswith("~~~"):
-                in_fence = not in_fence
-                continue
+            # Fence markers are already handled at the top of the loop and
+            # never reach here — accumulate everything else into the active field.
             current[active_key] = (current.get(active_key, "") + " " + stripped).strip()
 
     if current:
@@ -351,11 +357,13 @@ def _parse_blocks(text: str) -> list[Finding]:
     return findings
 
 
-def _extract_value(line: str, prefix: str = "") -> str:
+def _extract_value(line: str, prefix: str) -> str:
     """Extract the value after the known prefix in a '**Key**: value' line.
 
     Uses the matched prefix length to avoid splitting on colons inside the
-    value (e.g. Windows paths like ``C:\\Users\\...``).
+    value (e.g. Windows paths like ``C:\\Users\\...``). The single caller in
+    :func:`_match_key` always supplies a non-empty prefix from
+    ``_KEY_PREFIXES``, so no colon-split fallback is needed.
 
     The triple ``strip().strip("`").strip()`` is deliberate: the first
     strip removes whitespace around the backticked span, the second
@@ -366,11 +374,7 @@ def _extract_value(line: str, prefix: str = "") -> str:
     breaks downstream allowlist and path-matching consumers that key
     on the trimmed value.
     """
-    if prefix:
-        after = line[len(prefix) :]
-        return after.strip().strip("`").strip()
-    parts = line.split(":", 1)
-    return parts[1].strip().strip("`").strip() if len(parts) > 1 else ""
+    return line[len(prefix) :].strip().strip("`").strip()
 
 
 def _dict_to_finding(d: dict[str, str]) -> Finding | None:

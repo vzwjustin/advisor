@@ -74,7 +74,9 @@ def _warn_unknown_family(model: str) -> None:
         f"cost: unknown model family for {model!r}; pricing as 'sonnet' — "
         f"pass `pricing=` to override",
         UserWarning,
-        stacklevel=3,
+        # Frames: warn → _warn_unknown_family → _family_of → estimate_cost
+        # → user code. stacklevel=4 blames the user's estimate_cost(...) call.
+        stacklevel=4,
     )
 
 

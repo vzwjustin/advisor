@@ -13,6 +13,7 @@ import sys
 import time
 import warnings
 from collections.abc import Callable, Sequence
+from dataclasses import fields as _dc_fields
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
 from pathlib import Path
@@ -85,6 +86,26 @@ from .sarif import findings_to_sarif
 # Individual payload modules (history, checkpoint) carry their own
 # schema_version fields for fine-grained evolution.
 JSON_SCHEMA_VERSION = "1.0"
+
+
+def _team_config_default(name: str) -> int:
+    """Return the default value of a ``TeamConfig`` int field by name.
+
+    Single source of truth for argparse defaults and ``getattr`` fallbacks
+    in ``_config_from_args`` — without this, ``5`` / ``800`` / ``3``
+    appear in three places (dataclass, argparse, getattr) and silently
+    drift apart on changes.
+    """
+    for f in _dc_fields(TeamConfig):
+        if f.name == name:
+            assert isinstance(f.default, int)
+            return f.default
+    raise KeyError(name)
+
+
+_DEFAULT_MAX_FIXES = _team_config_default("max_fixes_per_runner")
+_DEFAULT_LARGE_FILE_THRESHOLD = _team_config_default("large_file_line_threshold")
+_DEFAULT_LARGE_FILE_MAX_FIXES = _team_config_default("large_file_max_fixes")
 
 
 def _get_version() -> str:
@@ -193,9 +214,11 @@ def _config_from_args(args: argparse.Namespace) -> TeamConfig:
         context=context,
         advisor_model=args.advisor_model,
         runner_model=args.runner_model,
-        max_fixes_per_runner=getattr(args, "max_fixes_per_runner", 5),
-        large_file_line_threshold=getattr(args, "large_file_line_threshold", 800),
-        large_file_max_fixes=getattr(args, "large_file_max_fixes", 3),
+        max_fixes_per_runner=getattr(args, "max_fixes_per_runner", _DEFAULT_MAX_FIXES),
+        large_file_line_threshold=getattr(
+            args, "large_file_line_threshold", _DEFAULT_LARGE_FILE_THRESHOLD
+        ),
+        large_file_max_fixes=getattr(args, "large_file_max_fixes", _DEFAULT_LARGE_FILE_MAX_FIXES),
         test_command=getattr(args, "test_cmd", "") or "",
         preset=getattr(args, "preset", None),
     )
@@ -248,7 +271,7 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--max-fixes-per-runner",
         type=int,
-        default=5,
+        default=_DEFAULT_MAX_FIXES,
         help=(
             "Hard cap on sequential fix assignments per runner before the "
             "advisor rotates to a fresh runner. Lower this (e.g. 3) if "
@@ -258,7 +281,7 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--large-file-line-threshold",
         type=int,
-        default=800,
+        default=_DEFAULT_LARGE_FILE_THRESHOLD,
         help=(
             "Line count above which a file is considered 'large' for the "
             "tighter per-runner fix cap (see --large-file-max-fixes). "
@@ -268,7 +291,7 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--large-file-max-fixes",
         type=int,
-        default=3,
+        default=_DEFAULT_LARGE_FILE_MAX_FIXES,
         help=(
             "Effective fix cap for any batch containing a file at or above "
             "--large-file-line-threshold lines. Lowest applicable cap wins. "
@@ -1688,10 +1711,25 @@ def cmd_baseline(args: argparse.Namespace) -> int:
     target = Path(args.target)
     if action == "create":
         output = Path(getattr(args, "output", None) or (target / ".advisor" / "baseline.jsonl"))
-        findings, rc = _load_findings_from_input(getattr(args, "from_file", None))
+        from_file = getattr(args, "from_file", None)
+        findings, rc = _load_findings_from_input(from_file)
         if rc is not None:
             return rc
         typed_findings: list[Finding] = [f for f in findings if isinstance(f, Finding)]
+        # `_load_findings_from_input` returns ([], None) on a TTY stdin so the
+        # shared helper's empty-result is benign for `diff`/`audit`/`sarif`,
+        # but `create` writes a baseline that callers will diff against — a
+        # silent zero-finding baseline would mask every finding next run.
+        if not typed_findings and from_file is None and sys.stdin.isatty():
+            print(
+                _style.error_box(
+                    "baseline create: no findings on stdin and no --from FILE; "
+                    "refusing to overwrite baseline with zero findings",
+                    stream=sys.stderr,
+                ),
+                file=sys.stderr,
+            )
+            return 2
         entries = findings_to_entries(typed_findings)
         try:
             write_baseline(output, entries)
