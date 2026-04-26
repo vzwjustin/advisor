@@ -52,7 +52,7 @@ class BaselineEntry:
 
 def _normalize_identity_path(path: str) -> str:
     """Normalize superficial path spelling while preserving line identity."""
-    normalized = path.strip().strip("`").replace("\\", "/")
+    normalized = path.strip().strip("`").strip().replace("\\", "/")
     while normalized.startswith("./"):
         normalized = normalized[2:]
     return normalized

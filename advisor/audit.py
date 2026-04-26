@@ -227,6 +227,10 @@ def _attribute_fix_to_runner(transcript: str, match_start: int) -> str:
 #      doing the work, and therefore the one pinging.
 #   3. Fall back to ``runner-?``.
 
+# NOTE: matches only literal quoted ``to='runner-N'`` / ``to="runner-N"``.
+# F-string or dynamic ids (``to=f'runner-{n}'``) silently fall through and
+# the audit attributes the fix to ``runner-?`` instead. Keep call sites
+# literal so the audit can attribute correctly.
 _SENDMESSAGE_TO_RUNNER_RE = re.compile(r"to\s*=\s*['\"]runner-(\d+)['\"]")
 # Capture the message body of a SendMessage(...) call when the marker is
 # inside it. Bounded scan — we look in a fixed window before/after the

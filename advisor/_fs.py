@@ -187,7 +187,7 @@ def normalize_path(path: str) -> str:
     (``C:\\Users\\...`` → ``C:/Users/...``) are never treated as a
     line-number tail (``C`` is not all digits).
     """
-    p = path.strip().strip("`").replace("\\", "/")
+    p = path.strip().strip("`").strip().replace("\\", "/")
     if p.startswith("./"):
         p = p[2:]
     for _ in range(2):

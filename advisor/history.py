@@ -324,8 +324,15 @@ def _age_days(entry: HistoryEntry, *, now: datetime | None = None) -> float:
         return math.inf
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=UTC)
-    delta = now_dt - ts
-    return max(0.0, delta.total_seconds() / 86400.0)
+    delta_seconds = (now_dt - ts).total_seconds()
+    # Future-dated entries beyond a 60s grace window are treated as
+    # untrustworthy (mirroring the unparseable-timestamp branch above) so a
+    # year-2099 timestamp cannot permanently inflate repeat-offender scores.
+    # The 60s tolerance absorbs benign clock skew (e.g. a test that writes an
+    # entry at T and reads it at T - epsilon).
+    if delta_seconds < -60.0:
+        return math.inf
+    return max(0.0, delta_seconds / 86400.0)
 
 
 def file_repeat_counts(

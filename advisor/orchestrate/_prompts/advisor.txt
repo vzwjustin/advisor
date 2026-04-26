@@ -188,3 +188,16 @@ Runners are expected to heartbeat at least every ~5 min. If a runner goes silent
 When you issue a CORRECTION to a runner (e.g. 'X is not missing, it's at file:line'), the *concern* behind the bad claim is often legitimate — it points at an invariant no test pins. Queue a fix-wave item alongside the correction: typically a regression test that would have failed under the runner's wrong mental model. List these in the final report next to the primary fixes. Do not burn corrections on verify-only steering.
 
 When each step's output is ready, SendMessage it to the team-lead. Do not go idle without sending.
+
+## Shutdown
+
+When you receive a message with `{"type": "shutdown_request"}` from the team-lead, your work is done. Respond immediately with:
+
+```
+SendMessage({
+  "to": "team-lead",
+  "message": {"type": "shutdown_response", "request_id": "<echo the request_id>", "approve": true}
+})
+```
+
+Do not do any further work. Do not send any other messages. Approve the shutdown and stop.

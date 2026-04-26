@@ -766,7 +766,11 @@ def _count_lines(target: Path, file_path: str) -> int:
     count is a soft signal, not a hard block.
     """
     try:
-        p = (target / file_path) if not Path(file_path).is_absolute() else Path(file_path)
+        fp = Path(file_path)
+        is_abs = fp.is_absolute() or (
+            len(file_path) >= 2 and file_path[1] == ":" and file_path[0].isalpha()
+        )
+        p = fp if is_abs else (target / file_path)
         with p.open("r", encoding="utf-8", errors="replace") as fh:
             return sum(1 for _ in fh)
     except OSError:

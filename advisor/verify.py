@@ -227,6 +227,7 @@ def _parse_blocks(text: str) -> list[Finding]:
     # "list" or "plain"; keeps body labels from stealing slots.
     field_style: str | None = None
     in_header_block: bool = False  # True once we see any ### Finding header
+    in_fence: bool = False  # True while inside a fenced code block (``` or ~~~)
 
     def _flush() -> None:
         finding = _dict_to_finding(current)
@@ -253,7 +254,9 @@ def _parse_blocks(text: str) -> list[Finding]:
         # _dict_to_finding's missing-fields drop — the H2 line itself was
         # almost certainly continuation of the active body (e.g. a runner
         # pasted "## relevant section" inside an Evidence block).
-        if stripped.startswith("## ") and not stripped.startswith("### "):
+        # When inside a fenced code block, never treat H2 as a boundary —
+        # it's source code inside an Evidence or Fix value, not a report section.
+        if not in_fence and stripped.startswith("## ") and not stripped.startswith("### "):
             block_is_complete = all(k in current for k in _REQUIRED_FIELDS)
             if not active_key or block_is_complete:
                 if current:
@@ -276,7 +279,9 @@ def _parse_blocks(text: str) -> list[Finding]:
         # honor the header as a boundary when either no block is in progress
         # (active_key is None) OR the current block already has every required
         # field (so flushing is safe).
-        if stripped.startswith("### Finding"):
+        # Same fence guard: a runner may include "### Finding" as a comment
+        # inside a code example; don't treat that as a real block delimiter.
+        if not in_fence and stripped.startswith("### Finding"):
             block_is_complete = all(k in current for k in _REQUIRED_FIELDS)
             if not active_key or block_is_complete:
                 if current:
@@ -329,12 +334,14 @@ def _parse_blocks(text: str) -> list[Finding]:
                 if active_key:
                     current[active_key] = (current[active_key] + " " + stripped).strip()
         elif active_key and stripped and not stripped.startswith("### Finding"):
-            # Skip pure Markdown fence markers — a runner embedding a code
-            # block inside an Evidence value would otherwise pollute the
-            # field with literal ```` ``` ```` or ``~~~`` text. Both CommonMark
-            # fence styles are handled so tilde-fenced evidence snippets don't
-            # bleed into parsed field values.
+            # Toggle fence state on opening/closing markers and skip the
+            # marker line itself — a runner embedding a code block inside an
+            # Evidence value should not pollute the field with literal ``` text.
+            # Toggling (rather than just skipping) lets the H2/### boundary
+            # checks above know they're inside a fence and must not treat
+            # headings as report-section delimiters.
             if stripped.startswith("```") or stripped.startswith("~~~"):
+                in_fence = not in_fence
                 continue
             current[active_key] = (current.get(active_key, "") + " " + stripped).strip()
 
