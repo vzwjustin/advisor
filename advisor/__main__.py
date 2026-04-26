@@ -719,9 +719,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
         if rc is not None:
             return rc
 
-    return _emit_plan(
-        args, target, tasks, batches, run_id=saved_run_id, resolved_config=cfg
-    )
+    return _emit_plan(args, target, tasks, batches, run_id=saved_run_id, resolved_config=cfg)
 
 
 def _batches_from_checkpoint(cp: Checkpoint) -> list[FocusBatch]:

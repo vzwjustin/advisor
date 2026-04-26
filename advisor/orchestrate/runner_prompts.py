@@ -598,11 +598,7 @@ def build_runner_handoff_message(
     # builder fences its untrusted fields — caller text containing
     # ``## `` or triple backticks would otherwise inject synthetic
     # section headers into the handoff brief.
-    extra = (
-        f"\n\n## Extra context\n{fence(extra_context.strip())}"
-        if extra_context.strip()
-        else ""
-    )
+    extra = f"\n\n## Extra context\n{fence(extra_context.strip())}" if extra_context.strip() else ""
     body = (
         f"## Handoff from runner-{outgoing_runner_id}\n\n"
         f"You are runner-{new_runner_id}. runner-{outgoing_runner_id} is "
