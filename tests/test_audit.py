@@ -276,6 +276,63 @@ class TestFormatAuditReport:
         assert "crypto.py" in text
         assert "scope drift" in text.lower()
 
+    def test_runners_sorted_naturally_not_lexically(self):
+        """``runner-10`` should appear *after* ``runner-2``/``runner-9``, not
+        between ``runner-1`` and ``runner-2`` as plain string sort would put it.
+
+        Pool sizes are clamped to 20 (TeamConfig + _resolve_max_runners) so
+        double-digit runner ids appear in real audit output.
+        """
+        transcript = "\n".join(
+            f"SendMessage(to='runner-{i}', message='## Fix assignment (fix 1 of 5)')"
+            for i in (1, 2, 9, 10, 11, 20)
+        )
+        cp = _mk_checkpoint()
+        report = audit_transcript(transcript, cp)
+        text = format_audit_report(report)
+        # Find the per-runner lines under "## Fix counts per runner".
+        in_section = False
+        ordered_runners: list[str] = []
+        for line in text.splitlines():
+            if line.startswith("## Fix counts per runner"):
+                in_section = True
+                continue
+            if in_section:
+                if line.startswith("##"):
+                    break
+                if line.startswith("- runner-"):
+                    # Strip "- " prefix and ":" suffix off the runner id token.
+                    token = line[len("- ") :].split(":", 1)[0]
+                    ordered_runners.append(token)
+        assert ordered_runners == [
+            "runner-1",
+            "runner-2",
+            "runner-9",
+            "runner-10",
+            "runner-11",
+            "runner-20",
+        ], f"runners are not natural-sorted: {ordered_runners}"
+
+    def test_unattributed_runner_question_mark_sorts_last(self):
+        """The ``runner-?`` sentinel for unattributed fixes sorts after the
+        numeric runner ids so the human-readable report keeps the numeric
+        runners contiguous at the top.
+        """
+        transcript = (
+            "SendMessage(to='runner-1', message='## Fix assignment (fix 1 of 5)')\n"
+            + "garbage " * 200
+            + "\n## Fix assignment (fix 1 of 5)\n"  # unattributed
+            + "SendMessage(to='runner-2', message='## Fix assignment (fix 1 of 5)')\n"
+        )
+        cp = _mk_checkpoint()
+        report = audit_transcript(transcript, cp)
+        text = format_audit_report(report)
+        assert "runner-?" in report.fix_counts
+        # In the rendered report, runner-? appears AFTER runner-2.
+        idx_q = text.index("runner-?")
+        idx_2 = text.index("runner-2")
+        assert idx_2 < idx_q, "runner-? should sort after numeric runners"
+
 
 class TestAuditCLI:
     """`advisor audit RUN_ID` smoke test — uses saved_checkpoint + stdin."""

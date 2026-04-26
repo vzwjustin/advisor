@@ -338,12 +338,21 @@ def _extract_value(line: str, prefix: str = "") -> str:
 
     Uses the matched prefix length to avoid splitting on colons inside the
     value (e.g. Windows paths like ``C:\\Users\\...``).
+
+    The triple ``strip().strip("`").strip()`` is deliberate: the first
+    strip removes whitespace around the backticked span, the second
+    strips the surrounding backticks, and the third re-strips any
+    whitespace that was *inside* the backticks. Without the final
+    strip, an emitted ``- **File**: ` foo ``` would round-trip as the
+    literal ``" foo "`` (with the inner whitespace surviving), which
+    breaks downstream allowlist and path-matching consumers that key
+    on the trimmed value.
     """
     if prefix:
         after = line[len(prefix) :]
-        return after.strip().strip("`")
+        return after.strip().strip("`").strip()
     parts = line.split(":", 1)
-    return parts[1].strip().strip("`") if len(parts) > 1 else ""
+    return parts[1].strip().strip("`").strip() if len(parts) > 1 else ""
 
 
 def _dict_to_finding(d: dict[str, str]) -> Finding | None:

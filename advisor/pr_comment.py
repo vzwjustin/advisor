@@ -1,53 +1,68 @@
 """Format findings as a GitHub-flavored markdown PR comment.
 
 Emits a collapsible ``<details>`` block per finding plus a summary table
-keyed by severity. Safe to paste into a PR body — backticks in
-descriptions are escaped so the markdown renderer doesn't choke, and
-pipe characters are HTML-escaped so they don't break inline tables.
+keyed by severity. Safe to paste into a PR body — every user-controlled
+finding field is HTML-escaped before landing inside the intentional HTML
+markup (``<details>``, ``<summary>``, ``<code>``, ``<strong>``), pipe
+characters are escaped so they don't break the summary table, and the
+evidence block uses the existing fenced-code-block fence-collision
+neutralizer (replace ``` with ''' so the fence stays balanced).
 
 Pure string-in, string-out. No I/O.
 """
 
 from __future__ import annotations
 
+import html
 import re
 
 from .verify import Finding
+
+# Defense-in-depth for evidence content: a stray ``</details>`` inside the
+# fenced evidence block could close our outer ``<details>`` early on a
+# Markdown renderer that mishandles the fence. Replace the leading ``<``
+# with ``&lt;`` so the literal text survives the fence rendering and
+# never reaches the HTML parser as a real tag.
+_DETAILS_TAG_RE = re.compile(r"<(/?)details\b", re.IGNORECASE)
 
 _SEVERITY_ORDER = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
 
 # GitHub rejects PR/issue bodies and comments above 65,536 characters with a
 # 422 error. Leave headroom for the trailing truncation notice.
 _GITHUB_BODY_LIMIT = 60_000
-_DETAILS_TAG_RE = re.compile(r"<(/?)details\b", re.IGNORECASE)
 
 
-def _escape_table_cell(text: str) -> str:
-    """Escape characters that break GFM table rendering."""
-    # Pipes split columns; backticks inside backticks need careful handling.
-    return text.replace("|", "\\|").replace("\n", " ")
+def _escape_html(text: str) -> str:
+    """HTML-escape a user-controlled field that lands inside HTML markup.
 
-
-def _escape_inline(text: str) -> str:
-    """Escape backticks when embedded in an inline ``code`` span."""
-    # A value containing `` needs the whole span to use more backticks —
-    # simpler to swap the runs to tilde-visible so output stays safe.
-    return text.replace("`", "‘")
-
-
-def _neutralize_details(text: str) -> str:
-    """Neutralize stray ``</details>`` / ``<details>`` tags in prose.
-
-    When finding descriptions or fixes are interpolated into a
-    ``<details>``-wrapped body, a ``</details>`` substring inside them
-    closes our outer block early, cascading into subsequent findings and
-    breaking the GitHub PR render. We replace the leading ``<`` with the
-    HTML entity ``&lt;`` so GitHub renders the literal text and never
-    parses the tag — robust under copy-paste and across renderers,
-    unlike the zero-width-space trick which depends on the parser
-    rejecting non-letter tag-name starts.
+    Wraps :func:`html.escape` with ``quote=True`` so attribute-context
+    payloads (``onerror="…"``) cannot break out either, even though all
+    current call sites land inside element bodies, not attributes —
+    defense in depth for any future template tweak.
     """
-    return _DETAILS_TAG_RE.sub(lambda m: f"&lt;{m.group(1)}details", text)
+    return html.escape(text, quote=True)
+
+
+def _escape_summary(text: str) -> str:
+    """Escape a field for placement inside a ``<summary>`` element.
+
+    The summary line also serves as the `<details>` title in the rendered
+    page; collapse newlines (so a multi-line description doesn't break the
+    summary onto two visual rows) and escape pipes (so a stray ``|`` in
+    a finding's description can't accidentally extend the preceding
+    summary table on some Markdown renderers).
+    """
+    return _escape_html(text).replace("|", "\\|").replace("\n", " ")
+
+
+def _escape_inline_code(text: str) -> str:
+    """Escape a field for placement inside an HTML ``<code>`` element.
+
+    HTML-escape covers ``<``/``>``/``&``/quotes; the literal-backtick swap
+    keeps the value visually distinct when GitHub re-renders the inner
+    text as Markdown after stripping the outer ``<code>`` (a quirk of GFM).
+    """
+    return _escape_html(text).replace("`", "‘")
 
 
 def format_pr_comment(findings: list[Finding]) -> str:
@@ -91,26 +106,37 @@ def format_pr_comment(findings: list[Finding]) -> str:
     rendered_count = 0
     truncated = False
     for f in findings:
-        title = _neutralize_details(_escape_table_cell(f.description))[:100] or "(no description)"
+        # Truncate before HTML-escape so the slice can't land in the middle of
+        # a multi-character entity like ``&lt;``.
+        title_raw = f.description[:100] or "(no description)"
+        title = _escape_summary(title_raw)
         block: list[str] = [
             (
-                f"<details><summary><strong>[{f.severity}]</strong> "
-                f"<code>{_escape_inline(f.file_path)}</code> — {title}</summary>"
+                f"<details><summary><strong>[{_escape_summary(f.severity)}]</strong> "
+                f"<code>{_escape_inline_code(f.file_path)}</code> — {title}</summary>"
             ),
             "",
-            f"**Description:** {_neutralize_details(f.description)}",
+            f"**Description:** {_escape_html(f.description)}",
             "",
             "**Evidence:**",
             "",
             "```",
-            _neutralize_details(f.evidence).replace("```", "'''"),
+            # Inside a fenced code block GitHub renders content as literal
+            # text — HTML-escaping would surface ``&lt;`` to the reader.
+            # We only neutralize (a) the closing fence itself so the wrapper
+            # block stays balanced and (b) ``<details>`` tag-shaped strings
+            # so a renderer that mishandles the fence can't accidentally
+            # close our outer ``<details>`` early.
+            _DETAILS_TAG_RE.sub(
+                lambda m: f"&lt;{m.group(1)}details", f.evidence.replace("```", "'''")
+            ),
             "```",
             "",
-            f"**Fix:** {_neutralize_details(f.fix)}",
+            f"**Fix:** {_escape_html(f.fix)}",
         ]
         if f.rule_id:
             block.append("")
-            block.append(f"**Rule:** `{_escape_inline(f.rule_id)}`")
+            block.append(f"**Rule:** `{_escape_inline_code(f.rule_id)}`")
         block.append("")
         block.append("</details>")
         block.append("")
