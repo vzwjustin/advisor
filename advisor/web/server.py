@@ -415,13 +415,14 @@ def run_server(
     # ``server_address`` tuple is the only reliable source for what we
     # actually bound to, so report that instead of the request value.
     actual_port = server.server_address[1]
-    # Strip ANSI / newline / CR from the user-supplied host before echoing to
-    # the terminal so a `--host $'\x1b[2J'` or similar can't inject escape
+    # Strip every C0 + C1 control byte (incl. ESC, CR, LF, and the C1
+    # CSI ``\x9b``) from the user-supplied host before echoing to the
+    # terminal so a ``--host $'\x1b[2J'`` or similar can't inject escape
     # sequences into the startup banner. NOTE: this is for the printed
     # banner only — the actual socket bind above used the original
     # ``host`` string. If the caller passed escapes, the bind already
     # succeeded or failed on its own merits; this purely sanitizes echo.
-    host_safe = host.replace("\x1b", "").replace("\r", "").replace("\n", "")
+    host_safe = "".join(ch for ch in host if not (ch < " " or "\x7f" <= ch < "\xa0"))
     url = f"http://{host_safe}:{actual_port}"
     print(_style.success_box(f"advisor dashboard serving {state.target} at {url}"))
     print(_style.tip("press Ctrl-C to stop"))

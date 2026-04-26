@@ -1743,20 +1743,38 @@ def cmd_baseline(args: argparse.Namespace) -> int:
     if action == "diff":
         explicit_baseline = getattr(args, "baseline_path", None)
         baseline_path = Path(explicit_baseline or (target / ".advisor" / "baseline.jsonl"))
-        if explicit_baseline and not baseline_path.exists():
-            print(
-                _style.error_box(
-                    f"--baseline path not found: {baseline_path}",
-                    stream=sys.stderr,
-                ),
-                file=sys.stderr,
-            )
+        if not baseline_path.exists():
+            # Symmetric guard: explicit and implicit paths both error loudly
+            # when missing. Without this, the implicit-default branch fell
+            # into ``read_baseline()`` and produced a misleading "0 new, 0
+            # persisting" diff for users who hadn't run ``baseline create``.
+            if explicit_baseline:
+                msg = f"--baseline path not found: {baseline_path}"
+            else:
+                msg = (
+                    f"no baseline at {baseline_path}; "
+                    "run `advisor baseline create` first or pass --baseline PATH"
+                )
+            print(_style.error_box(msg, stream=sys.stderr), file=sys.stderr)
             return 2
         baseline = read_baseline(baseline_path)
-        findings, rc = _load_findings_from_input(getattr(args, "from_file", None))
+        from_file = getattr(args, "from_file", None)
+        findings, rc = _load_findings_from_input(from_file)
         if rc is not None:
             return rc
         typed_findings = [f for f in findings if isinstance(f, Finding)]
+        # Mirror the ``baseline create`` TTY guard: a TTY stdin with no
+        # ``--from FILE`` means the user has nothing to diff against the
+        # baseline — silently reporting "0 new, N fixed" looks like all
+        # findings were resolved, which is exactly the wrong signal.
+        if not typed_findings and from_file is None and sys.stdin.isatty():
+            print(
+                _style.warning_box(
+                    "baseline diff: no findings on stdin and no --from FILE; "
+                    "diff will show every baseline entry as 'fixed'"
+                ),
+                file=sys.stderr,
+            )
         diff = diff_against_baseline(typed_findings, baseline)
         if getattr(args, "json", False):
             payload = {

@@ -216,8 +216,13 @@ def install(path: Path | None = None, body: str = NUDGE_BODY) -> InstallResult:
     target = path or default_claude_md()
     # Defense-in-depth: if no explicit path was supplied, refuse to write
     # outside the user's home dir. Protects against a manipulated ``$HOME``
-    # redirecting the nudge to an unrelated file. Explicit ``path=`` is
-    # respected as-is — tests and power-users need to target arbitrary files.
+    # redirecting the nudge to an unrelated file (env-var poisoning).
+    # Symlinked dirs *under* a clean ``$HOME`` (e.g. dotfiles managers like
+    # stow / chezmoi pointing ``~/.claude`` at ``~/dotfiles/claude``) are
+    # legitimate and pass the guard — ``resolve()`` follows them and the
+    # resolved path still lives under ``Path.home().resolve()``. Explicit
+    # ``path=`` is respected as-is — tests and power-users need to target
+    # arbitrary files.
     if path is None:
         resolved = target.resolve()
         if not resolved.is_relative_to(Path.home().resolve()):

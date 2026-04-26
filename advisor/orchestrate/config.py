@@ -95,8 +95,12 @@ def _env_or(env_key: str, default: str) -> str:
 def _env_int_or(env_key: str, default: int) -> int:
     """Return ``int(os.environ[env_key])`` if valid, else default.
 
-    An invalid integer (e.g. ``ADVISOR_MAX_RUNNERS=xyz``) is silently
-    ignored — we treat env vars as soft defaults, not hard inputs.
+    An invalid integer (e.g. ``ADVISOR_MAX_RUNNERS=xyz``) falls back to
+    ``default`` — env vars are soft defaults, not hard inputs — but we
+    emit a one-line stderr warning so a user who typoed the value sees
+    that their override was ignored. The CLI's ``type=_pos_int_arg``
+    path errors loudly; this keeps the env-var path equally honest
+    without elevating it to a fatal.
     """
     raw = os.environ.get(env_key)
     if raw is None or not raw.strip():
@@ -104,6 +108,10 @@ def _env_int_or(env_key: str, default: int) -> int:
     try:
         return int(raw)
     except ValueError:
+        print(
+            _style.warning_box(f"{env_key}={raw!r} is not an integer; using default {default}"),
+            file=sys.stderr,
+        )
         return default
 
 
