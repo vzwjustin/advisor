@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- `pr_comment.py`: HTML-escape every user-controlled finding field (severity, file_path, rule_id, description, fix) before it lands inside the generated `<details>` / `<summary>` / `<code>` / `<strong>` markup posted to GitHub. Previously only `<details>` tag-shaped strings were neutralized; arbitrary HTML in any other field flowed through verbatim and could leak past GitHub's user-content sanitizer (e.g. attribute-injection payloads on `<img>`). Defense-in-depth — narrows reliance on the downstream sanitizer. Evidence content (rendered inside a fenced code block) keeps the existing fence-collision neutralizer plus a narrowed `<details>` tag escape so a renderer that mishandles the fence cannot close the wrapper block early.
+
 ## [0.5.1] - 2026-04-25
 
 ### Fixed
