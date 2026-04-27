@@ -29,12 +29,7 @@ def _inline_path(file_path: str) -> str:
     Newlines in a path likewise break out of the inline span; collapse
     them to spaces so the rendered list stays on one line per entry.
     """
-    return (
-        file_path.replace("`", "'")
-        .replace("\r\n", " ")
-        .replace("\n", " ")
-        .replace("\r", " ")
-    )
+    return file_path.replace("`", "'").replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
 
 
 def _format_batch_files(batch: FocusBatch, guidance: dict[str, str] | None = None) -> str:
@@ -292,8 +287,12 @@ def build_runner_pool_prompt(runner_id: int, config: TeamConfig) -> str:
         + f"For batches containing any file >= "
         f"{config.large_file_line_threshold} lines, the effective cap is "
         f"{config.large_file_max_fixes} — the advisor will stamp the "
-        "correct cap on every fix assignment message.\n\n"
-        + f"**Read-count proxy (secondary).** Count every file you Read in "
+        "correct cap on every fix assignment message. **In that case, ping "
+        f"after fix #{max(1, config.large_file_max_fixes - 1)} of "
+        f"{config.large_file_max_fixes}, not the default trigger above.** If "
+        "the advisor stamps any cap lower than "
+        f"{config.max_fixes_per_runner}, use that cap's (cap-1) threshold "
+        "instead.\n\n" + f"**Read-count proxy (secondary).** Count every file you Read in "
         f"this session (explore + fixes combined). If you cross "
         f"~{config.runner_file_read_ceiling} total reads, treat yourself "
         "as at-risk and send `CONTEXT_PRESSURE` at the start of your next "

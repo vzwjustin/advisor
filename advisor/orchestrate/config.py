@@ -186,6 +186,13 @@ def default_team_config(
         raw = _env_int_or("ADVISOR_MAX_RUNNERS", 5)
         max_runners = raw if raw >= 1 else 5
     elif max_runners < 1:
+        # Mirror the ceiling-clamp warning below: silent floor-clamping made
+        # ``--max-runners 0`` (or a negative typo) invisible to users, who
+        # then wonder why their pool came up at 1.
+        print(
+            _style.warning_box(f"max_runners={max_runners} is < 1; using 1"),
+            file=sys.stderr,
+        )
         max_runners = 1
     # Match the CLI's _MAX_RUNNERS_CEILING clamp so the env-var path and
     # explicit-API path can't spawn an unbounded pool through a typo.

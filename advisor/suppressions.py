@@ -210,9 +210,7 @@ def load_suppressions(path: Path) -> tuple[Suppression, ...]:
             try:
                 _double_star_to_regex(str(file_glob))
             except ValueError as exc:
-                raise ValueError(
-                    f"{ctx}: invalid file_glob {file_glob!r}: {exc}"
-                ) from exc
+                raise ValueError(f"{ctx}: invalid file_glob {file_glob!r}: {exc}") from exc
 
         until_norm, expired = _parse_until(until_raw, context=ctx)
 

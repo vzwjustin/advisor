@@ -93,6 +93,20 @@ _VERIFY_PROMPT_TAIL = (
 )
 
 
+def _safe_inline(s: str) -> str:
+    """Sanitize a runner-authored field for inline embedding in the findings block.
+
+    The findings block is rendered as Markdown bullets that the verification
+    LLM parses as structured fields. The outer :func:`_fence` wrapper prevents
+    fence-escape attacks but does NOT prevent a runner from forging additional
+    finding fields *inside* the fenced block by embedding ``\\n- **Severity**:``
+    or a stray backtick that closes an inline-code span. Strip backticks
+    (replace with ``'``) and collapse newlines/CRs to spaces so the rendered
+    text stays on one line and can never inject another bullet.
+    """
+    return s.replace("`", "'").replace("\n", " ").replace("\r", " ")
+
+
 def format_findings_block(findings: list[Finding]) -> str:
     """Format findings into a markdown block for the verification prompt."""
     if not findings:
@@ -101,13 +115,13 @@ def format_findings_block(findings: list[Finding]) -> str:
     lines: list[str] = []
     for i, f in enumerate(findings, 1):
         lines.append(f"### Finding {i}")
-        lines.append(f"- **File**: `{f.file_path}`")
-        lines.append(f"- **Severity**: {f.severity}")
-        lines.append(f"- **Description**: {f.description}")
-        lines.append(f"- **Evidence**: {f.evidence}")
-        lines.append(f"- **Fix**: {f.fix}")
+        lines.append(f"- **File**: `{_safe_inline(f.file_path)}`")
+        lines.append(f"- **Severity**: {_safe_inline(f.severity)}")
+        lines.append(f"- **Description**: {_safe_inline(f.description)}")
+        lines.append(f"- **Evidence**: {_safe_inline(f.evidence)}")
+        lines.append(f"- **Fix**: {_safe_inline(f.fix)}")
         if f.rule_id:
-            lines.append(f"- **Rule**: {f.rule_id}")
+            lines.append(f"- **Rule**: {_safe_inline(f.rule_id)}")
         lines.append("")
 
     return "\n".join(lines)
@@ -257,9 +271,9 @@ def _parse_blocks(text: str) -> list[Finding]:
             elif fence_marker == marker:
                 fence_marker = None
                 in_fence = False
-            # mismatched marker inside an open fence: ignore, stay in fence
-            if active_key:
-                continue
+            # mismatched marker inside an open fence: ignore, stay in fence.
+            # Whether or not a field is currently active, a fence-marker line
+            # is itself not field content — skip it.
             continue
 
         # Report boundary: an H2 heading (e.g. "## Summary") closes the

@@ -647,8 +647,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
                 priority = int(str(t["priority"]))
             except ValueError:
                 warnings.warn(
-                    f"skipping checkpoint task with non-numeric priority "
-                    f"{t.get('priority')!r}",
+                    f"skipping checkpoint task with non-numeric priority {t.get('priority')!r}",
                     UserWarning,
                     stacklevel=2,
                 )
@@ -837,15 +836,33 @@ def _batches_from_checkpoint(cp: Checkpoint) -> list[FocusBatch]:
         raw_tasks = b.get("tasks", [])
         if not isinstance(raw_tasks, list):
             continue
-        batch_tasks = tuple(
-            FocusTask(
-                file_path=str(t["file_path"]),
-                priority=int(str(t["priority"])),
-                prompt=str(t.get("prompt", "")),
+        # Build batch tasks defensively: a corrupt checkpoint with a
+        # non-numeric ``priority`` previously crashed the resume path with
+        # an unhandled ``ValueError``. Mirror the guard in ``cmd_plan``'s
+        # task-rebuild loop — skip the bad task with a warning so the rest
+        # of the batch still resumes.
+        batch_tasks_list: list[FocusTask] = []
+        for t in raw_tasks:
+            if not (isinstance(t, dict) and "file_path" in t and "priority" in t):
+                continue
+            try:
+                task_priority = int(str(t["priority"]))
+            except ValueError:
+                warnings.warn(
+                    f"skipping checkpoint batch task with non-numeric priority "
+                    f"{t.get('priority')!r}",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                continue
+            batch_tasks_list.append(
+                FocusTask(
+                    file_path=str(t["file_path"]),
+                    priority=task_priority,
+                    prompt=str(t.get("prompt", "")),
+                )
             )
-            for t in raw_tasks
-            if isinstance(t, dict) and "file_path" in t and "priority" in t
-        )
+        batch_tasks = tuple(batch_tasks_list)
         try:
             batch_id_val = int(str(b.get("batch_id", 0)))
         except ValueError:
@@ -1748,7 +1765,11 @@ def _load_findings_from_input(
         print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
         return [], 2
     # Try JSON first (from `advisor audit --json`); fall back to markdown.
-    stripped = text.strip()
+    # ``str.strip()`` does not remove U+FEFF (the UTF-8 BOM); Windows tools
+    # commonly prepend one to JSON files. Strip it explicitly so a
+    # BOM-prefixed JSON document doesn't fall through to the markdown
+    # parser and silently return zero findings.
+    stripped = text.strip().lstrip("﻿")
     if stripped.startswith("{") or stripped.startswith("["):
         try:
             doc = json.loads(stripped)
