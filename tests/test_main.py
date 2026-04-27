@@ -661,6 +661,38 @@ class TestCmdPlanErrorPaths:
         assert "100" in err
         assert "20" in err
 
+    def test_max_runners_flag_and_env_both_set_warns_once(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        """Setting BOTH ``--max-runners 100`` AND ``ADVISOR_MAX_RUNNERS=200``
+        must produce exactly one warning (the explicit flag wins; the env
+        path is short-circuited and never re-clamped). A regression that
+        consults both surfaces would emit two warnings, masking which
+        value actually took effect.
+        """
+        from advisor import __main__ as cli
+
+        monkeypatch.setenv("ADVISOR_MAX_RUNNERS", "200")
+        (tmp_path / "auth.py").write_text("x = 1\n", encoding="utf-8")
+        rc = cli.main(
+            [
+                "plan",
+                str(tmp_path),
+                "--max-runners",
+                "100",
+                "--min-priority",
+                "1",
+            ]
+        )
+        assert rc == 0
+        err = capsys.readouterr().err
+        # Exactly one ceiling-overrun warning. The explicit ``100`` wins
+        # so it's the value the warning should mention; the ``200`` from
+        # env is never consulted on this path.
+        assert err.count("exceeds ceiling") == 1
+        assert "100" in err
+        assert "200" not in err
+
     def test_bad_file_types_glob_errors_cleanly(self, tmp_path, capsys):
         """A malformed glob exits non-zero with a visible error, not a trace."""
         from advisor import __main__ as cli
