@@ -10,14 +10,23 @@ name: Release
 # Manual fallback via ``workflow_dispatch``: GitHub Actions does not fire
 # downstream workflows when a tag is pushed using the default
 # ``GITHUB_TOKEN`` (autotag.yml's case), so this workflow can also be
-# triggered by hand from the Actions UI. Select an existing tag (e.g.
-# ``v0.6.0``) as the workflow ref — the verify step still cross-checks
-# the tag against ``pyproject.toml`` so a wrong-ref dispatch fails fast.
+# triggered by hand. The dispatch takes an explicit ``tag`` input rather
+# than relying on the workflow ref dropdown — GitHub's mobile UI does
+# not always expose the Tags subsection of that picker, and even on
+# desktop the default is "main" which would otherwise package main's
+# content instead of the tagged commit. The input is the source of
+# truth for which commit gets tested, built, and published; every
+# downstream job checks out exactly that tag ref.
 
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.6.0 or 0.6.0). Required for manual runs; ignored on the push-tag trigger."
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -26,21 +35,49 @@ jobs:
   verify:
     name: Verify tag matches pyproject version
     runs-on: ubuntu-latest
+    outputs:
+      tag_ref: ${{ steps.target.outputs.tag_ref }}
+      tag: ${{ steps.target.outputs.tag }}
     steps:
+      - name: Resolve target tag
+        id: target
+        run: |
+          # On push:tags, GITHUB_REF is the tag itself. On
+          # workflow_dispatch, the input.tag is what we publish — the
+          # dispatch always runs from the workflow's home branch
+          # (typically main), so GITHUB_REF cannot be trusted.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+            # Allow both ``v0.6.0`` and ``0.6.0`` for ergonomics —
+            # strip any leading ``v`` once before re-prepending.
+            tag="${tag#v}"
+            tag_ref="refs/tags/v${tag}"
+          else
+            tag_ref="${GITHUB_REF}"
+            if [[ "$tag_ref" != refs/tags/v* ]]; then
+              echo "::error::expected push trigger on refs/tags/v<semver>, got $tag_ref"
+              exit 1
+            fi
+            tag="${tag_ref#refs/tags/v}"
+          fi
+          if [ -z "$tag" ]; then
+            echo "::error::resolved empty tag from $tag_ref / inputs.tag='${{ inputs.tag }}'"
+            exit 1
+          fi
+          echo "tag_ref=$tag_ref" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Resolved tag $tag (ref $tag_ref)"
+
       - uses: actions/checkout@v6
+        with:
+          # Check out the tag explicitly so the pyproject cross-check
+          # below reads the file at the released commit, not at HEAD
+          # of the workflow_dispatch ref.
+          ref: ${{ steps.target.outputs.tag_ref }}
 
       - name: Check tag vs. pyproject.toml
         run: |
-          # Accept both the push-tag trigger (GITHUB_REF is
-          # ``refs/tags/vX.Y.Z``) and a workflow_dispatch fired against
-          # a tag ref. Refuse to run against a branch — publishing
-          # untagged commits to PyPI is a footgun the workflow exists
-          # specifically to prevent.
-          if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
-            echo "::error::release.yml must run against a tag ref (got $GITHUB_REF). Re-trigger with an existing v<semver> tag selected."
-            exit 1
-          fi
-          tag="${GITHUB_REF#refs/tags/v}"
+          tag="${{ steps.target.outputs.tag }}"
           pyproject_version=$(
             python -c "import tomllib,sys; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
           )
@@ -56,6 +93,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          # Same tag everyone else uses. Without this, a
+          # workflow_dispatch run would test main's content while
+          # claiming to be a release of the tagged version — silent
+          # version-content drift on every manual publish.
+          ref: ${{ needs.verify.outputs.tag_ref }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -70,10 +113,12 @@ jobs:
 
   build:
     name: Build sdist + wheel
-    needs: test
+    needs: [verify, test]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.verify.outputs.tag_ref }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
