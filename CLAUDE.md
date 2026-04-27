@@ -130,7 +130,7 @@ Invoke via `/advisor` slash command. Full protocol details in
 ## Setup
 
 ```bash
-uvx advisor install       # install from PyPI
+uvx --from advisor-agent advisor install  # install from PyPI
 uv sync                   # sync dependencies (dev)
 uv run pytest             # run tests
 python -m advisor         # run locally

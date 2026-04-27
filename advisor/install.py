@@ -113,7 +113,7 @@ TeamCreate → (silent bash) → Agent spawns. NO Bash before TeamCreate.
 
 - Slash command: `/advisor [optional target dir]`
 - Package: https://github.com/vzwjustin/advisor
-- Install: `uvx advisor install` (this block + skill) · `pipx install advisor`
+- Install: `uvx --from advisor-agent advisor install` (this block + skill) · `pipx install advisor-agent`
 - `advisor pipeline <dir>` — print the full pipeline reference
 """
 
