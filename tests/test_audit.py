@@ -128,6 +128,25 @@ class TestAuditTranscriptContextPressure:
         assert report.context_pressure_runners == []
         assert report.context_pressure_count == 0
 
+    def test_attributes_pings_with_team_lead_envelope(self):
+        """Live runners now send CONTEXT_PRESSURE to ``team-lead`` (which
+        relays to the advisor) rather than directly to the advisor.
+        Attribution must still work — the runner self-identifies inline
+        in the message body, and that's what the audit's primary
+        heuristic looks for. A regression in
+        ``_attribute_context_pressure_to_runner`` that depended on
+        ``to='advisor'`` would silently mis-attribute pings under the
+        new protocol.
+        """
+        transcript = """
+        SendMessage(to='team-lead', message='runner-1 CONTEXT_PRESSURE — 4 fixes deep')
+        SendMessage(to='team-lead', message='runner-2 CONTEXT_PRESSURE — 4 fixes')
+        SendMessage(to='team-lead', message='runner-1 CONTEXT_PRESSURE again')
+        """
+        report = audit_transcript(transcript, _mk_checkpoint())
+        assert report.context_pressure_runners == ["runner-1", "runner-2"]
+        assert report.context_pressure_count == 3
+
 
 class TestAuditTranscriptRotations:
     def test_counts_handoff_headers(self):

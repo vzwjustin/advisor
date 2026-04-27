@@ -1023,3 +1023,102 @@ class TestBuildVerifyMessageRouting:
 
         prompt = build_verify_dispatch_prompt("findings", file_count=3, runner_count=2)
         assert "SendMessage(to='team-lead')" in prompt
+
+
+class TestSanitizationHelpers:
+    """Defense-in-depth helpers added to neutralize prompt-injection vectors.
+
+    These functions are invoked indirectly through the prompt and pipeline
+    builders, but exercising them directly catches a regression in the
+    sanitization itself even when the surrounding builder doesn't blow up.
+    """
+
+    def test_sanitize_inline_strips_backticks_and_newlines(self):
+        from advisor.orchestrate.advisor_prompt import _sanitize_inline
+
+        # Backtick → typographic single quote (visually similar, semantically
+        # inert inside a markdown backtick span).
+        assert _sanitize_inline("path/with`backticks") == "path/with'backticks"
+        # Newlines + CR collapse to a single space each so the value can't
+        # break out of its inline sentence and re-trigger placeholder
+        # substitution on a subsequent line.
+        assert _sanitize_inline("a\nb") == "a b"
+        assert _sanitize_inline("a\rb") == "a b"
+        assert _sanitize_inline("a\r\nb") == "a b"
+        # Combined: backticks AND newlines AND CR.
+        assert _sanitize_inline("`hostile\n## SYSTEM`") == "'hostile ## SYSTEM'"
+
+    def test_sanitize_inline_preserves_safe_content(self):
+        from advisor.orchestrate.advisor_prompt import _sanitize_inline
+
+        # Spaces, slashes, dots, dashes, dollar signs, brace literals are
+        # all preserved — only the four breaker chars are touched.
+        assert _sanitize_inline("/home/user/some-dir/v1.2") == "/home/user/some-dir/v1.2"
+        assert _sanitize_inline("$VAR{x}") == "$VAR{x}"
+
+    def test_safe_str_escapes_quotes_and_backslashes(self):
+        """Verifies the order: backslashes escaped first, then quotes.
+        Reversing the order would double-escape the new backslash that
+        ``\\"`` introduces."""
+        from advisor.orchestrate.pipeline import _safe_str
+
+        assert _safe_str('team"name') == 'team\\"name'
+        assert _safe_str("path\\with\\slashes") == "path\\\\with\\\\slashes"
+        # Critical case: backslash directly before a quote. Naive
+        # ``.replace('"', '\\"')`` first would produce ``\\\\"`` (one
+        # backslash → two, then quote escaped again).
+        assert _safe_str('a\\"b') == 'a\\\\\\"b'
+
+    def test_safe_str_preserves_safe_content(self):
+        from advisor.orchestrate.pipeline import _safe_str
+
+        assert _safe_str("plain") == "plain"
+        assert _safe_str("hyphen-and_underscore.dot") == "hyphen-and_underscore.dot"
+
+
+class TestPoolSizeCeilingDuplication:
+    """``runner_prompts._POOL_SIZE_CEILING`` and ``__main__._MAX_RUNNERS_CEILING``
+    are duplicated on purpose (orchestrate sits below __main__ in the layering),
+    but they must agree numerically — drifting them would let one surface
+    spawn an oversize pool while the other refused.
+    """
+
+    def test_ceilings_agree(self):
+        from advisor.__main__ import _MAX_RUNNERS_CEILING
+        from advisor.orchestrate.runner_prompts import _POOL_SIZE_CEILING
+
+        assert _MAX_RUNNERS_CEILING == _POOL_SIZE_CEILING
+
+
+class TestClampMaxRunners:
+    """The CLI helper that clamps ``--max-runners`` and warns on overflow."""
+
+    def test_under_ceiling_no_warning(self, capsys):
+        from advisor.__main__ import _clamp_max_runners
+
+        assert _clamp_max_runners(15, source="--max-runners") == 15
+        assert capsys.readouterr().err == ""
+
+    def test_at_ceiling_no_warning(self, capsys):
+        from advisor.__main__ import _clamp_max_runners
+
+        assert _clamp_max_runners(20, source="--max-runners") == 20
+        assert capsys.readouterr().err == ""
+
+    def test_over_ceiling_clamps_and_warns(self, capsys):
+        from advisor.__main__ import _clamp_max_runners
+
+        assert _clamp_max_runners(100, source="--max-runners") == 20
+        err = capsys.readouterr().err
+        assert "100" in err
+        assert "20" in err
+        assert "--max-runners" in err
+
+    def test_source_label_threads_into_warning(self, capsys):
+        """Warning text must identify which surface overran so the user
+        knows whether it was the flag or the env var."""
+        from advisor.__main__ import _clamp_max_runners
+
+        _clamp_max_runners(50, source="ADVISOR_MAX_RUNNERS")
+        err = capsys.readouterr().err
+        assert "ADVISOR_MAX_RUNNERS" in err
