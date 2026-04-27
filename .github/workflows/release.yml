@@ -6,10 +6,18 @@ name: Release
 #   2. Run the full test suite on the tagged commit
 #   3. Build sdist + wheel with `python -m build`
 #   4. Publish to PyPI via PYPI_TOKEN secret
+#
+# Manual fallback via ``workflow_dispatch``: GitHub Actions does not fire
+# downstream workflows when a tag is pushed using the default
+# ``GITHUB_TOKEN`` (autotag.yml's case), so this workflow can also be
+# triggered by hand from the Actions UI. Select an existing tag (e.g.
+# ``v0.6.0``) as the workflow ref — the verify step still cross-checks
+# the tag against ``pyproject.toml`` so a wrong-ref dispatch fails fast.
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -23,6 +31,15 @@ jobs:
 
       - name: Check tag vs. pyproject.toml
         run: |
+          # Accept both the push-tag trigger (GITHUB_REF is
+          # ``refs/tags/vX.Y.Z``) and a workflow_dispatch fired against
+          # a tag ref. Refuse to run against a branch — publishing
+          # untagged commits to PyPI is a footgun the workflow exists
+          # specifically to prevent.
+          if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+            echo "::error::release.yml must run against a tag ref (got $GITHUB_REF). Re-trigger with an existing v<semver> tag selected."
+            exit 1
+          fi
           tag="${GITHUB_REF#refs/tags/v}"
           pyproject_version=$(
             python -c "import tomllib,sys; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
