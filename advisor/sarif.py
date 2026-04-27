@@ -104,7 +104,7 @@ def _parse_file_path(raw: str) -> tuple[str, int | None]:
     # GitHub Code Scanning. ``\x00`` is included because some SARIF
     # consumers treat the URI as a C string and truncate at the first
     # NUL — silent path corruption.
-    stripped = "".join(c for c in stripped if c not in "\x00\n\r\t")
+    stripped = "".join(c for c in stripped if c not in "\x00\n\r\t").strip()
     drive_prefix = ""
     body = stripped
     if len(stripped) >= 2 and stripped[1] == ":" and stripped[0].isalpha():

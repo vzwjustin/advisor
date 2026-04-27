@@ -762,7 +762,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
     )
 
     batches: list[FocusBatch] | None = None
-    if args.batch_size and args.batch_size >= 1:
+    if args.batch_size:
         batches = create_focus_batches(tasks, files_per_batch=args.batch_size)
 
     # Resolve config exactly once. _config_from_args may consume stdin
@@ -1796,7 +1796,9 @@ def _load_findings_from_input(
                         ),
                         file=sys.stderr,
                     )
-            return findings, None
+            if findings:
+                return findings, None
+            # JSON parsed but produced no findings — fall through to markdown.
     # Markdown fallback.
     return list(parse_findings_from_text(text)), None
 

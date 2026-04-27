@@ -228,6 +228,7 @@ def _parse_blocks(text: str) -> list[Finding]:
     field_style: str | None = None
     in_header_block: bool = False  # True once we see any ### Finding header
     in_fence: bool = False  # True while inside a fenced code block (``` or ~~~)
+    fence_marker: str | None = None  # opening marker that started the current fence
 
     def _flush() -> None:
         finding = _dict_to_finding(current)
@@ -249,12 +250,16 @@ def _parse_blocks(text: str) -> list[Finding]:
         # otherwise leave `in_fence=False` and the H2/`### Finding` guards
         # below would treat fenced headings as real boundaries.
         if stripped.startswith("```") or stripped.startswith("~~~"):
-            in_fence = not in_fence
+            marker = "```" if stripped.startswith("```") else "~~~"
+            if fence_marker is None:
+                fence_marker = marker
+                in_fence = True
+            elif fence_marker == marker:
+                fence_marker = None
+                in_fence = False
+            # mismatched marker inside an open fence: ignore, stay in fence
             if active_key:
-                # Fence inside an active field — skip the marker so it doesn't
-                # pollute the value, but the toggle above still counts.
                 continue
-            # Outside any field, also skip; nothing to accumulate.
             continue
 
         # Report boundary: an H2 heading (e.g. "## Summary") closes the
@@ -324,7 +329,7 @@ def _parse_blocks(text: str) -> list[Finding]:
             and (field_style == "plain" or (field_style is None and not current))
         )
 
-        if matched is not None and (is_list_item or opens_plain_block):
+        if matched is not None and (is_list_item or opens_plain_block) and not in_fence:
             key, value = matched
             if key not in current:
                 # New field for this block — record it.

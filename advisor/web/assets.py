@@ -404,7 +404,7 @@ APP_JS = r"""(() => {
       tr.innerHTML = `
         <td>${escapeHtml(e.timestamp || '')}</td>
         <td><code>${escapeHtml(e.file_path || '')}</code></td>
-        <td><span class="sev sev-${escapeHtml((e.severity || '').toUpperCase())}">${escapeHtml(e.severity || '')}</span></td>
+        <td><span class="sev sev-${severityClass(e.severity)}">${escapeHtml(e.severity || '')}</span></td>
         <td>${escapeHtml(e.status || '')}</td>
         <td>${escapeHtml(e.description || '')}</td>
       `;
@@ -685,6 +685,11 @@ APP_JS = r"""(() => {
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
+  }
+  const SEV_ALLOW = new Set(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']);
+  function severityClass(s) {
+    const upper = (s || '').toUpperCase();
+    return SEV_ALLOW.has(upper) ? upper : 'LOW';
   }
   function shellQuote(s) {
     s = String(s);
