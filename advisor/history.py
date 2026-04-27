@@ -114,9 +114,9 @@ def _unlock_exclusive(fh: IO[str]) -> None:
     only need an explicit unlock for the Windows ``msvcrt.locking`` path —
     that lock survives close until LK_UNLCK runs.
     """
-    if sys.platform != "win32":
+    if not _IS_WINDOWS:
         return
-    _unlock_windows(fh)  # type: ignore[unreachable]
+    _unlock_windows(fh)
 
 
 def _lock_windows(fh: IO[str]) -> None:
@@ -144,14 +144,18 @@ def _unlock_windows(fh: IO[str]) -> None:
     pair :func:`_lock_windows` with this in a try/finally so the next
     appender on the same file isn't blocked.
     """
-    if sys.platform != "win32":  # pragma: no cover - platform guard
+    if not _IS_WINDOWS:  # pragma: no cover - platform guard
         return
-    try:  # type: ignore[unreachable]
+    try:
         import msvcrt
     except ImportError:
         return
+    locking = getattr(msvcrt, "locking", None)
+    lk_unlck = getattr(msvcrt, "LK_UNLCK", None)
+    if not callable(locking) or not isinstance(lk_unlck, int):
+        return
     try:
-        msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 0x7FFFFFFF)
+        locking(fh.fileno(), lk_unlck, 0x7FFFFFFF)
     except OSError:
         pass
 
