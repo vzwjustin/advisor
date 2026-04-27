@@ -53,6 +53,23 @@ class TestRoundTrip:
             loaded = read_baseline(p)
         assert loaded == []
 
+    def test_identity_path_collapses_dotdot(self) -> None:
+        """A finding's identity path must collapse ``..`` so the
+        baseline matcher and the suppressions matcher agree on what
+        counts as "the same file". Pre-fix, baseline used a stripped
+        spelling but did not collapse ``..``; suppressions (via
+        ``_fs.normalize_path``) did. A finding written as
+        ``src/../src/auth.py`` would baseline as that literal string
+        and miss a suppression rule for ``src/auth.py``.
+        """
+        from advisor.baseline import _normalize_identity_path
+
+        assert _normalize_identity_path("src/../src/auth.py") == "src/auth.py"
+        assert _normalize_identity_path("./src/./auth.py") == "src/auth.py"
+        # Line-suffix preservation — baseline keeps line identity even
+        # though ``_fs.normalize_path`` strips it.
+        assert _normalize_identity_path("src/../src/auth.py:42") == "src/auth.py:42"
+
 
 class TestFilterAgainstBaseline:
     def test_matched_finding_is_suppressed(self, tmp_path: Path) -> None:

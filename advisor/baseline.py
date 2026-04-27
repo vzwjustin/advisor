@@ -51,10 +51,30 @@ class BaselineEntry:
 
 
 def _normalize_identity_path(path: str) -> str:
-    """Normalize superficial path spelling while preserving line identity."""
+    """Normalize superficial path spelling while preserving line identity.
+
+    Mirrors :func:`advisor._fs.normalize_path`'s lexical collapse of
+    ``..`` / ``.`` / doubled slashes so baseline identity keys agree
+    with the suppression matcher (which uses ``_fs.normalize_path``).
+    Without this alignment, a finding with path ``src/../src/auth.py``
+    would baseline as that literal string but match a suppression rule
+    written for ``src/auth.py`` — silent identity-key drift.
+
+    Unlike :func:`_fs.normalize_path`, this function deliberately does
+    NOT strip a trailing ``:line`` / ``:line:col`` suffix because the
+    baseline identifies findings down to the line.
+    """
+    import posixpath as _pp
+
     normalized = path.strip().strip("`").strip().replace("\\", "/")
     while normalized.startswith("./"):
         normalized = normalized[2:]
+    # Lexical collapse — agrees with ``_fs.normalize_path``. Empty input
+    # stays empty; ``posixpath.normpath('')`` returns ``'.'`` which we
+    # don't want as a sentinel.
+    if normalized and normalized != ".":
+        collapsed = _pp.normpath(normalized)
+        normalized = "" if collapsed == "." else collapsed
     return normalized
 
 

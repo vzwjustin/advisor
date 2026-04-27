@@ -230,6 +230,14 @@ class TestParseFilePathWhitespace:
 
         assert _parse_file_path("src/foo\rpath.py:42") == ("src/foopath.py", 42)
 
+    def test_embedded_nul_dropped(self) -> None:
+        """NUL bytes survive the original whitespace strip and confuse
+        SARIF consumers that treat the URI as a C string (truncating at
+        the first NUL). Drop them up-front."""
+        from advisor.sarif import _parse_file_path
+
+        assert _parse_file_path("src\x00/foo.py:42") == ("src/foo.py", 42)
+
 
 class TestShortDescriptionWhitespace:
     """``shortDescription`` is rendered single-line in GitHub Code

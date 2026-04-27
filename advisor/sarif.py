@@ -96,14 +96,15 @@ def _parse_file_path(raw: str) -> tuple[str, int | None]:
     # off before splitting so paths like ``C:\src\auth.py:42`` aren't
     # decomposed into ``["C", "\\src\\auth.py", "42"]``. Re-apply the
     # prefix to the path component before returning.
-    # Strip any embedded whitespace anywhere in the path. Filenames
-    # don't contain newlines / tabs / CR — if any of those slipped in
-    # (e.g. a runner emitted ``"src/foo.py\n:42"`` from a malformed
-    # template) they would otherwise survive into the SARIF
+    # Strip any embedded whitespace and NUL bytes anywhere in the path.
+    # Filenames don't contain newlines / tabs / CR / NUL — if any of
+    # those slipped in (e.g. a runner emitted ``"src/foo.py\n:42"`` from
+    # a malformed template) they would otherwise survive into the SARIF
     # ``artifactLocation.uri`` and break path-equality matching for
-    # GitHub Code Scanning. Drop them up-front so downstream consumers
-    # see a clean path.
-    stripped = "".join(c for c in stripped if c not in "\n\r\t")
+    # GitHub Code Scanning. ``\x00`` is included because some SARIF
+    # consumers treat the URI as a C string and truncate at the first
+    # NUL — silent path corruption.
+    stripped = "".join(c for c in stripped if c not in "\x00\n\r\t")
     drive_prefix = ""
     body = stripped
     if len(stripped) >= 2 and stripped[1] == ":" and stripped[0].isalpha():
