@@ -84,8 +84,9 @@ explicit anti-drift instructions:
 
 > As you approach the cap — or if you notice your replies getting slower,
 > your recall of earlier files getting hazy, or you're unsure about a file
-> you reviewed earlier in the session — proactively ping the advisor:
-> `SendMessage(to='advisor', message='CONTEXT_PRESSURE — N fixes deep, recommend rotation')`.
+> you reviewed earlier in the session — proactively ping team-lead (who
+> relays to the advisor):
+> `SendMessage(to='team-lead', message='CONTEXT_PRESSURE — N fixes deep, recommend rotation')`.
 
 Models tend to ignore soft advice ("try not to exceed…") and hit the cap
 mid-fix. Making the cap a `CONTEXT_PRESSURE` signal — with a named

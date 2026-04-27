@@ -157,6 +157,28 @@ def _relative_age(mtime_epoch: float, now_epoch: float | None = None) -> str:
 _MAX_RUNNERS_CEILING = 20
 
 
+def _clamp_max_runners(value: int, *, source: str) -> int:
+    """Clamp a runner count to ``_MAX_RUNNERS_CEILING`` and warn if it triggers.
+
+    Centralizes the ceiling enforcement so both the explicit ``--max-runners``
+    flag and the ``ADVISOR_MAX_RUNNERS`` env var produce the same single
+    warning style on overflow. Silent clamping previously left users
+    thinking their value was honored — visible feedback is cheaper than a
+    surprise pool size.
+    """
+    if value > _MAX_RUNNERS_CEILING:
+        print(
+            _style.warning_box(
+                f"{source}={value} exceeds ceiling of {_MAX_RUNNERS_CEILING}; "
+                f"using {_MAX_RUNNERS_CEILING}",
+                stream=sys.stderr,
+            ),
+            file=sys.stderr,
+        )
+        return _MAX_RUNNERS_CEILING
+    return value
+
+
 def _resolve_max_runners(raw: int | None) -> int:
     """Resolve the CLI ``--max-runners`` value to a concrete int.
 
@@ -166,10 +188,11 @@ def _resolve_max_runners(raw: int | None) -> int:
     defaults to ``None``; env var ``ADVISOR_MAX_RUNNERS`` (if set to a
     valid positive int) fills in; final fallback is 5. The result is
     clamped to ``_MAX_RUNNERS_CEILING`` so a typo or experimental value
-    can't spawn an unbounded runner pool.
+    can't spawn an unbounded runner pool — ceiling overruns surface a
+    one-line stderr warning so silent clamping doesn't fool the user.
     """
     if raw is not None and raw >= 1:
-        return min(raw, _MAX_RUNNERS_CEILING)
+        return _clamp_max_runners(raw, source="--max-runners")
     env_raw = os.environ.get("ADVISOR_MAX_RUNNERS", "").strip()
     if env_raw:
         try:
@@ -178,13 +201,19 @@ def _resolve_max_runners(raw: int | None) -> int:
             # Surface the silent fallback. CI configs often set this var
             # via ``${VAR:-default}`` substitution and a malformed value
             # would otherwise look like the env var is being honored.
+            # Use ``_style.warning_box`` to match the env-var warning the
+            # config layer emits (config.py:_env_int_or) — same path,
+            # one consistent format.
             print(
-                f"warning: ADVISOR_MAX_RUNNERS={env_raw!r} is not a valid integer; using default 5",
+                _style.warning_box(
+                    f"ADVISOR_MAX_RUNNERS={env_raw!r} is not a valid integer; using default 5",
+                    stream=sys.stderr,
+                ),
                 file=sys.stderr,
             )
             parsed = 5
         resolved = parsed if parsed >= 1 else 5
-        return min(resolved, _MAX_RUNNERS_CEILING)
+        return _clamp_max_runners(resolved, source="ADVISOR_MAX_RUNNERS")
     return 5
 
 
@@ -261,12 +290,12 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--context", default="", help="Extra goal context")
     parser.add_argument(
         "--advisor-model",
-        default="opus",
+        default="opus-4-7",
         help="Model for the advisor agent (default: %(default)s)",
     )
     parser.add_argument(
         "--runner-model",
-        default="sonnet",
+        default="sonnet-4-6",
         help="Model for the runner pool agents (default: %(default)s)",
     )
     parser.add_argument(
@@ -555,6 +584,18 @@ def cmd_plan(args: argparse.Namespace) -> int:
     target = Path(args.target)
     if not target.exists():
         print(_style.error_box(f"target not found: {target}", stream=sys.stderr), file=sys.stderr)
+        return 2
+    if not target.is_dir():
+        # Path exists but isn't a directory — fail loudly instead of
+        # delegating to ``_safe_rglob`` which silently returns an empty
+        # file list and leaves the user staring at a blank plan.
+        print(
+            _style.error_box(
+                f"target must be a directory, got file: {target}",
+                stream=sys.stderr,
+            ),
+            file=sys.stderr,
+        )
         return 2
 
     # Resume: load a previously-saved plan from .advisor/run-<id>.json and
@@ -976,7 +1017,24 @@ def cmd_prompt(args: argparse.Namespace) -> int:
         text = build_advisor_prompt(config, history_block=history_block)
     elif args.step == "runner":
         runner_id = getattr(args, "runner_id", 1)
+        # Surface the fallback-only intent of this path. The live
+        # /advisor pipeline uses Opus-authored per-runner prompts from
+        # the advisor's dispatch plan, NOT this generic template — using
+        # this output in place of Opus's per-runner prompts breaks the
+        # protocol. The TTY frame and stderr warning fire only for
+        # interactive callers; piped/JSON output stays clean so scripts
+        # consuming the prompt text aren't disturbed.
         if show_frame:
+            print(
+                _style.warning_box(
+                    "fallback runner prompt — the live /advisor pipeline uses "
+                    "per-runner prompts authored by Opus in its dispatch "
+                    "plan. Use this output only for debugging or when "
+                    "spawning runners without an advisor.",
+                    stream=sys.stderr,
+                ),
+                file=sys.stderr,
+            )
             print(_style.dim(f"# runner-{runner_id} prompt — paste into Claude Code"))
             print()
         text = build_runner_pool_prompt(runner_id, config)
@@ -1192,19 +1250,25 @@ or spawning runners before the advisor) breaks the pipeline.
 
 2. Spawn advisor FIRST (no runners yet):
    Agent(name="advisor", description="Investigate, rank, and dispatch runners",
-         model="opus", subagent_type="deep-reasoning",
+         model="opus-4-7", subagent_type="advisor-executor",
          team_name="review", prompt=<build_advisor_prompt(config)>)
 
 3. Advisor does Glob+Grep discovery, ranks P1–P5, decides runner pool size,
-   THEN tells you to spawn N runners:
-   Agent(name="runner-<i>", description="Pool runner <i> — waits for advisor dispatch",
-         model="sonnet", subagent_type="code-review",
+   THEN sends a dispatch plan with a per-runner prompt for each runner.
+   Spawn the pool using those Opus-authored prompts verbatim:
+   Agent(name="runner-<i>", description="Pool runner <i> — reads batch from initial prompt",
+         model="sonnet-4-6", subagent_type="code-review",
          team_name="review", run_in_background=true,
-         prompt=<build_runner_pool_prompt(i, config)>)
+         prompt=<verbatim text from Opus's "### runner-i / #### Prompt" block>)
 
-4. Advisor dispatches explore assignments, verifies each runner reply as it
-   lands, optionally dispatches fix assignments, then sends the final
-   structured report to team-lead.
+   build_runner_pool_prompt() in the Python API is a *fallback* template
+   for spawning runners without the advisor; the live pipeline never uses
+   it because per-runner prompts come from Opus's dispatch plan.
+
+4. Runners send reports to team-lead; team-lead relays each to the advisor
+   verbatim. The advisor verifies each output as it lands, optionally
+   dispatches fix assignments, then sends the final structured report
+   back to team-lead.
 
 5. Shut down teammates INDIVIDUALLY (broadcast "*" with structured messages
    fails silently):
@@ -1216,7 +1280,7 @@ or spawning runners before the advisor) breaks the pipeline.
 6. TeamDelete()
 
 Names and models shown here are the defaults (team "review", models
-"opus" / "sonnet"). Override them via `--team`, `--advisor-model`,
+"opus-4-7" / "sonnet-4-6"). Override them via `--team`, `--advisor-model`,
 `--runner-model` on the CLI; `advisor pipeline <dir>` renders the
 concrete call sites for a given config.
 """

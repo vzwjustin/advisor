@@ -135,7 +135,7 @@ class TestBuildRunnerAgents:
         tasks = [FocusTask("src/a.py", 5, "review")]
         agents = build_runner_agents(tasks, config)
 
-        assert all(a["model"] == "sonnet" for a in agents)
+        assert all(a["model"] == "sonnet-4-6" for a in agents)
 
     def test_all_run_in_background(self):
         config = default_team_config("/src")
@@ -171,7 +171,12 @@ class TestBuildRunnerPrompt:
         task = FocusTask("src/auth.py", 5, "review")
         prompt = build_runner_prompt(task)
 
-        assert "SendMessage(to='advisor')" in prompt
+        # Reports go to team-lead; team-lead relays to the advisor.
+        # Direct ``to='advisor'`` is NOT used in the live pipeline —
+        # asserting both presence and absence so a regression in either
+        # direction is caught.
+        assert "SendMessage(to='team-lead')" in prompt
+        assert "SendMessage(to='advisor')" not in prompt
         assert "Checkpoint with the advisor" in prompt
         assert "CONFIRM" in prompt
         assert "NARROW" in prompt
@@ -248,12 +253,35 @@ class TestRunnerPool:
             "runner-4",
         ]
         assert all(a["run_in_background"] is True for a in agents)
-        assert all(a["model"] == "sonnet" for a in agents)
+        assert all(a["model"] == "sonnet-4-6" for a in agents)
 
     def test_pool_agents_explicit_size(self):
         config = default_team_config("/src", max_runners=10)
         agents = build_runner_pool_agents(config, pool_size=2)
         assert len(agents) == 2
+
+    def test_pool_agents_clamps_oversize_pool(self, capsys):
+        """Direct ``pool_size`` argument must be clamped to the same
+        ceiling as the CLI / config layer — otherwise an API caller can
+        spawn an unbounded runner pool through a typo.
+        """
+        config = default_team_config("/src", max_runners=5, warn_unknown_model=False)
+        agents = build_runner_pool_agents(config, pool_size=200)
+        assert len(agents) == 20
+        # Visible warning so the silent overrun is surfaced.
+        err = capsys.readouterr().err
+        assert "200" in err
+        assert "20" in err
+
+    def test_batch_message_rejects_empty_batch(self):
+        """``build_runner_batch_message`` is part of the public API and
+        callable independently of the dispatcher's empty-batch guard —
+        it has to fail loudly on its own."""
+        import pytest as _pytest
+
+        empty = FocusBatch(batch_id=1, tasks=(), complexity="medium")
+        with _pytest.raises(ValueError, match="batch 1 has no tasks"):
+            build_runner_batch_message(empty)
 
     def test_batch_message_contains_files_and_guidance(self):
         batch = FocusBatch(
@@ -676,6 +704,35 @@ class TestIsKnownModel:
         assert is_known_model("unknown-model") is False
         assert is_known_model("") is False
 
+    def test_regex_rejects_malformed_long_form(self):
+        """The tightened regex rejects inputs the prior ``[\\d.-]+`` allowed.
+
+        Previously these slipped through silently:
+          - double dash ``claude-opus-4-5--20250929``
+          - double dot  ``claude-opus-4..5``
+          - all dashes  ``claude-opus---``
+        Even though :func:`is_known_model` is warning-only, false negatives
+        on the warning path mean a typoed model never surfaces — so the
+        user sees ``model X is not a known…`` for true mistakes only.
+        """
+        from advisor.orchestrate import is_known_model
+
+        assert is_known_model("claude-opus-4-5--20250929") is False
+        assert is_known_model("claude-opus-4..5") is False
+        assert is_known_model("claude-opus---") is False
+        assert is_known_model("claude-anthropic-foo") is False  # wrong family
+
+    def test_regex_still_accepts_valid_long_form_variants(self):
+        """Tightening must not regress on legitimate long-form IDs."""
+        from advisor.orchestrate import is_known_model
+
+        # Standard short version + date
+        assert is_known_model("claude-opus-4-5-20250929") is True
+        # Short version, no date
+        assert is_known_model("claude-sonnet-4") is True
+        # Dotted version
+        assert is_known_model("claude-haiku-4.5") is True
+
 
 class TestBuildFixAssignmentMessage:
     """Budget-stamped fix dispatcher — every message carries current cap state."""
@@ -815,3 +872,137 @@ class TestCheckBatchFixBudget:
         # 3 tasks fits general cap (5); large-file cap would fail but we
         # can't know without counts — expect no warnings.
         assert check_batch_fix_budget(batches, cfg) == []
+
+    def test_large_file_cap_applied_even_when_more_permissive(self):
+        """If a large file is in the batch the large-file cap always wins —
+        even when it's *more permissive* than ``max_fixes_per_runner``.
+
+        ``build_fix_assignment_message`` switches to ``large_file_max_fixes``
+        unconditionally on large batches; the budget check has to mirror
+        that or the pre-flight warning fires on the wrong threshold.
+        """
+        cfg = self._config(
+            max_fixes_per_runner=2,
+            large_file_line_threshold=500,
+            large_file_max_fixes=10,
+        )
+        batches = [self._batch(1, ["BIG.py", "small.py", "tiny.py"])]
+        counts = {"BIG.py": 900, "small.py": 100, "tiny.py": 50}
+        # 3 tasks fits the (effective) large-file cap of 10 — no warn.
+        # Pre-fix this would have warned because the swap was guarded
+        # by ``large_file_max_fixes < effective_cap``.
+        assert check_batch_fix_budget(batches, cfg, file_line_counts=counts) == []
+
+
+class TestProtocolContracts:
+    """Hard-coded protocol phrases the live pipeline depends on.
+
+    These are the strings the advisor and runner speak to each other —
+    a typo here breaks the live protocol silently because Claude Code
+    isn't going to flag a missing phrase. Lock them down with explicit
+    assertions so any future edit has to update the test alongside the
+    string and a contract change is visible in the PR diff.
+    """
+
+    def test_advisor_prompt_carries_pool_size_header_contract(self):
+        """advisor.txt instructs Opus to open with ``## Pool size: N — …``;
+        the team-lead and the user both rely on that exact header for
+        parsing. A regression deleting line 64 of advisor.txt would not
+        be caught without this assertion.
+        """
+        from advisor.orchestrate import build_advisor_prompt, default_team_config
+
+        prompt = build_advisor_prompt(default_team_config("/src", warn_unknown_model=False))
+        assert "## Pool size:" in prompt
+
+    def test_advisor_prompt_carries_protocol_violation_named_stop(self):
+        """advisor.txt contains the ``PROTOCOL_VIOLATION:`` named-stop
+        clause that ``advisor audit`` greps for. A regression deleting it
+        would silently break post-hoc audits.
+        """
+        from advisor.orchestrate import build_advisor_prompt, default_team_config
+
+        prompt = build_advisor_prompt(default_team_config("/src", warn_unknown_model=False))
+        assert "PROTOCOL_VIOLATION" in prompt
+
+    def test_runner_pool_prompt_carries_budget_directives(self):
+        """The advisor sends ``BUDGET SOFT`` / ``BUDGET ROTATE`` and
+        ``shutdown_request``; runners must recognise the exact strings.
+        Any rename here breaks the budget-rotation handshake."""
+        from advisor.orchestrate import build_runner_pool_prompt, default_team_config
+
+        prompt = build_runner_pool_prompt(1, default_team_config("/src", warn_unknown_model=False))
+        assert "BUDGET SOFT" in prompt
+        assert "BUDGET ROTATE" in prompt
+        assert "shutdown_request" in prompt
+        assert "CONTEXT_PRESSURE" in prompt
+        assert "SCOPE:" in prompt
+
+    def test_runner_prompts_send_to_team_lead_not_advisor(self):
+        """Reports go through team-lead, not directly to the advisor.
+
+        SKILL.md rule 7 + advisor.txt Step 3 both pin the relay model.
+        Direct ``to='advisor'`` SendMessages from runners would bypass
+        the relay and break the verbatim-relay invariant."""
+        from advisor.focus import FocusBatch, FocusTask
+        from advisor.orchestrate import (
+            build_runner_batch_message,
+            build_runner_pool_prompt,
+            build_runner_prompt,
+            default_team_config,
+        )
+
+        cfg = default_team_config("/src", warn_unknown_model=False)
+        pool_prompt = build_runner_pool_prompt(1, cfg)
+        runner_prompt = build_runner_prompt(FocusTask("a.py", 5, "review"))
+        batch_msg = build_runner_batch_message(
+            FocusBatch(batch_id=1, tasks=(FocusTask("a.py", 5, "review"),), complexity="medium")
+        )
+        for text in (pool_prompt, runner_prompt, batch_msg):
+            assert "to='team-lead'" in text
+            # The previous protocol used ``to='advisor'`` directly;
+            # asserting absence catches accidental regressions.
+            assert "to='advisor'" not in text
+
+
+class TestDefaultModelVersions:
+    """Version-pinned defaults: opus-4-7 / sonnet-4-6.
+
+    Bare aliases ``opus`` / ``sonnet`` silently retarget when Anthropic
+    ships a new model — pinning the version keeps the pipeline
+    deterministic until someone explicitly bumps it.
+    """
+
+    def test_default_team_config_uses_pinned_versions(self):
+        from advisor.orchestrate import default_team_config
+
+        cfg = default_team_config("/src", warn_unknown_model=False)
+        assert cfg.advisor_model == "opus-4-7"
+        assert cfg.runner_model == "sonnet-4-6"
+
+    def test_pinned_aliases_are_known(self):
+        from advisor.orchestrate import is_known_model
+
+        assert is_known_model("opus-4-7") is True
+        assert is_known_model("sonnet-4-6") is True
+
+
+class TestBuildVerifyMessageRouting:
+    """build_verify_message must hand the verify prompt back to the
+    advisor — team-lead is the dispatcher of the verify request, the
+    advisor is the recipient.
+    """
+
+    def test_verify_message_routes_to_advisor(self):
+        from advisor.orchestrate import build_verify_message
+
+        msg = build_verify_message("findings", file_count=3, runner_count=2)
+        assert msg["to"] == "advisor"
+
+    def test_verify_dispatch_prompt_instructs_send_to_team_lead(self):
+        """Once the advisor is done verifying, its result goes back to
+        team-lead so team-lead can deliver it to the user."""
+        from advisor.orchestrate import build_verify_dispatch_prompt
+
+        prompt = build_verify_dispatch_prompt("findings", file_count=3, runner_count=2)
+        assert "SendMessage(to='team-lead')" in prompt

@@ -1,14 +1,14 @@
 # Advisor — Opus-led Agent Team (Claude Code Native)
 
 Two-model team using Claude Code's TeamCreate/Agent/SendMessage. No external API calls.
-Models configurable via `TeamConfig(advisor_model=, runner_model=)` — defaults: opus/sonnet.
+Models configurable via `TeamConfig(advisor_model=, runner_model=)` — defaults: opus-4-7 / sonnet-4-6.
 
 ## Team Roles
 
 | Role | Default Model | Agent Type | Job |
 |------|---------------|------------|-----|
-| **Advisor** | Opus | `advisor-executor` | Glob+Grep discovery, ranks P1–P5, sizes runner pool, **writes a unique, file-aware prompt for every runner**, dispatches explore + fix waves, live dialogue with runners, verifies each output as it lands |
-| **Runner** | Sonnet | `code-review` | Reads files, finds issues, implements fixes. Each runner gets a domain-specific prompt from the advisor — not a generic template. Works ONLY on what the advisor hands it. In constant two-way conversation with the advisor. |
+| **Advisor** | Opus 4.7 (`opus-4-7`) | `advisor-executor` | Glob+Grep discovery, ranks P1–P5, sizes runner pool, **writes a unique, file-aware prompt for every runner**, dispatches explore + fix waves, live dialogue with runners, verifies each output as it lands |
+| **Runner** | Sonnet 4.6 (`sonnet-4-6`) | `code-review` | Reads files, finds issues, implements fixes. Each runner gets a domain-specific prompt from the advisor — not a generic template. Works ONLY on what the advisor hands it. In constant two-way conversation with the advisor (via team-lead relay). |
 
 ## Pipeline
 
@@ -32,8 +32,8 @@ context from its discovery pass.
 ```
 Agent(
   name="advisor",
-  subagent_type="deep-reasoning",
-  model="opus",
+  subagent_type="advisor-executor",
+  model="opus-4-7",
   team_name="review",
   prompt=<build_advisor_prompt(config)>
 )
@@ -58,7 +58,7 @@ Runners are long-lived — reused across assignments for context accumulation.
 Agent(
   name="runner-1",
   subagent_type="code-review",
-  model="sonnet",
+  model="sonnet-4-6",
   team_name="review",
   run_in_background=true,
   prompt=<verbatim text from Opus's "### runner-1 / #### Prompt" block>
@@ -70,10 +70,11 @@ After spawning, tell Opus: `"Pool of N runners is up."`
 ### Step 4: Live dialogue — explore wave
 
 Opus dispatches explore assignments to runners via `SendMessage(to='runner-N')`.
-Runners read files end-to-end and report findings back to the advisor
-(not team-lead). Throughout:
+Runners send all replies — questions, progress pings, draft findings,
+final reports — to **team-lead**, who relays each one verbatim to the
+advisor. The advisor responds directly to the runner. Throughout:
 
-- Runners ask questions when stuck, send progress pings
+- Runners ask questions when stuck, send progress pings (to team-lead → advisor)
 - Opus answers in real time, shares context between runners
 - Opus verifies each runner's output the moment it lands (CONFIRM / NARROW / REDIRECT)
 - Opus proactively redirects runners that drift off-scope
@@ -102,7 +103,7 @@ TeamDelete()
 4. **Runner prompts come from Opus, not a template** — use the per-runner prompts in Opus's dispatch plan verbatim.
 5. **Runners work ONLY on what Opus hands them.**
 6. **Live dialogue, not checkpoints** — runners talk to Opus constantly.
-7. **Runner reports go to the advisor** — Opus verifies and relays.
+7. **Runner reports go to team-lead; team-lead relays to the advisor** — verbatim, the moment they arrive. Do not batch or summarize.
 8. **Every prompt ends with SendMessage-back.**
 9. **Shutdown individually, not broadcast.**
 10. **Fence untrusted data** in Opus prompts (code blocks).

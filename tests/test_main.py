@@ -618,6 +618,43 @@ class TestCmdPlanErrorPaths:
         out = capsys.readouterr().out
         assert "no files" in out or "try --min-priority" in out
 
+    def test_plan_rejects_file_target_not_directory(self, tmp_path, capsys):
+        """Passing a file path to `advisor plan` must fail loudly with a
+        directory-required error rather than silently producing an empty
+        plan via ``_safe_rglob``.
+        """
+        from advisor import __main__ as cli
+
+        f = tmp_path / "single.py"
+        f.write_text("x = 1\n", encoding="utf-8")
+        rc = cli.main(["plan", str(f)])
+        assert rc == 2
+        err = capsys.readouterr().err
+        assert "must be a directory" in err
+
+    def test_max_runners_above_ceiling_warns_and_clamps(self, tmp_path, capsys):
+        """Passing ``--max-runners`` above the ceiling now emits a visible
+        warning instead of silently clamping. The ceiling itself is the
+        same ``_MAX_RUNNERS_CEILING`` value enforced inside the config.
+        """
+        from advisor import __main__ as cli
+
+        (tmp_path / "auth.py").write_text("x = 1\n", encoding="utf-8")
+        rc = cli.main(
+            [
+                "plan",
+                str(tmp_path),
+                "--max-runners",
+                "100",
+                "--min-priority",
+                "1",
+            ]
+        )
+        assert rc == 0
+        err = capsys.readouterr().err
+        assert "100" in err
+        assert "20" in err
+
     def test_bad_file_types_glob_errors_cleanly(self, tmp_path, capsys):
         """A malformed glob exits non-zero with a visible error, not a trace."""
         from advisor import __main__ as cli
@@ -828,11 +865,17 @@ class TestCmdProtocolDefaults:
         # mislead anyone copy-pasting the protocol into a session.
         assert 'TeamCreate(name="review")' in out
         assert "advisor-review" not in out
-        # Default models are the short aliases ``opus``/``sonnet``; the
-        # old text hardcoded ``opus-4``/``sonnet-4`` which drift every
-        # time the alias set changes.
-        assert 'model="opus"' in out
-        assert 'model="sonnet"' in out
+        # Default models are the version-pinned shortcuts ``opus-4-7``
+        # and ``sonnet-4-6``. The old text hardcoded ``opus``/``sonnet``,
+        # which silently drift every time Claude Code retargets the
+        # bare aliases.
+        assert 'model="opus-4-7"' in out
+        assert 'model="sonnet-4-6"' in out
+        # P1-1: the printed protocol must reference the live subagent
+        # type ``advisor-executor`` — the old text said ``deep-reasoning``
+        # which contradicted ``build_advisor_agent``.
+        assert 'subagent_type="advisor-executor"' in out
+        assert "deep-reasoning" not in out
 
 
 class TestCmdPlanResumeConfig:

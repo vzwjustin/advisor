@@ -213,10 +213,10 @@ def _attribute_fix_to_runner(transcript: str, match_start: int) -> str:
 # Fix assignments are dispatches *to* a runner — the most recent
 # ``runner-N`` mention before the marker is the recipient (and that's the
 # correct actor). CONTEXT_PRESSURE is a self-report *from* a runner, sent
-# via ``SendMessage(to='advisor', message='...')``, so the envelope's
-# ``to=`` field points at the advisor, not the runner. Reusing the
-# fix-attribution helper here misattributes the ping to whichever runner
-# was last addressed by the advisor.
+# via ``SendMessage(to='team-lead', message='...')`` (team-lead relays to
+# the advisor), so the envelope's ``to=`` field points at team-lead, not
+# the runner. Reusing the fix-attribution helper here misattributes the
+# ping to whichever runner was last addressed by the advisor.
 #
 # Strategy, in order:
 #   1. Parse the enclosing ``SendMessage(...)`` call. If the message body

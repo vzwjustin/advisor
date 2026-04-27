@@ -18,18 +18,25 @@ KNOWN_MODEL_SHORTCUTS = frozenset(
         "opus",
         "opus-4",
         "opus-4-5",
+        "opus-4-6",
+        "opus-4-7",
         "sonnet",
         "sonnet-4",
         "sonnet-4-5",
+        "sonnet-4-6",
         "haiku",
         "haiku-4",
         "haiku-4-5",
     }
 )
 
-# Long-form Claude model IDs follow ``claude-<family>-<version>-YYYYMMDD``
+# Long-form Claude model IDs follow ``claude-<family>-<version>-YYYYMMDD``.
+# ``<version>`` is one or more dot/dash-separated digit groups (e.g. ``4``,
+# ``4-5``, ``4.5``); the trailing ``-YYYYMMDD`` date stamp is optional.
+# Anchored to reject leading/trailing dots/dashes and double separators
+# that the previous ``[\d.-]+`` would have silently allowed.
 _LONG_FORM_MODEL_RE = re.compile(
-    r"^claude-(opus|sonnet|haiku)-[\d.-]+(-\d{8})?$",
+    r"^claude-(opus|sonnet|haiku)-\d+([.-]\d+)*(-\d{8})?$",
     re.IGNORECASE,
 )
 
@@ -122,8 +129,8 @@ def default_team_config(
     max_runners: int | None = None,
     min_priority: int = 3,
     context: str = "",
-    advisor_model: str = "opus",
-    runner_model: str = "sonnet",
+    advisor_model: str = "opus-4-7",
+    runner_model: str = "sonnet-4-6",
     max_fixes_per_runner: int = 5,
     large_file_line_threshold: int = 800,
     large_file_max_fixes: int = 3,
@@ -161,17 +168,17 @@ def default_team_config(
     min_priority_is_default = min_priority == 3
     test_command_is_default = test_command == ""
 
-    # NOTE: ``advisor_model="opus"`` and ``runner_model="sonnet"`` are
-    # the documented default *sentinels* — when a caller leaves these as
-    # the literal strings ``"opus"`` / ``"sonnet"``, env vars are allowed
-    # to override. A caller who explicitly wants the bare aliases must
-    # instead pass them via the env vars or a different surface, since
-    # the equality check here treats them as "not set". This is a known
+    # NOTE: ``advisor_model="opus-4-7"`` and ``runner_model="sonnet-4-6"``
+    # are the documented default *sentinels* — when a caller leaves these
+    # as the literal default strings, env vars are allowed to override. A
+    # caller who explicitly wants those exact pinned versions must instead
+    # pass them via the env vars or a different surface, since the
+    # equality check here treats them as "not set". This is a known
     # ergonomic trade-off: it lets ``ADVISOR_MODEL`` work without forcing
     # every test/caller to thread a ``warn_unknown_model=False``.
-    if advisor_model == "opus":
+    if advisor_model == "opus-4-7":
         advisor_model = _env_or("ADVISOR_MODEL", advisor_model)
-    if runner_model == "sonnet":
+    if runner_model == "sonnet-4-6":
         runner_model = _env_or("ADVISOR_RUNNER_MODEL", runner_model)
     if max_runners is None:
         raw = _env_int_or("ADVISOR_MAX_RUNNERS", 5)
@@ -180,7 +187,15 @@ def default_team_config(
         max_runners = 1
     # Match the CLI's _MAX_RUNNERS_CEILING clamp so the env-var path and
     # explicit-API path can't spawn an unbounded pool through a typo.
-    max_runners = min(max_runners, 20)
+    # Surface ceiling hits with a one-line warning — mirrors the CLI's
+    # _clamp_max_runners() so users see the same feedback no matter which
+    # surface they came in through.
+    if max_runners > 20:
+        print(
+            _style.warning_box(f"max_runners={max_runners} exceeds ceiling of 20; using 20"),
+            file=sys.stderr,
+        )
+        max_runners = 20
     if file_types_is_default:
         file_types = _env_or("ADVISOR_FILE_TYPES", file_types)
     if min_priority_is_default:
