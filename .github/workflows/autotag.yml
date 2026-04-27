@@ -1,0 +1,45 @@
+name: Auto-tag on version bump
+
+# Fires on every push to main. If pyproject.toml's version changed,
+# creates and pushes a matching vX.Y.Z tag, which in turn triggers release.yml.
+
+on:
+  push:
+    branches: [main]
+    paths: [pyproject.toml]
+
+permissions:
+  contents: write
+
+jobs:
+  autotag:
+    name: Create tag if version bumped
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+
+      - name: Extract versions
+        id: versions
+        run: |
+          prev=$(git show HEAD^:pyproject.toml 2>/dev/null \
+            | grep '^version' | head -1 | grep -oP '"\K[^"]+') || true
+          curr=$(grep '^version' pyproject.toml | head -1 | grep -oP '"\K[^"]+')
+          echo "prev=$prev" >> "$GITHUB_OUTPUT"
+          echo "curr=$curr" >> "$GITHUB_OUTPUT"
+
+      - name: Push tag
+        if: steps.versions.outputs.curr != steps.versions.outputs.prev && steps.versions.outputs.curr != ''
+        run: |
+          tag="v${{ steps.versions.outputs.curr }}"
+          # Skip if tag already exists (idempotent on re-runs)
+          if git ls-remote --tags origin "$tag" | grep -q "$tag"; then
+            echo "Tag $tag already exists — skipping."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$tag"
+          git push origin "$tag"
+          echo "Tagged $tag"
