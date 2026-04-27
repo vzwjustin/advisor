@@ -312,6 +312,15 @@ SKIP_EXTENSIONS = frozenset(
 )
 
 ADVISORIGNORE_FILENAME = ".advisorignore"
+
+#: Hard ceiling on ``.advisorignore`` file size. A real ignore file is
+#: a handful of KB at most; anything larger is almost certainly either
+#: accidental (a binary or generated file checked in under that name)
+#: or hostile (a PR-supplied 100 MB file aimed at OOMing the scanner).
+#: Files above this cap are refused with a UserWarning so the user
+#: can see why their ignore rules aren't taking effect.
+_ADVISORIGNORE_MAX_BYTES = 1 * 1024 * 1024  # 1 MiB
+
 T = TypeVar("T")
 
 
@@ -351,6 +360,28 @@ def load_advisorignore(base_dir: str | Path) -> list[str]:
     """
     path = Path(base_dir) / ADVISORIGNORE_FILENAME
     if not path.exists():
+        return []
+    # Defense-in-depth size cap: a pathological ``.advisorignore`` (e.g.
+    # a 100 MB file from a hostile PR) would otherwise OOM the process
+    # via ``read_text``. Real ignore files top out at a few KB; anything
+    # larger is almost certainly accidental piping or abuse, so refuse
+    # and continue with no ignore patterns rather than crash the run.
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        warnings.warn(
+            f"could not stat {path}: {exc}; treating as no ignore patterns",
+            UserWarning,
+            stacklevel=2,
+        )
+        return []
+    if size > _ADVISORIGNORE_MAX_BYTES:
+        warnings.warn(
+            f"{path} is {size} bytes (>{_ADVISORIGNORE_MAX_BYTES}); "
+            f"refusing to load — treating as no ignore patterns",
+            UserWarning,
+            stacklevel=2,
+        )
         return []
     try:
         text = path.read_text(encoding="utf-8-sig")

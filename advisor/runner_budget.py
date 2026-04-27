@@ -65,8 +65,16 @@ DEFAULT_FILE_READ_CEILING: Final[int] = 20
 # whitespace so hyphens inside filenames (``src/my-file.py``) don't get
 # mistaken for the delimiter. Accepts middle-dot ``·``, pipe ``|``, or
 # hyphen ``-`` so runners that autocorrect punctuation still parse.
+#
+# The trailing ``\s*$`` (in multi-line mode) anchors ``stage`` to the
+# actual line end. This forces the regex engine to consume up to the
+# LAST separator on the line — a path that legitimately contains the
+# separator pattern (e.g. ``src/foo · bar.py``) lands in ``<file>``
+# rather than getting split at the first ``·``. Without the anchor,
+# the non-greedy ``[^\n]*?`` would pick the first match and silently
+# parse the stage as ``bar`` instead of ``reading``.
 _SCOPE_RE: Final[re.Pattern[str]] = re.compile(
-    r"^\s*SCOPE\s*:\s*(?P<file>\S[^\n]*?)\s+[·|\-]\s+(?P<stage>\w+)",
+    r"^\s*SCOPE\s*:\s*(?P<file>\S[^\n]*?)\s+[·|\-]\s+(?P<stage>\w+)\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 

@@ -93,6 +93,23 @@ class TestParseScopeAnchor:
         assert anchor.file_path == "my-file.py"
         assert anchor.stage == "reading"
 
+    def test_separator_inside_path_anchors_to_last(self) -> None:
+        """A path that legitimately contains the separator pattern must
+        land entirely in ``<file>``; the parser anchors on the LAST
+        separator, not the first. Pre-fix the non-greedy regex picked
+        the first ``·`` and silently parsed stage as ``bar`` instead
+        of ``reading``."""
+        anchor = parse_scope_anchor("SCOPE: src/foo · bar.py · reading")
+        assert anchor is not None
+        assert anchor.file_path == "src/foo · bar.py"
+        assert anchor.stage == "reading"
+
+    def test_three_separators_lands_on_last(self) -> None:
+        anchor = parse_scope_anchor("SCOPE: a · b · c · done")
+        assert anchor is not None
+        assert anchor.file_path == "a · b · c"
+        assert anchor.stage == "done"
+
 
 class TestUpdateBudget:
     def test_chars_accumulate(self) -> None:

@@ -209,6 +209,28 @@ class TestUriEncoding:
         assert self._result_uri(doc) == "src/sub/auth.py"
 
 
+class TestParseFilePathWhitespace:
+    """``_parse_file_path`` must strip embedded whitespace (newline, tab,
+    CR) before splitting on ``:``. A path like ``"src/foo.py\\n:42"``
+    used to survive into the SARIF ``artifactLocation.uri`` and break
+    path-equality matching for GitHub Code Scanning."""
+
+    def test_embedded_newline_dropped(self) -> None:
+        from advisor.sarif import _parse_file_path
+
+        assert _parse_file_path("src/foo.py\n:42") == ("src/foo.py", 42)
+
+    def test_embedded_tab_dropped(self) -> None:
+        from advisor.sarif import _parse_file_path
+
+        assert _parse_file_path("src/foo.py\t:42") == ("src/foo.py", 42)
+
+    def test_embedded_cr_dropped(self) -> None:
+        from advisor.sarif import _parse_file_path
+
+        assert _parse_file_path("src/foo\rpath.py:42") == ("src/foopath.py", 42)
+
+
 class TestShortDescriptionWhitespace:
     """``shortDescription`` is rendered single-line in GitHub Code
     Scanning's rule list. ``_short_text`` must collapse newlines / CR /

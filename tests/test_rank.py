@@ -120,6 +120,29 @@ class TestLoadAdvisorignoreWarnsOnError:
         assert result == []
         assert not any(issubclass(w.category, UserWarning) for w in caught)
 
+    def test_oversize_file_refused_with_warning(self, tmp_path, monkeypatch):
+        """A pathological ``.advisorignore`` (e.g. 100 MB from a hostile
+        PR) would OOM the process via ``read_text``. The size cap
+        refuses to load and surfaces a warning so the rejection is
+        visible.
+        """
+        import warnings
+
+        from advisor import rank as rank_mod
+        from advisor.rank import ADVISORIGNORE_FILENAME, load_advisorignore
+
+        # Patch the cap to a tiny value so we don't write a real giant
+        # file in CI.
+        monkeypatch.setattr(rank_mod, "_ADVISORIGNORE_MAX_BYTES", 32)
+        (tmp_path / ADVISORIGNORE_FILENAME).write_text("x" * 100, encoding="utf-8")
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = load_advisorignore(tmp_path)
+
+        assert result == []
+        msgs = [str(w.message) for w in caught if issubclass(w.category, UserWarning)]
+        assert any("refusing to load" in m for m in msgs)
+
 
 class TestMatchesAnyPattern:
     def test_wildcard_pattern_does_not_match_dir_component_with_extension(self):
