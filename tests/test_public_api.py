@@ -16,9 +16,9 @@ def _pyproject_version() -> str:
         if in_project and line.startswith("["):
             break
         if in_project and line.startswith("version"):
-            _, sep, raw_value = line.partition("=")
-            if sep:
-                return raw_value.strip().strip("\"'")
+            key, sep, raw_value = line.partition("=")
+            if sep and key.strip() == "version":
+                return raw_value.split("#", 1)[0].strip().strip("\"'")
     raise AssertionError("pyproject.toml has no [project].version")
 
 

@@ -42,9 +42,9 @@ def _read_local_pyproject_version() -> str | None:
         if in_project and line.startswith("["):
             break
         if in_project and line.startswith("version"):
-            _, sep, raw_value = line.partition("=")
-            if sep:
-                value = raw_value.strip().strip("\"'")
+            key, sep, raw_value = line.partition("=")
+            if sep and key.strip() == "version":
+                value = raw_value.split("#", 1)[0].strip().strip("\"'")
                 if value:
                     return value
     return None
