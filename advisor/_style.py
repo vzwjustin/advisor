@@ -316,9 +316,7 @@ def colorize_markdown(text: str, stream: IO[str] | None = None) -> str:
         # one open via ``len(escapes) - close_count`` is wrong here —
         # they were counted as a close, not an open). Add one open per
         # combined occurrence to restore the balance.
-        combined_count = sum(
-            1 for e in escapes if _ANSI_COMBINED_RESET_SET_RE.match(e)
-        )
+        combined_count = sum(1 for e in escapes if _ANSI_COMBINED_RESET_SET_RE.match(e))
         open_count = len(escapes) - close_count + combined_count
         return open_count > close_count
 

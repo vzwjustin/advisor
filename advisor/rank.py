@@ -464,7 +464,9 @@ def _compile_ignore_patterns(patterns: list[str]) -> tuple[_IgnorePatternMatcher
                 recursive_re=recursive_re,
                 # Don't set dir_pattern when ** is present — recursive_re handles it.
                 # Setting both caused dir_pattern's `continue` to shadow recursive_re.
-                dir_pattern=pattern.rstrip("/") if pattern.endswith("/") and "**" not in pattern else None,
+                dir_pattern=pattern.rstrip("/")
+                if pattern.endswith("/") and "**" not in pattern
+                else None,
                 bare_component=not any(c in pattern for c in "*?[."),
             )
         )
@@ -523,8 +525,7 @@ def _matches_compiled_pattern(
             path_re = re.compile(
                 "^"
                 + "".join(
-                    "[^/]*" if c == "*" else ("[^/]" if c == "?" else re.escape(c))
-                    for c in pattern
+                    "[^/]*" if c == "*" else ("[^/]" if c == "?" else re.escape(c)) for c in pattern
                 )
                 + "$"
             )

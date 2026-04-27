@@ -185,8 +185,7 @@ def _resolve_max_runners(raw: int | None) -> int:
             # via ``${VAR:-default}`` substitution and a malformed value
             # would otherwise look like the env var is being honored.
             print(
-                f"warning: ADVISOR_MAX_RUNNERS={env_raw!r} is not a valid integer; "
-                "using default 5",
+                f"warning: ADVISOR_MAX_RUNNERS={env_raw!r} is not a valid integer; using default 5",
                 file=sys.stderr,
             )
             parsed = 5
@@ -2097,7 +2096,9 @@ def build_parser() -> argparse.ArgumentParser:
         try:
             n = int(value)
         except ValueError as exc:
-            raise argparse.ArgumentTypeError(f"expected non-negative integer, got {value!r}") from exc
+            raise argparse.ArgumentTypeError(
+                f"expected non-negative integer, got {value!r}"
+            ) from exc
         if n < 0:
             raise argparse.ArgumentTypeError(f"batch-size must be >= 0, got {n}")
         return n

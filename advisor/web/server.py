@@ -424,9 +424,7 @@ def run_server(
     # banner URL whose authority a browser parses differently than the
     # bound socket. NOTE: banner only — the bind above used the original
     # ``host`` string and either succeeded or failed on its own merits.
-    host_safe = "".join(
-        ch for ch in host if ch.isalnum() or ch in "._-:[]"
-    )
+    host_safe = "".join(ch for ch in host if ch.isalnum() or ch in "._-:[]")
     url = f"http://{host_safe}:{actual_port}"
     print(_style.success_box(f"advisor dashboard serving {state.target} at {url}"))
     print(_style.tip("press Ctrl-C to stop"))

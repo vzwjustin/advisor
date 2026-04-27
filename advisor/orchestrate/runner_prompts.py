@@ -434,8 +434,7 @@ def build_runner_agents(
             # FocusBatch that surfaces as a confusing downstream error.
             # ``assert`` would be stripped under ``python -O``.
             raise TypeError(
-                f"runner pool items must be FocusBatch or FocusTask, "
-                f"got {type(item).__name__}"
+                f"runner pool items must be FocusBatch or FocusTask, got {type(item).__name__}"
             )
 
     agents: list[dict[str, object]] = []
