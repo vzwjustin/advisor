@@ -89,6 +89,32 @@ class TestAuditTranscriptFixCounts:
         report = audit_transcript(transcript, _mk_checkpoint())
         assert report.fix_counts["runner-1"] == 1
 
+    def test_attribution_uses_envelope_not_prose_mention(self):
+        """``_attribute_fix_to_runner`` must prefer the SendMessage
+        envelope over a bare ``runner-N`` mention in adjacent prose.
+
+        Before this fix, prose like ``"runner-5 found this issue"``
+        immediately preceding a ``## Fix assignment`` directed at
+        runner-2 caused the fix to be misattributed to runner-5 (the
+        last bare-mention regex match in the attribution window).
+        """
+        transcript = (
+            "Some prose here mentioning runner-5 found this issue earlier.\n"
+            "SendMessage(to='runner-2', message='## Fix assignment (fix 1 of 5)')\n"
+        )
+        report = audit_transcript(transcript, _mk_checkpoint())
+        # Authoritative attribution: the envelope says runner-2, prose
+        # mention of runner-5 is correctly ignored.
+        assert report.fix_counts == {"runner-2": 1}
+        assert "runner-5" not in report.fix_counts
+
+    def test_attribution_falls_back_to_bare_mention_when_no_envelope(self):
+        """Legacy transcripts without ``to='runner-N'`` envelopes
+        still attribute via the bare-mention fallback."""
+        transcript = "runner-3 acknowledges\n## Fix assignment (fix 1 of 5)\n"
+        report = audit_transcript(transcript, _mk_checkpoint())
+        assert report.fix_counts == {"runner-3": 1}
+
 
 class TestAuditTranscriptCapOverruns:
     def test_flags_overrun(self):
@@ -176,6 +202,46 @@ class TestAuditTranscriptProtocolViolations:
         assert len(report.protocol_violations) == 2
         assert "runner-2 at cap=5" in report.protocol_violations[0]
         assert "out-of-batch" in report.protocol_violations[1]
+        assert report.protocol_violations_truncated is False
+
+    def test_truncation_is_surfaced_via_flag_and_report(self):
+        """The cap on protocol_violations is intentional, but used to be
+        silent — a transcript with 1100 violations would land 1000 in
+        the list with no indication that 100 more existed. The cap is
+        now exposed via :attr:`protocol_violations_truncated` and the
+        human report appends an explicit ``(truncated at N; transcript
+        contains additional matches)`` line.
+        """
+        from advisor.audit import (
+            PROTOCOL_VIOLATION_CAP,
+            audit_to_dict,
+            format_audit_report,
+        )
+
+        # Build a transcript with one more violation than the cap.
+        lines = [f"PROTOCOL_VIOLATION: violation #{i}" for i in range(PROTOCOL_VIOLATION_CAP + 1)]
+        transcript = "\n".join(lines)
+        report = audit_transcript(transcript, _mk_checkpoint())
+        assert len(report.protocol_violations) == PROTOCOL_VIOLATION_CAP
+        assert report.protocol_violations_truncated is True
+
+        # JSON output includes the flag.
+        d = audit_to_dict(report)
+        assert d["protocol_violations_truncated"] is True
+
+        # Human-readable report appends an explicit truncation line so
+        # the cap's effect is visible without parsing the JSON.
+        text = format_audit_report(report)
+        assert "truncated" in text
+        assert str(PROTOCOL_VIOLATION_CAP) in text
+
+    def test_truncation_flag_false_when_under_cap(self):
+        report = audit_transcript("PROTOCOL_VIOLATION: only one\n", _mk_checkpoint())
+        assert report.protocol_violations_truncated is False
+        text = __import__("advisor.audit", fromlist=["format_audit_report"]).format_audit_report(
+            report
+        )
+        assert "truncated" not in text
 
 
 class TestAuditTranscriptScopeDrift:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from advisor._fs import safe_rglob_paths
+from advisor._fs import normalize_path, safe_rglob_paths
 
 
 def test_safe_rglob_paths_returns_deterministic_order(tmp_path: Path) -> None:
@@ -16,3 +16,41 @@ def test_safe_rglob_paths_returns_deterministic_order(tmp_path: Path) -> None:
     paths = safe_rglob_paths(tmp_path, "*.py")
 
     assert paths == sorted(paths)
+
+
+class TestNormalizePathLexicalCollapse:
+    """``..`` and redundant ``.`` collapse — runners that anchor on
+    cosmetically-different paths (e.g. ``src/../src/auth.py``) used to
+    trip false-positive scope drift. Lexical normalization makes
+    equivalent paths compare equal.
+    """
+
+    def test_dotdot_collapses(self) -> None:
+        assert normalize_path("src/../src/auth.py") == "src/auth.py"
+
+    def test_redundant_dot_collapses(self) -> None:
+        assert normalize_path("src/./auth.py") == "src/auth.py"
+
+    def test_double_slash_collapses(self) -> None:
+        # posixpath.normpath squashes ``//`` to ``/``.
+        assert normalize_path("src//auth.py") == "src/auth.py"
+
+    def test_dotdot_and_line_suffix_combined(self) -> None:
+        # Line-suffix strip happens before lexical collapse, so
+        # ``src/../src/auth.py:42`` first drops the ``:42`` then
+        # collapses ``..``.
+        assert normalize_path("src/../src/auth.py:42") == "src/auth.py"
+
+    def test_already_normalized_unchanged(self) -> None:
+        assert normalize_path("src/auth.py") == "src/auth.py"
+
+    def test_leading_dot_slash_preserves_normalization(self) -> None:
+        # Leading ``./`` is stripped before normpath; the result is the
+        # bare relative path with any internal ``..`` collapsed too.
+        assert normalize_path("./src/../src/auth.py") == "src/auth.py"
+
+    def test_empty_input_stays_empty(self) -> None:
+        # An empty path must not become ``"."`` after normalization —
+        # downstream uses string equality with other empty paths.
+        assert normalize_path("") == ""
+        assert normalize_path("   ") == ""

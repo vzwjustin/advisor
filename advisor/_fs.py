@@ -183,13 +183,19 @@ def normalize_path(path: str) -> str:
     """Normalize a file path for batch/drift-detection comparison.
 
     Strips surrounding whitespace, backticks, leading ``./``, converts
-    backslashes to forward slashes, and strips a trailing ``:line`` or
-    ``:line:col`` suffix. Findings conventionally encode the offending
-    location as ``src/auth.py:42``; batch membership keys and scope
-    anchors use filenames only, so without the suffix strip every
-    finding would look like scope drift. Does NOT resolve symlinks or
-    make the path absolute — callers operate on repo-relative POSIX
-    paths as emitted by the explore phase and echoed back in findings.
+    backslashes to forward slashes, collapses ``..`` / ``.`` components,
+    and strips a trailing ``:line`` or ``:line:col`` suffix. Findings
+    conventionally encode the offending location as ``src/auth.py:42``;
+    batch membership keys and scope anchors use filenames only, so
+    without the suffix strip every finding would look like scope drift.
+    Does NOT resolve symlinks or make the path absolute — callers
+    operate on repo-relative POSIX paths as emitted by the explore
+    phase and echoed back in findings.
+
+    ``..`` collapse is purely lexical (``posixpath.normpath``); a
+    runner that anchors on ``src/../src/auth.py`` is the same file as
+    ``src/auth.py`` for batch-membership purposes. Without this,
+    scope-drift detection fires on cosmetically-different anchors.
 
     The line-suffix strip is **capped at 2 iterations** so a pathological
     input like ``file:42:43:44:45`` does not strip past the line/col
@@ -211,4 +217,17 @@ def normalize_path(path: str) -> str:
             p = head
         else:
             break
+    # Lexically collapse ``..`` and redundant ``.`` segments. Use the
+    # POSIX form so the result is platform-independent (the input has
+    # already had backslashes normalized to forward slashes above).
+    # An empty path or "." after collapse means current dir — return
+    # empty string so equality with another empty-target path holds.
+    if p and p != ".":
+        import posixpath as _pp
+
+        collapsed = _pp.normpath(p)
+        # ``normpath('')`` returns '.', but we already short-circuit on
+        # empty above. Guard against the lone-dot result so we don't
+        # introduce a sentinel where the input had a real path.
+        p = "" if collapsed == "." else collapsed
     return p

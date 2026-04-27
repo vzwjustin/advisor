@@ -85,6 +85,37 @@ from .sarif import findings_to_sarif
 # schema_version fields for fine-grained evolution.
 JSON_SCHEMA_VERSION = "1.0"
 
+# Cap on bytes read from stdin for any subcommand that consumes piped
+# data (``--context -``, ``advisor prompt --step verify``,
+# ``advisor baseline create``, ``advisor audit``, etc.). Without a cap,
+# a multi-GB pipe (accidental or hostile) buffers entirely into memory
+# and trips the OOM killer. 50 MiB comfortably fits any legitimate
+# transcript / findings payload — anything larger is almost certainly
+# either accidental piping of a binary file or an abuse case.
+_STDIN_LIMIT = 50 * 1024 * 1024
+
+
+def _read_stdin_capped(*, source_label: str) -> str:
+    """Read stdin with a hard byte cap and a clear error on overflow.
+
+    Returns the decoded text (up to ``_STDIN_LIMIT`` bytes). Exits the
+    process with a styled error if the input exceeds the cap — refusing
+    to truncate silently because partial data downstream is a worse
+    failure mode than an explicit refusal here. ``source_label``
+    identifies the surface for the error message (e.g. ``"--context -"``).
+    """
+    payload = sys.stdin.read(_STDIN_LIMIT + 1)
+    if len(payload) > _STDIN_LIMIT:
+        print(
+            _style.error_box(
+                f"{source_label}: input exceeds {_STDIN_LIMIT // (1024 * 1024)} MiB cap",
+                stream=sys.stderr,
+            ),
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    return payload
+
 
 def _team_config_default(name: str) -> int:
     """Return the default value of a ``TeamConfig`` int field by name.
@@ -234,7 +265,7 @@ def _config_from_args(args: argparse.Namespace) -> TeamConfig:
             )
             context = ""
         else:
-            context = sys.stdin.read().strip()
+            context = _read_stdin_capped(source_label="--context -").strip()
     return default_team_config(
         target_dir=args.target,
         team_name=args.team,
@@ -1047,7 +1078,7 @@ def cmd_prompt(args: argparse.Namespace) -> int:
         if sys.stdin.isatty():
             findings = "<paste findings here>"
         else:
-            piped = sys.stdin.read()
+            piped = _read_stdin_capped(source_label="--step verify")
             if not piped.strip():
                 print(
                     _style.warning_box(
@@ -1675,7 +1706,7 @@ def _load_findings_from_input(
         if source is None:
             if sys.stdin.isatty():
                 return [], None
-            text = sys.stdin.read()
+            text = _read_stdin_capped(source_label="findings input")
         else:
             text = Path(source).read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
@@ -2010,21 +2041,14 @@ def cmd_audit(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 2
-        # Cap stdin transcripts at 50 MiB — a piped Claude Code conversation
-        # tops out near a few MB, so anything larger is almost certainly a
-        # mis-pipe (e.g. an entire log directory) and would otherwise be
-        # buffered into RAM in one shot.
-        _STDIN_LIMIT = 50 * 1024 * 1024
-        transcript = sys.stdin.read(_STDIN_LIMIT + 1)
-        if len(transcript) > _STDIN_LIMIT:
-            print(
-                _style.error_box(
-                    f"audit: transcript exceeds {_STDIN_LIMIT // (1024 * 1024)} MiB cap",
-                    stream=sys.stderr,
-                ),
-                file=sys.stderr,
-            )
-            return 2
+        # Cap stdin transcripts via the shared helper — a piped Claude
+        # Code conversation tops out near a few MB, so anything larger
+        # is almost certainly a mis-pipe (e.g. an entire log directory)
+        # and would otherwise be buffered into RAM in one shot.
+        try:
+            transcript = _read_stdin_capped(source_label="audit transcript")
+        except SystemExit as exc:
+            return int(exc.code) if isinstance(exc.code, int) else 2
     else:
         try:
             transcript = Path(transcript_arg).read_text(encoding="utf-8", errors="replace")

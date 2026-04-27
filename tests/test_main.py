@@ -661,9 +661,7 @@ class TestCmdPlanErrorPaths:
         assert "100" in err
         assert "20" in err
 
-    def test_max_runners_flag_and_env_both_set_warns_once(
-        self, tmp_path, capsys, monkeypatch
-    ):
+    def test_max_runners_flag_and_env_both_set_warns_once(self, tmp_path, capsys, monkeypatch):
         """Setting BOTH ``--max-runners 100`` AND ``ADVISOR_MAX_RUNNERS=200``
         must produce exactly one warning (the explicit flag wins; the env
         path is short-circuited and never re-clamped). A regression that
@@ -1397,3 +1395,47 @@ class TestNoColorFlag:
         cli.main(["--no-color", "status"])
         assert os.environ.get("NO_COLOR") == "1"
         assert _style.supports_color() is False
+
+
+class TestStdinReadCap:
+    """Every subcommand that consumes piped stdin must cap the read so
+    a multi-GB input (accidental or hostile) cannot OOM the process.
+    The cap is the shared :data:`__main__._STDIN_LIMIT` constant; each
+    consumer routes through :func:`__main__._read_stdin_capped`.
+
+    These tests exercise the helper directly with a tiny synthetic
+    cap, plus the real default cap to confirm the constant is wired in.
+    """
+
+    def test_helper_caps_oversize_input(self, monkeypatch, capsys):
+        """The helper raises SystemExit(2) and emits a styled error
+        when the stdin payload exceeds the cap."""
+        import io
+
+        from advisor import __main__ as cli
+
+        # Patch the limit to a tiny value so we don't have to allocate
+        # 50 MiB of test data; the limit is module-level.
+        monkeypatch.setattr(cli, "_STDIN_LIMIT", 16)
+        monkeypatch.setattr("sys.stdin", io.StringIO("x" * 32))
+        with pytest.raises(SystemExit) as exc_info:
+            cli._read_stdin_capped(source_label="test")
+        assert exc_info.value.code == 2
+        err = capsys.readouterr().err
+        assert "test" in err
+        assert "MiB cap" in err
+
+    def test_helper_returns_payload_under_cap(self, monkeypatch):
+        import io
+
+        from advisor import __main__ as cli
+
+        monkeypatch.setattr(cli, "_STDIN_LIMIT", 16)
+        monkeypatch.setattr("sys.stdin", io.StringIO("hello"))
+        assert cli._read_stdin_capped(source_label="test") == "hello"
+
+    def test_default_cap_is_50_mib(self):
+        """Pin the documented default so a future bump is intentional."""
+        from advisor import __main__ as cli
+
+        assert cli._STDIN_LIMIT == 50 * 1024 * 1024

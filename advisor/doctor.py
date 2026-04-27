@@ -117,11 +117,30 @@ def _check_claude_cli() -> Check:
 def _check_claude_home() -> Check:
     claude_dir = Path.home() / ".claude"
     if claude_dir.is_symlink():
-        return Check(
-            "claude-home",
-            "warn",
-            f"{claude_dir} is a symlink; advisor install refuses to write through symlinks",
-        )
+        # ``install.py`` resolves the symlink and accepts the target as
+        # long as it stays under ``$HOME`` (dotfiles managers like
+        # stow/chezmoi are a common legitimate use). Warn only when the
+        # resolved target escapes $HOME — that's the actual condition
+        # that breaks the install. ``resolve(strict=False)`` doesn't
+        # raise on broken targets, mirroring ``install.py``'s behavior.
+        try:
+            resolved = claude_dir.resolve()
+            home_resolved = Path.home().resolve()
+            if not resolved.is_relative_to(home_resolved):
+                return Check(
+                    "claude-home",
+                    "warn",
+                    f"{claude_dir} resolves to {resolved} (outside $HOME); "
+                    "advisor install refuses to write outside $HOME",
+                )
+        except OSError as exc:
+            return Check(
+                "claude-home",
+                "warn",
+                f"{claude_dir} is a symlink that could not be resolved: {exc}",
+            )
+        # Fall through to the directory checks below — a within-$HOME
+        # symlink to a regular dir is healthy.
     if not claude_dir.exists():
         return Check(
             "claude-home",

@@ -28,6 +28,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote as _url_quote
 
 from advisor.verify import Finding
 
@@ -200,9 +201,15 @@ def findings_to_sarif(
             # let a downstream validator reject the whole run.
             region["startLine"] = max(1, line)
 
+        # SARIF's ``artifactLocation.uri`` is a uri-reference per RFC 3986
+        # (per the schema's ``"format": "uri-reference"`` constraint).
+        # Path components must be percent-encoded — spaces, ``#``, ``?``,
+        # ``&``, and other reserved chars otherwise change the URI's
+        # meaning to consumers like GitHub Code Scanning. Preserve ``/``
+        # so the relative path structure stays intact.
         physical_location: dict[str, Any] = {
             "artifactLocation": {
-                "uri": rel,
+                "uri": _url_quote(rel, safe="/"),
                 "uriBaseId": "%SRCROOT%",
             },
         }
@@ -247,8 +254,17 @@ def findings_to_sarif(
 
 
 def _short_text(text: str, *, limit: int = 120) -> str:
-    """Clip ``text`` to ``limit`` chars, for the SARIF shortDescription field."""
-    stripped = text.strip()
-    if len(stripped) <= limit:
-        return stripped or "advisor finding"
-    return stripped[: limit - 1].rstrip() + "…"
+    """Clip ``text`` to ``limit`` chars, for the SARIF shortDescription field.
+
+    Collapses any embedded newlines / CR / tabs to single spaces. SARIF
+    consumers (notably GitHub Code Scanning) display ``shortDescription``
+    on a single line; an embedded newline survives into the rule list
+    and breaks rendering. Strip-and-clip happens AFTER the collapse so
+    a clip that lands on a former newline doesn't leave a trailing space.
+    """
+    # Collapse all whitespace runs (incl. \n, \r, \t) to a single space
+    # in one pass so the truncation math operates on display-width.
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= limit:
+        return collapsed or "advisor finding"
+    return collapsed[: limit - 1].rstrip() + "…"

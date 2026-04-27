@@ -455,7 +455,13 @@ APP_JS = r"""(() => {
     const pill = $('#live-indicator');
     pill.classList.remove('idle', 'active', 'paused', 'error');
     pill.classList.add(state);
-    $('.live-label', pill).textContent = labelOverride || state.toUpperCase();
+    // The ``$`` helper takes a single selector and queries from
+    // ``document``; the previous ``$('.live-label', pill)`` silently
+    // dropped the second argument, so the lookup escaped the pill
+    // scope. Use ``pill.querySelector`` directly so the lookup is
+    // genuinely scoped — matters once a future page has more than one
+    // ``.live-label`` element on it.
+    pill.querySelector('.live-label').textContent = labelOverride || state.toUpperCase();
   }
 
   function schedulePoll(delayMs) {
