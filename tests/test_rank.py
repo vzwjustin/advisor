@@ -169,6 +169,40 @@ class TestDoubleStarGlob:
         assert _matches_any_pattern("a/foo.py", ["**/[!].py"]) is False
 
 
+class TestGitignoreSemanticBoundaries:
+    """Single ``*`` does NOT cross ``/``; trailing ``**/`` matches all contents.
+
+    These were added after a review surfaced that ``src/*.py`` silently
+    over-matched (fnmatch's ``*`` crossing ``/``) and ``src/**/`` matched
+    nothing (the dir-pattern branch shadowed recursive_re). The tests
+    pin the gitignore-aligned semantics so the same regressions can't
+    return silently.
+    """
+
+    def test_single_star_with_slash_does_not_cross_directory(self):
+        from advisor.rank import _matches_any_pattern
+
+        # ``src/*.py`` matches direct children of src/ only.
+        assert _matches_any_pattern("src/foo.py", ["src/*.py"]) is True
+        assert _matches_any_pattern("src/sub/foo.py", ["src/*.py"]) is False
+        assert _matches_any_pattern("src/a/b/foo.py", ["src/*.py"]) is False
+
+    def test_question_mark_with_slash_does_not_cross_directory(self):
+        from advisor.rank import _matches_any_pattern
+
+        # ``src/?.py`` is a single-char glob within src/.
+        assert _matches_any_pattern("src/a.py", ["src/?.py"]) is True
+        assert _matches_any_pattern("src/sub/a.py", ["src/?.py"]) is False
+
+    def test_trailing_double_star_slash_matches_all_contents(self):
+        from advisor.rank import _matches_any_pattern
+
+        # ``src/**/`` should match every file under src/.
+        assert _matches_any_pattern("src/foo.py", ["src/**/"]) is True
+        assert _matches_any_pattern("src/deep/nested/foo.py", ["src/**/"]) is True
+        assert _matches_any_pattern("other/foo.py", ["src/**/"]) is False
+
+
 @pytest.mark.parametrize(
     "priority,keyword",
     [(priority, kw) for priority, kws in PRIORITY_KEYWORDS.items() for kw in kws],

@@ -265,6 +265,11 @@ _ANSI_SGR_RE = re.compile(r"\x1b\[[\d;]*m")
 # ``\x1b[0m`` reset and combined sequences like ``\x1b[0;1m`` (reset
 # then bold). Used by `_inside_ansi_span` to count resets correctly.
 _ANSI_RESET_RE = re.compile(r"\x1b\[0[;m]")
+# Matches a combined reset-then-set SGR like ``\x1b[0;36m`` — leading
+# ``0`` followed by at least one more parameter. These sequences both
+# CLOSE the outer span and OPEN a new one in a single escape, so they
+# must contribute one to each counter in `_inside_ansi_span`.
+_ANSI_COMBINED_RESET_SET_RE = re.compile(r"\x1b\[0;[\d;]+m")
 # Combined header regex (H2/H3/H4 in a single pass). Depth is inferred
 # from the captured ``#`` run length; each depth gets a different style.
 # H1 is intentionally excluded — Markdown docs almost never emit ``# `` at
@@ -296,14 +301,25 @@ def colorize_markdown(text: str, stream: IO[str] | None = None) -> str:
         Counts SGR escapes preceding ``pos`` and compares openers vs
         resets. Any SGR whose first parameter is ``0`` is treated as a
         reset — that includes the canonical ``\\x1b[0m`` AND combined
-        sequences like ``\\x1b[0;1m`` (reset then bold) common in copied
-        terminal output. An odd opener count without a matching reset
-        means the match is inside a painted region.
+        sequences like ``\\x1b[0;1m`` (reset then bold). A combined
+        reset-then-set sequence (``\\x1b[0;36m``) ALSO opens a new span
+        in the same escape, so it counts as both one close and one open.
+        Without that, ``\\x1b[32mgreen\\x1b[0;36mP3\\x1b[0m`` would zero
+        the counter at the priority position even though the terminal
+        is still in a colored state.
         """
         prefix = full[:pos]
         escapes = _ANSI_SGR_RE.findall(prefix)
         close_count = sum(1 for e in escapes if _ANSI_RESET_RE.match(e))
-        open_count = len(escapes) - close_count
+        # Combined reset-then-set sequences contribute an additional
+        # open beyond the bare-escape count (which already gives them
+        # one open via ``len(escapes) - close_count`` is wrong here —
+        # they were counted as a close, not an open). Add one open per
+        # combined occurrence to restore the balance.
+        combined_count = sum(
+            1 for e in escapes if _ANSI_COMBINED_RESET_SET_RE.match(e)
+        )
+        open_count = len(escapes) - close_count + combined_count
         return open_count > close_count
 
     def _color_priority(m: re.Match[str]) -> str:

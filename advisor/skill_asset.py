@@ -59,21 +59,23 @@ __VERSION_BADGE__
 **Step 3 (BEFORE any Bash):** Call `TeamCreate(name="review")` — creates team
 
 **Step 4 (only AFTER steps 2+3 complete):** Build the prompt via Bash —
-write it to `/tmp/advisor_prompt.txt`, then Read it back and pass the
-content directly as the `prompt` parameter to Agent:
+write it to a unique temp file (mktemp avoids the `/tmp/advisor_prompt.txt`
+symlink-overwrite footgun on multi-user hosts), then Read it back and
+pass the content directly as the `prompt` parameter to Agent:
 
 ```bash
 python3 -c "
+import tempfile
 from advisor import default_team_config, build_advisor_prompt
 config = default_team_config(target_dir='TARGET', context='CONTEXT')
-with open('/tmp/advisor_prompt.txt', 'w') as f:
+with tempfile.NamedTemporaryFile('w', prefix='advisor_prompt.', suffix='.txt', delete=False) as f:
     f.write(build_advisor_prompt(config))
-print('done')
+    print(f.name)
 "
 ```
 
-Then `Read("/tmp/advisor_prompt.txt")` and use its content as the Agent
-`prompt` parameter verbatim.
+The Bash command prints the unique tmpfile path. Then `Read("<that path>")`
+and use its content as the Agent `prompt` parameter verbatim.
 
 **Step 5:** Spawn Agent with the prompt content from Step 4.
 
@@ -114,14 +116,15 @@ default_team_config(
 **Concrete example (use this pattern verbatim):**
 ```bash
 python3 -c "
+import tempfile
 from advisor import default_team_config, build_advisor_prompt
 config = default_team_config(
     target_dir='/Users/.../project',
     context='Audit codebase for UI enhancements'
 )
-with open('/tmp/advisor_prompt.txt', 'w') as f:
+with tempfile.NamedTemporaryFile('w', prefix='advisor_prompt.', suffix='.txt', delete=False) as f:
     f.write(build_advisor_prompt(config))
-print('done')
+    print(f.name)
 "
 ```
 

@@ -243,9 +243,19 @@ def _language_from_shebang(first_line: str) -> str | None:
             break
         else:
             return None
-    # Strip version suffixes like ``python3.12`` → ``python3``.
+    # Strip version suffixes like ``python3.12`` → ``python3``. Then
+    # also try with trailing digits stripped (``ruby3`` → ``ruby``,
+    # ``php8`` → ``php``) so versioned interpreters that aren't listed
+    # explicitly still resolve. Order matters: the major-version form
+    # (``python3``, listed) wins over the generic form (``python``) so
+    # we look it up first.
     base = first.split(".", 1)[0]
-    return _SHEBANG_INTERPRETERS.get(base) or _SHEBANG_INTERPRETERS.get(first)
+    base_stripped = base.rstrip("0123456789")
+    return (
+        _SHEBANG_INTERPRETERS.get(base)
+        or _SHEBANG_INTERPRETERS.get(first)
+        or _SHEBANG_INTERPRETERS.get(base_stripped)
+    )
 
 
 SKIP_DIRS = frozenset(
@@ -343,7 +353,7 @@ def load_advisorignore(base_dir: str | Path) -> list[str]:
     if not path.exists():
         return []
     try:
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError) as exc:
         warnings.warn(
             f"could not read {path}: {exc}; treating as no ignore patterns",
@@ -442,14 +452,19 @@ def _compile_ignore_patterns(patterns: list[str]) -> tuple[_IgnorePatternMatcher
         recursive_re: re.Pattern[str] | None = None
         if "**" in pattern:
             try:
-                recursive_re = _double_star_to_regex(pattern)
+                # Strip trailing '/' before compiling: 'src/**/' should match
+                # all files under src/, not just paths that end with '/'.
+                re_pattern = pattern.rstrip("/") if pattern.endswith("/") else pattern
+                recursive_re = _double_star_to_regex(re_pattern)
             except re.error:
                 recursive_re = re.compile(r"$.^")
         compiled.append(
             _IgnorePatternMatcher(
                 pattern=pattern,
                 recursive_re=recursive_re,
-                dir_pattern=pattern.rstrip("/") if pattern.endswith("/") else None,
+                # Don't set dir_pattern when ** is present — recursive_re handles it.
+                # Setting both caused dir_pattern's `continue` to shadow recursive_re.
+                dir_pattern=pattern.rstrip("/") if pattern.endswith("/") and "**" not in pattern else None,
                 bare_component=not any(c in pattern for c in "*?[."),
             )
         )
@@ -496,9 +511,25 @@ def _matches_compiled_pattern(
         # Match against filename only
         if fnmatch.fnmatch(name, pattern):
             return True
-        # Match against full path
-        if fnmatch.fnmatch(path_str, pattern):
-            return True
+        # Match against full path — but only for patterns that contain a path
+        # separator. fnmatch's ``*`` matches ``/``, so applying it to path_str
+        # with a separator-free pattern (e.g. ``*.py``) is already handled by
+        # the name match above and the full-path call would be redundant.
+        # For patterns WITH a ``/`` (e.g. ``src/*.py``), fnmatch would
+        # incorrectly match ``src/deep/foo.py`` because ``*`` crosses ``/``.
+        # Use a non-recursive path-aware match: translate ``*`` and ``?`` to
+        # regex metacharacters that don't cross ``/``.
+        if "/" in pattern:
+            path_re = re.compile(
+                "^"
+                + "".join(
+                    "[^/]*" if c == "*" else ("[^/]" if c == "?" else re.escape(c))
+                    for c in pattern
+                )
+                + "$"
+            )
+            if path_re.match(path_str):
+                return True
         # Match against any path component for bare-word patterns only
         # (no glob metacharacters AND no `.`). Filename-shaped patterns
         # like `foo.py` are excluded — they should match via the filename

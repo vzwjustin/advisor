@@ -181,6 +181,14 @@ def _resolve_max_runners(raw: int | None) -> int:
         try:
             parsed = int(env_raw)
         except ValueError:
+            # Surface the silent fallback. CI configs often set this var
+            # via ``${VAR:-default}`` substitution and a malformed value
+            # would otherwise look like the env var is being honored.
+            print(
+                f"warning: ADVISOR_MAX_RUNNERS={env_raw!r} is not a valid integer; "
+                "using default 5",
+                file=sys.stderr,
+            )
             parsed = 5
         resolved = parsed if parsed >= 1 else 5
         return min(resolved, _MAX_RUNNERS_CEILING)
@@ -2006,13 +2014,6 @@ def cmd_audit(args: argparse.Namespace) -> int:
                 )
         report = _replace_findings(report, kept)
 
-    fmt = getattr(args, "format", None)
-    if fmt == "pr-comment":
-        from .pr_comment import format_pr_comment
-
-        print(format_pr_comment(list(report.findings_in_batch)))
-        return _fail_on_findings(getattr(args, "fail_on", None), report.findings_in_batch) or 0
-
     sarif_path = getattr(args, "sarif", None)
     if sarif_path is not None:
         # Emit the in-batch findings for Code Scanning — out-of-batch findings
@@ -2020,6 +2021,13 @@ def cmd_audit(args: argparse.Namespace) -> int:
         rc = _write_sarif(Path(sarif_path), list(report.findings_in_batch), target)
         if rc is not None:
             return rc
+
+    fmt = getattr(args, "format", None)
+    if fmt == "pr-comment":
+        from .pr_comment import format_pr_comment
+
+        print(format_pr_comment(list(report.findings_in_batch)))
+        return _fail_on_findings(getattr(args, "fail_on", None), report.findings_in_batch) or 0
 
     fail_on_rc = _fail_on_findings(getattr(args, "fail_on", None), report.findings_in_batch)
 
@@ -2086,7 +2094,10 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common(p_plan)
 
     def _nonneg_int(value: str) -> int:
-        n = int(value)
+        try:
+            n = int(value)
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(f"expected non-negative integer, got {value!r}") from exc
         if n < 0:
             raise argparse.ArgumentTypeError(f"batch-size must be >= 0, got {n}")
         return n
@@ -2395,7 +2406,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     def _pos_int(value: str) -> int:
-        n = int(value)
+        try:
+            n = int(value)
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(f"expected positive integer, got {value!r}") from exc
         if n < 1:
             raise argparse.ArgumentTypeError(f"--limit must be >= 1, got {n}")
         return n

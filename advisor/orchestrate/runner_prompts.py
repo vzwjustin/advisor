@@ -425,11 +425,18 @@ def build_runner_agents(
     for i, item in enumerate(items, 1):
         if isinstance(item, FocusBatch):
             batches.append(item)
-        else:
-            # At this point ``item`` must be a FocusTask — the union type
-            # of ``items`` forbids any other concrete value.
-            assert isinstance(item, FocusTask)
+        elif isinstance(item, FocusTask):
             batches.append(FocusBatch(batch_id=i, tasks=(item,), complexity="medium"))
+        else:
+            # The union type of ``items`` forbids any other concrete
+            # value, but enforce it at runtime so a mistyped caller
+            # fails loudly here rather than producing a malformed
+            # FocusBatch that surfaces as a confusing downstream error.
+            # ``assert`` would be stripped under ``python -O``.
+            raise TypeError(
+                f"runner pool items must be FocusBatch or FocusTask, "
+                f"got {type(item).__name__}"
+            )
 
     agents: list[dict[str, object]] = []
     for batch in batches:

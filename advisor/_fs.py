@@ -136,6 +136,7 @@ def atomic_write_text(
         except OSError:
             pass
         raise
+    replaced = False
     try:
         with fh:
             fh.write(text)
@@ -150,23 +151,32 @@ def atomic_write_text(
                 # default.
                 pass
         os.replace(tmp, target)
-        # Best-effort directory fsync so the rename survives an abrupt
-        # power loss. Windows refuses to open a directory for fsync —
-        # silently skip there.
-        try:
-            dir_fd = os.open(str(parent), os.O_RDONLY)
-            try:
-                os.fsync(dir_fd)
-            finally:
-                os.close(dir_fd)
-        except OSError:
-            pass
+        replaced = True
     except BaseException:
-        try:
-            tmp.unlink()
-        except OSError:
-            pass
+        # Only clean up the tmpfile if the rename never happened. After a
+        # successful os.replace the tmp path no longer exists, and a
+        # KeyboardInterrupt arriving during the dir-fsync below would
+        # otherwise re-raise from this handler, signaling failure to the
+        # caller even though the write succeeded.
+        if not replaced:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
         raise
+    # Best-effort directory fsync so the rename survives an abrupt power
+    # loss. Windows refuses to open a directory for fsync — silently skip.
+    # Run AFTER the outer try/except: once os.replace succeeds the write
+    # is complete from the caller's perspective, and a fsync error (or
+    # interrupt) here must not surface as a write failure.
+    try:
+        dir_fd = os.open(str(parent), os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    except OSError:
+        pass
 
 
 def normalize_path(path: str) -> str:

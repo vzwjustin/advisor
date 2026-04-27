@@ -88,31 +88,31 @@ class Suppression:
 
 
 def _matches_glob(file_path: str, pattern: str) -> bool:
-    """Match ``file_path`` against ``pattern``, supporting ``**`` recursion.
+    """Match ``file_path`` against ``pattern`` with gitignore-style semantics.
 
-    Delegates the ``**`` translation to :func:`advisor.rank._double_star_to_regex`
-    (which also handles ``[seq]`` character classes) so both the
-    ``.advisorignore`` and suppressions glob paths share one implementation.
-    Patterns without ``**`` fall through to stdlib :func:`fnmatch.fnmatch`.
+    Always routes through :func:`advisor.rank._double_star_to_regex` so a
+    single ``*`` matches within one path component (``[^/]*``) and ``**``
+    matches recursively. Both the ``.advisorignore`` matcher and the
+    ``file_glob`` suppressions matcher share this one translation, so a
+    pattern like ``src/*.py`` means the same thing in both contexts and
+    does not silently widen to ``src/deep/foo.py`` via stdlib fnmatch.
+
+    Falls back to :func:`fnmatch.fnmatch` only if the regex translation
+    itself raises ``re.error`` (a malformed character class, etc). The
+    fallback is wider than ideal — fnmatch's ``*`` crosses ``/`` — but
+    it keeps the load pass alive on a pathological pattern instead of
+    aborting the whole suppressions file.
     """
     p = PurePath(file_path).as_posix()
-    if "**" in pattern:
-        try:
-            if _double_star_to_regex(pattern).match(p):
-                return True
-        except re.error as exc:
-            # Malformed regex translation — fall through to plain fnmatch so a
-            # suppressions.jsonl with an edge-case glob doesn't crash the whole
-            # load pass. Surface the degradation: fnmatch treats ** as two
-            # consecutive ``*`` (matches one path component) rather than as
-            # recursive, so the suppression silently applies to a narrower
-            # set than the user intended.
-            warnings.warn(
-                f"malformed glob pattern {pattern!r}: {exc}; falling back to "
-                "fnmatch semantics (** is not recursive in this mode)",
-                UserWarning,
-                stacklevel=2,
-            )
+    try:
+        return bool(_double_star_to_regex(pattern).match(p))
+    except re.error as exc:
+        warnings.warn(
+            f"malformed glob pattern {pattern!r}: {exc}; falling back to "
+            "fnmatch semantics (single ``*`` will cross ``/``)",
+            UserWarning,
+            stacklevel=2,
+        )
     return fnmatch.fnmatch(p, pattern)
 
 

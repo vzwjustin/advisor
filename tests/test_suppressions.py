@@ -216,3 +216,28 @@ class TestApply:
         kept, dropped = apply_suppressions(findings, supp)
         assert kept == []
         assert len(dropped) == 1
+
+    def test_file_glob_single_star_does_not_cross_directory(self) -> None:
+        # ``src/*.py`` previously matched ``src/sub/foo.py`` because
+        # the matcher fell through to fnmatch.fnmatch (whose ``*``
+        # crosses ``/``) for any pattern without ``**``. After the
+        # alignment fix, single ``*`` matches within one path component
+        # only — same semantics as gitignore and ``.advisorignore``.
+        supp = (
+            Suppression(
+                rule_id="custom/rule",
+                reason="r",
+                file_glob="src/*.py",
+            ),
+        )
+        # Direct child suppressed.
+        kept_direct, dropped_direct = apply_suppressions(
+            [_f(path="src/foo.py", rule_id="custom/rule")], supp
+        )
+        assert kept_direct == []
+        assert len(dropped_direct) == 1
+        # Nested file is NOT suppressed — single ``*`` does not cross ``/``.
+        f_nested = _f(path="src/sub/foo.py", rule_id="custom/rule")
+        kept_nested, dropped_nested = apply_suppressions([f_nested], supp)
+        assert kept_nested == [f_nested]
+        assert dropped_nested == []

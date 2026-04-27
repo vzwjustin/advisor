@@ -85,12 +85,19 @@ def build_advisor_prompt(config: TeamConfig, *, history_block: str = "") -> str:
         if config.test_command
         else ""
     )
+    # ``target_dir`` and ``file_types`` land inside inline backtick spans
+    # in the template (e.g. ``Target: `{target_dir}` ({file_types})``). A
+    # literal backtick in either value would close the span early and
+    # leak following text as instruction prose. Swap for typographic
+    # single-quotes — visually similar, semantically inert.
+    safe_target_dir = config.target_dir.replace("`", "'")
+    safe_file_types = config.file_types.replace("`", "'")
     return _render(
         _load_template(),
         {
             "team_name": config.team_name,
-            "target_dir": config.target_dir,
-            "file_types": config.file_types,
+            "target_dir": safe_target_dir,
+            "file_types": safe_file_types,
             "goal_block": goal_block,
             "min_priority": str(config.min_priority),
             "max_fixes_per_runner": str(config.max_fixes_per_runner),
