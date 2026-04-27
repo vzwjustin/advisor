@@ -14,8 +14,6 @@ import time
 import warnings
 from collections.abc import Callable, Sequence
 from dataclasses import fields as _dc_fields
-from importlib.metadata import PackageNotFoundError
-from importlib.metadata import version as pkg_version
 from pathlib import Path
 
 from . import _style
@@ -109,16 +107,12 @@ _DEFAULT_LARGE_FILE_MAX_FIXES = _team_config_default("large_file_max_fixes")
 
 
 def _get_version() -> str:
-    try:
-        return pkg_version("advisor-agent")
-    except PackageNotFoundError:
-        # Keep in sync with ``advisor/__init__.py`` so ``advisor --version``,
-        # ``advisor status --json`` and ``advisor.__version__`` all agree when
-        # the wheel isn't installed (e.g. running from an editable checkout
-        # without metadata). Tests compare the two and will flag any drift.
-        from . import __version__
+    # Keep in sync with ``advisor/__init__.py`` so ``advisor --version``,
+    # ``advisor status --json`` and ``advisor.__version__`` all agree even
+    # when this source checkout is newer than an installed wheel.
+    from ._version import resolve_version
 
-        return __version__
+    return resolve_version()
 
 
 def _fmt_action(component: str, action: str, path: object) -> str:

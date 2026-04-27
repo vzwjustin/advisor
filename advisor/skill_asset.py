@@ -8,20 +8,11 @@ configuration in pyproject.toml.
 
 from __future__ import annotations
 
-from importlib.metadata import PackageNotFoundError
-from importlib.metadata import version as _pkg_version
-
-
-def _advisor_version() -> str:
-    try:
-        return _pkg_version("advisor-agent")
-    except PackageNotFoundError:  # pragma: no cover — editable fallback
-        return "0+unknown"
-
+from ._version import resolve_version
 
 #: HTML-comment badge so ``advisor status`` can parse the installed version
 #: without hashing the whole file. Must match ``_BADGE_RE`` in ``install.py``.
-VERSION_BADGE = f"<!-- advisor:{_advisor_version()} -->"
+VERSION_BADGE = f"<!-- advisor:{resolve_version()} -->"
 
 
 SKILL_MD = """---

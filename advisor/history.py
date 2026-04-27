@@ -116,7 +116,7 @@ def _unlock_exclusive(fh: IO[str]) -> None:
     """
     if sys.platform != "win32":
         return
-    _unlock_windows(fh)  # type: ignore[unreachable]
+    _unlock_windows(fh)
 
 
 def _lock_windows(fh: IO[str]) -> None:
@@ -146,7 +146,7 @@ def _unlock_windows(fh: IO[str]) -> None:
     """
     if sys.platform != "win32":  # pragma: no cover - platform guard
         return
-    try:  # type: ignore[unreachable]
+    try:
         import msvcrt
     except ImportError:
         return

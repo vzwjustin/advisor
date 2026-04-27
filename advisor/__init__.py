@@ -10,17 +10,9 @@ Core building blocks:
   orchestrate — Team config, prompt builders, dispatch message specs
 """
 
-from importlib.metadata import PackageNotFoundError
-from importlib.metadata import version as _pkg_version
+from ._version import resolve_version as _resolve_version
 
-try:
-    # ``advisor-agent`` is the distribution name on PyPI; ``advisor`` is the
-    # import name. ``importlib.metadata`` is the PEP 566-aligned source of
-    # truth — keeping ``__version__`` derived from it means we never drift
-    # from the number declared in ``pyproject.toml``.
-    __version__ = _pkg_version("advisor-agent")
-except PackageNotFoundError:  # pragma: no cover — editable, not-installed fallback
-    __version__ = "0+unknown"
+__version__ = _resolve_version()
 
 from .audit import (
     AuditReport,
