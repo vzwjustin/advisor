@@ -96,6 +96,29 @@ class TestLoadFindingsFromInput:
         assert findings[0].rule_id is None
         assert findings[1].rule_id == "custom/rule"
 
+    def test_oversize_stdin_returns_tuple_not_systemexit(self, monkeypatch, capsys):
+        """``_load_findings_from_input`` documents a tuple-return contract.
+        An oversize stdin pipe used to leak the SystemExit raised by
+        ``_read_stdin_capped`` past the function, bypassing the caller's
+        wrap-up. The function now catches SystemExit and converts it
+        back to ``([], 2)`` so the contract holds.
+        """
+        import io as _io
+
+        from advisor import __main__ as cli
+
+        monkeypatch.setattr(cli, "_STDIN_LIMIT", 4)
+        # Non-tty stdin so the read path is taken; payload exceeds cap.
+        stream = _io.StringIO("x" * 10)
+        stream.isatty = lambda: False  # type: ignore[method-assign]
+        monkeypatch.setattr("sys.stdin", stream)
+
+        findings, rc = cli._load_findings_from_input(None)
+        assert findings == []
+        assert rc == 2
+        # The error from the helper is on stderr, not the tuple.
+        assert "MiB cap" in capsys.readouterr().err
+
 
 class TestNudgeSkipCommands:
     """Only commands that explicitly manage the nudge should skip ensure_nudge.

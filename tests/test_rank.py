@@ -169,6 +169,56 @@ class TestDoubleStarGlob:
         assert _matches_any_pattern("a/foo.py", ["**/[!].py"]) is False
 
 
+class TestGlobReDoSGuard:
+    """``.advisorignore`` patterns are user-controlled in CI: a hostile
+    PR can drop a pattern with many consecutive greedy quantifiers
+    (e.g. ``[a-z]*[a-z]*[a-z]*…X``) that compiles to a regex with
+    catastrophic backtracking. Python's ``re`` has no timeout, so the
+    matcher would hang. ``_double_star_to_regex`` rejects too-complex
+    patterns up front via :class:`GlobPatternError`, and the loader
+    surfaces a UserWarning so the rejection is visible.
+    """
+
+    def test_too_many_quantifiers_raises_glob_pattern_error(self):
+        import pytest as _pytest
+
+        from advisor.rank import GlobPatternError, _double_star_to_regex
+
+        # 9 separate ``*`` quantifiers (paired ``**`` counts as one,
+        # so use single stars separated by literal chars). The cap
+        # is 8 — pre-fix, a 6+ quantifier pattern hung on a 50-char
+        # input.
+        pathological = "*a" * 9 + "X"
+        with _pytest.raises(GlobPatternError, match="wildcards"):
+            _double_star_to_regex(pathological)
+
+    def test_simple_patterns_compile(self):
+        """Real-world ignore patterns must still compile cleanly."""
+        from advisor.rank import _double_star_to_regex
+
+        # Each of these is well under the cap.
+        for safe in ("**/*.py", "src/**/*.py", "**/test_*.py", "*.txt"):
+            _double_star_to_regex(safe)  # no exception
+
+    def test_compile_patterns_warns_on_redos_pattern(self, recwarn):
+        """The pattern compiler surfaces a clear UserWarning when an
+        ignore rule is rejected for ReDoS, so a CI run can flag the
+        hostile PR rather than silently disabling the rule."""
+        from advisor.rank import _compile_ignore_patterns
+
+        # Use ``**`` so the path actually goes through the recursive
+        # compiler that gates on _MAX_GLOB_QUANTIFIERS, plus enough
+        # single ``*`` quantifiers separated by literal chars to
+        # exceed the cap of 8 (paired ``**`` counts as one).
+        pathological = "**/" + ("*a" * 9) + "X"
+        compiled = _compile_ignore_patterns([pathological])
+        # The compiled matcher exists but uses the never-match sentinel,
+        # so the rule is effectively skipped without crashing the run.
+        assert compiled
+        warning_msgs = [str(w.message) for w in recwarn.list]
+        assert any("unsafe pattern" in m for m in warning_msgs)
+
+
 class TestGitignoreSemanticBoundaries:
     """Single ``*`` does NOT cross ``/``; trailing ``**/`` matches all contents.
 

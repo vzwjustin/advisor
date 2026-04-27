@@ -128,7 +128,13 @@ def atomic_write_text(
     fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=str(parent))
     tmp = Path(tmp_name)
     try:
-        fh = os.fdopen(fd, "w", encoding="utf-8")
+        # ``newline=""`` disables the universal-newlines write translation
+        # that turns ``\n`` into ``\r\n`` on Windows. Critical for JSONL
+        # / SARIF / checkpoint files whose downstream parsers and lock
+        # offsets assume LF-only — a CRLF translation breaks both lines
+        # of defense (parsers may accept it, but byte-offset locks on
+        # Windows misalign).
+        fh = os.fdopen(fd, "w", encoding="utf-8", newline="")
     except BaseException:
         os.close(fd)
         try:

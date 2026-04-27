@@ -186,7 +186,10 @@ def append_entries(target: str | Path, entries: list[HistoryEntry]) -> Path:
     # short as possible — one ``write`` call per process rather than
     # ``len(entries)`` of them.
     payload = "".join(entry.to_json_line() + "\n" for entry in entries)
-    with path.open("a", encoding="utf-8") as f:
+    # ``newline=""`` disables ``\n`` → ``\r\n`` translation on Windows.
+    # Critical here because ``msvcrt.locking`` uses byte offsets and the
+    # JSONL file format must stay LF-only for downstream parsers.
+    with path.open("a", encoding="utf-8", newline="") as f:
         _lock_exclusive(f)
         try:
             f.write(payload)

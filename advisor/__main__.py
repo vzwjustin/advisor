@@ -1709,6 +1709,14 @@ def _load_findings_from_input(
             text = _read_stdin_capped(source_label="findings input")
         else:
             text = Path(source).read_text(encoding="utf-8", errors="replace")
+    except SystemExit as exc:
+        # ``_read_stdin_capped`` raises SystemExit(2) on overflow. The
+        # error message has already been printed; convert back to the
+        # tuple-return contract so the caller's wrap-up code (final
+        # logging, exit-code aggregation) still runs instead of being
+        # short-circuited by the bare exit.
+        code = exc.code if isinstance(exc.code, int) else 2
+        return [], code
     except OSError as exc:
         print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
         return [], 2
