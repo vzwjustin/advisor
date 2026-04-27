@@ -161,6 +161,17 @@ def estimate_cost(
             f"pricing= is missing required keys {missing!r}; "
             "supply entries for sonnet/opus/haiku or omit pricing= to use defaults"
         )
+    # Reject negative caps explicitly. The CLI argparse and
+    # ``default_team_config`` both floor at >=1 before reaching here, so
+    # this guard only catches direct-API misuse — but a negative cap
+    # would otherwise silently clamp via ``max(0, ...)`` at the
+    # fix-rounds line, making the MAX scenario identical to MIN with
+    # no indication of the misconfiguration.
+    if max_fixes_per_runner < 0:
+        raise ValueError(
+            f"max_fixes_per_runner must be >= 0 (got {max_fixes_per_runner}); "
+            "0 disables fix waves, negative is not meaningful"
+        )
     runner_limit = 5 if max_runners is None else max(1, max_runners)
     runner_count = len(batches) if batches else min(runner_limit, len(tasks)) or 1
     file_count = len(tasks)

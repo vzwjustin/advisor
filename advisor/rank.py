@@ -312,6 +312,15 @@ SKIP_EXTENSIONS = frozenset(
 )
 
 ADVISORIGNORE_FILENAME = ".advisorignore"
+
+#: Hard ceiling on ``.advisorignore`` file size. A real ignore file is
+#: a handful of KB at most; anything larger is almost certainly either
+#: accidental (a binary or generated file checked in under that name)
+#: or hostile (a PR-supplied 100 MB file aimed at OOMing the scanner).
+#: Files above this cap are refused with a UserWarning so the user
+#: can see why their ignore rules aren't taking effect.
+_ADVISORIGNORE_MAX_BYTES = 1 * 1024 * 1024  # 1 MiB
+
 T = TypeVar("T")
 
 
@@ -352,6 +361,28 @@ def load_advisorignore(base_dir: str | Path) -> list[str]:
     path = Path(base_dir) / ADVISORIGNORE_FILENAME
     if not path.exists():
         return []
+    # Defense-in-depth size cap: a pathological ``.advisorignore`` (e.g.
+    # a 100 MB file from a hostile PR) would otherwise OOM the process
+    # via ``read_text``. Real ignore files top out at a few KB; anything
+    # larger is almost certainly accidental piping or abuse, so refuse
+    # and continue with no ignore patterns rather than crash the run.
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        warnings.warn(
+            f"could not stat {path}: {exc}; treating as no ignore patterns",
+            UserWarning,
+            stacklevel=2,
+        )
+        return []
+    if size > _ADVISORIGNORE_MAX_BYTES:
+        warnings.warn(
+            f"{path} is {size} bytes (>{_ADVISORIGNORE_MAX_BYTES}); "
+            f"refusing to load — treating as no ignore patterns",
+            UserWarning,
+            stacklevel=2,
+        )
+        return []
     try:
         text = path.read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError) as exc:
@@ -383,6 +414,21 @@ def load_advisorignore(base_dir: str | Path) -> list[str]:
     return patterns
 
 
+#: Hard ceiling on glob-quantifier complexity in a single pattern. A
+#: pattern like ``[a-z]*[a-z]*[a-z]*…X`` (or any series of consecutive
+#: greedy quantifiers) compiles to a regex with catastrophic-backtracking
+#: behavior — Python's ``re`` engine has no timeout, so a single ignore
+#: rule from a hostile PR can hang advisor for hours. The cap is well
+#: above any legitimate glob (real-world ``.advisorignore`` patterns
+#: have at most 3-4 wildcards) and surfaces a clear error rather than
+#: silently degrading to an infinite loop.
+_MAX_GLOB_QUANTIFIERS = 8
+
+
+class GlobPatternError(ValueError):
+    """Raised when a glob pattern is too complex to compile safely."""
+
+
 def _double_star_to_regex(pattern: str) -> re.Pattern[str]:
     """Translate a glob pattern with ``**`` into a regex that matches the
     whole path. ``**`` matches any number of path components (including
@@ -392,7 +438,33 @@ def _double_star_to_regex(pattern: str) -> re.Pattern[str]:
 
     Python <3.13 has no ``PurePath.full_match``; ``PurePath.match`` treats
     ``**`` as a single component, so we build the regex ourselves.
+
+    Patterns with more than :data:`_MAX_GLOB_QUANTIFIERS` ``*`` / ``?``
+    wildcards are rejected with :class:`GlobPatternError` to defend
+    against ReDoS — Python's regex engine has no built-in timeout, and
+    a hostile ``.advisorignore`` could otherwise hang the scanner. The
+    cap sits well above any real-world ignore rule.
     """
+    # Count quantifiers up front; reject before compile if pathological.
+    # Each ``*`` (single or doubled) and each ``?`` is one quantifier.
+    quantifier_count = 0
+    j = 0
+    while j < len(pattern):
+        ch = pattern[j]
+        if ch == "*":
+            quantifier_count += 1
+            # consume both stars in ``**`` as a single quantifier
+            if j + 1 < len(pattern) and pattern[j + 1] == "*":
+                j += 1
+        elif ch == "?":
+            quantifier_count += 1
+        j += 1
+    if quantifier_count > _MAX_GLOB_QUANTIFIERS:
+        raise GlobPatternError(
+            f"glob pattern {pattern!r} has {quantifier_count} wildcards "
+            f"(>{_MAX_GLOB_QUANTIFIERS}); refusing to compile to avoid "
+            f"catastrophic-backtracking ReDoS"
+        )
     parts: list[str] = []
     i = 0
     while i < len(pattern):
@@ -456,7 +528,22 @@ def _compile_ignore_patterns(patterns: list[str]) -> tuple[_IgnorePatternMatcher
                 # all files under src/, not just paths that end with '/'.
                 re_pattern = pattern.rstrip("/") if pattern.endswith("/") else pattern
                 recursive_re = _double_star_to_regex(re_pattern)
+            except GlobPatternError as exc:
+                # ReDoS guard tripped — too many wildcards. Surface the
+                # rejection clearly so the user can see why their
+                # ``.advisorignore`` rule isn't taking effect (and so a
+                # CI run on a hostile PR-supplied pattern doesn't just
+                # silently disable scanning for a directory).
+                warnings.warn(
+                    f"ignoring unsafe pattern {pattern!r}: {exc}",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                recursive_re = re.compile(r"$.^")
             except re.error:
+                # Malformed translator output — fall back to never-match
+                # so the run continues; the misconfigured rule is silently
+                # skipped (matches the prior behavior).
                 recursive_re = re.compile(r"$.^")
         compiled.append(
             _IgnorePatternMatcher(

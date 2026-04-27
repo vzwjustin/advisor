@@ -39,6 +39,37 @@ class TestEstimateCost:
         )
         assert e.cost_usd_min >= 0.0
 
+    def test_negative_max_fixes_per_runner_rejected(self, tmp_path: Path) -> None:
+        """The CLI / config layer floors at ``>=1`` before reaching the
+        estimator, but a direct API caller could otherwise pass a
+        negative cap that silently clamped to 0 via the existing
+        ``max(0, ...)`` at the fix-rounds line. Reject explicitly so
+        the misconfiguration is visible."""
+        import pytest as _pytest
+
+        with _pytest.raises(ValueError, match="must be >= 0"):
+            estimate_cost(
+                [_task(str(tmp_path / "f.py"))],
+                None,
+                advisor_model="opus",
+                runner_model="sonnet",
+                max_fixes_per_runner=-3,
+            )
+
+    def test_zero_max_fixes_accepted(self, tmp_path: Path) -> None:
+        """``0`` legitimately means "no fix wave"; not negative."""
+        (tmp_path / "f.py").write_text("x" * 200)
+        e = estimate_cost(
+            [_task(str(tmp_path / "f.py"))],
+            None,
+            advisor_model="opus",
+            runner_model="sonnet",
+            max_fixes_per_runner=0,
+        )
+        # MIN and MAX both reflect "no fixes" — equal cost is the
+        # expected behavior, NOT a bug.
+        assert e.cost_usd_min == e.cost_usd_max
+
     def test_opus_costs_more_than_sonnet(self, tmp_path: Path) -> None:
         (tmp_path / "f.py").write_text("x" * 2000)
         cheap = estimate_cost(

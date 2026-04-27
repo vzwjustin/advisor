@@ -83,6 +83,13 @@ _PROTOCOL_VIOLATION_RE = re.compile(
 
 _HANDOFF_RE = re.compile(r"##\s+Handoff\s+from\s+runner-\d+")
 
+#: Maximum ``PROTOCOL_VIOLATION`` lines surfaced in an :class:`AuditReport`.
+#: A pathological transcript with thousands of matches would otherwise
+#: inflate report memory without adding signal — the first thousand are
+#: enough to triage. The truncation is reported via
+#: :attr:`AuditReport.protocol_violations_truncated`.
+PROTOCOL_VIOLATION_CAP = 1000
+
 
 def _runner_sort_key(runner_id: str) -> tuple[int, int, str]:
     """Natural-sort key for ``runner-N`` ids (and the ``runner-?`` sentinel).
@@ -135,7 +142,16 @@ class AuditReport:
         rotations: Number of handoff messages (``## Handoff from
             runner-N``) detected. Each handoff is a rotation.
         protocol_violations: The exact one-line ``PROTOCOL_VIOLATION``
-            strings found, in order.
+            strings found, in order. Capped at
+            :data:`PROTOCOL_VIOLATION_CAP` entries to bound memory on
+            pathological transcripts; the ``protocol_violations_truncated``
+            flag indicates whether the cap was hit.
+        protocol_violations_truncated: ``True`` when the protocol-violation
+            scan stopped at the cap before exhausting matches. ``False``
+            when every PROTOCOL_VIOLATION line in the transcript is in
+            ``protocol_violations``. Surfaced in the human-readable
+            report so a reader can tell "0 violations" from "1000+
+            violations and we stopped counting".
         findings_in_batch: :class:`Finding` objects whose ``file_path``
             is in the union of all batched files.
         findings_out_of_batch: :class:`Finding` objects whose
@@ -163,6 +179,7 @@ class AuditReport:
     # "3 fixes observed" from "fix numbers 1, 2, 5" (a gap can indicate
     # a transcript was truncated or a fix was re-dispatched).
     fix_numbers: dict[str, list[int]] = field(default_factory=dict)
+    protocol_violations_truncated: bool = False
 
 
 def _collect_batch_files(cp: Checkpoint) -> set[str]:
@@ -194,15 +211,34 @@ def _collect_batch_files(cp: Checkpoint) -> set[str]:
 
 
 def _attribute_fix_to_runner(transcript: str, match_start: int) -> str:
-    """Return the ``runner-N`` id nearest (before) the fix assignment.
+    """Return the ``runner-N`` id of a fix assignment's recipient.
 
-    Scans backwards within ``_RUNNER_ATTRIBUTION_WINDOW`` characters from
-    ``match_start`` for the last ``runner-N`` mention. Returns
-    ``"runner-?"`` when no mention is found — surfacing the ambiguity
-    rather than silently dropping the fix.
+    Strategy, in priority order:
+
+    1. Most recent ``to='runner-N'`` / ``to="runner-N"`` envelope before
+       the marker — that's the literal SendMessage recipient and the
+       authoritative answer.
+    2. Fallback to the most recent bare ``runner-N`` mention in the
+       window (legacy heuristic, kept for transcripts that pre-date the
+       structured envelope or use an unparseable variant).
+    3. ``"runner-?"`` when no mention is found at all — surfaces the
+       ambiguity rather than silently dropping the fix.
+
+    The strategy mirrors :func:`_attribute_context_pressure_to_runner`
+    so both attributions agree on what counts as authoritative. Earlier
+    versions of this function used only step 2, which misattributed
+    fixes when prose in the window mentioned a different runner
+    (``"runner-5 found this"`` then ``## Fix assignment …`` for
+    runner-2 attributed to runner-5).
     """
     window_start = max(0, match_start - _RUNNER_ATTRIBUTION_WINDOW)
     window = transcript[window_start:match_start]
+    # Step 1 — authoritative envelope.
+    to_mentions = list(_SENDMESSAGE_TO_RUNNER_RE.finditer(window))
+    if to_mentions:
+        return f"runner-{to_mentions[-1].group(1)}"
+    # Step 2 — bare-mention fallback for transcripts without structured
+    # envelopes within the window.
     mentions = list(_RUNNER_MENTION_RE.finditer(window))
     if not mentions:
         return "runner-?"
@@ -213,10 +249,10 @@ def _attribute_fix_to_runner(transcript: str, match_start: int) -> str:
 # Fix assignments are dispatches *to* a runner — the most recent
 # ``runner-N`` mention before the marker is the recipient (and that's the
 # correct actor). CONTEXT_PRESSURE is a self-report *from* a runner, sent
-# via ``SendMessage(to='advisor', message='...')``, so the envelope's
-# ``to=`` field points at the advisor, not the runner. Reusing the
-# fix-attribution helper here misattributes the ping to whichever runner
-# was last addressed by the advisor.
+# via ``SendMessage(to='team-lead', message='...')`` (team-lead relays to
+# the advisor), so the envelope's ``to=`` field points at team-lead, not
+# the runner. Reusing the fix-attribution helper here misattributes the
+# ping to whichever runner was last addressed by the advisor.
 #
 # Strategy, in order:
 #   1. Parse the enclosing ``SendMessage(...)`` call. If the message body
@@ -331,12 +367,18 @@ def audit_transcript(transcript: str, cp: Checkpoint) -> AuditReport:
 
     rotations = sum(1 for _ in _HANDOFF_RE.finditer(transcript))
 
-    # Cap protocol_violations at 1000 entries — a pathological transcript
-    # with thousands of matches would otherwise inflate AuditReport memory
-    # without adding signal. Mirrors the cap on _history_payload.
+    # Cap protocol_violations at PROTOCOL_VIOLATION_CAP entries — a
+    # pathological transcript with thousands of matches would otherwise
+    # inflate AuditReport memory without adding signal. Mirrors the cap
+    # on _history_payload. The ``_truncated`` flag surfaces in the
+    # final report so a reader can tell "0 violations" from "we stopped
+    # at the cap" — silent truncation hides the very signal the audit
+    # exists to highlight.
     protocol_violations: list[str] = []
+    protocol_violations_truncated = False
     for m in _PROTOCOL_VIOLATION_RE.finditer(transcript):
-        if len(protocol_violations) >= 1000:
+        if len(protocol_violations) >= PROTOCOL_VIOLATION_CAP:
+            protocol_violations_truncated = True
             break
         protocol_violations.append(m.group(0))
 
@@ -369,6 +411,7 @@ def audit_transcript(transcript: str, cp: Checkpoint) -> AuditReport:
         # ``fix_numbers`` dict after construction and silently change the
         # report's view. AuditReport is intended to be a snapshot.
         fix_numbers=dict(fix_numbers),
+        protocol_violations_truncated=protocol_violations_truncated,
     )
 
 
@@ -410,6 +453,7 @@ def audit_to_dict(report: AuditReport) -> dict[str, object]:
         },
         "rotations": report.rotations,
         "protocol_violations": report.protocol_violations,
+        "protocol_violations_truncated": report.protocol_violations_truncated,
         "batch_file_count": report.batch_file_count,
         "findings_in_batch": [_f(f) for f in report.findings_in_batch],
         "findings_out_of_batch": [_f(f) for f in report.findings_out_of_batch],
@@ -473,6 +517,15 @@ def format_audit_report(report: AuditReport) -> str:
     if report.protocol_violations:
         for v in report.protocol_violations:
             lines.append(f"- {v}")
+        if report.protocol_violations_truncated:
+            # Make the silent cap explicit so a reader can tell
+            # "1000 violations" from "1000+ violations and we stopped
+            # counting" — the latter is itself a finding worth
+            # surfacing rather than hiding inside an undocumented limit.
+            lines.append(
+                f"- … (truncated at {PROTOCOL_VIOLATION_CAP}; "
+                f"transcript contains additional matches)"
+            )
     else:
         lines.append("- (none)")
     lines.append("")

@@ -96,6 +96,29 @@ class TestLoadFindingsFromInput:
         assert findings[0].rule_id is None
         assert findings[1].rule_id == "custom/rule"
 
+    def test_oversize_stdin_returns_tuple_not_systemexit(self, monkeypatch, capsys):
+        """``_load_findings_from_input`` documents a tuple-return contract.
+        An oversize stdin pipe used to leak the SystemExit raised by
+        ``_read_stdin_capped`` past the function, bypassing the caller's
+        wrap-up. The function now catches SystemExit and converts it
+        back to ``([], 2)`` so the contract holds.
+        """
+        import io as _io
+
+        from advisor import __main__ as cli
+
+        monkeypatch.setattr(cli, "_STDIN_LIMIT", 4)
+        # Non-tty stdin so the read path is taken; payload exceeds cap.
+        stream = _io.StringIO("x" * 10)
+        stream.isatty = lambda: False  # type: ignore[method-assign]
+        monkeypatch.setattr("sys.stdin", stream)
+
+        findings, rc = cli._load_findings_from_input(None)
+        assert findings == []
+        assert rc == 2
+        # The error from the helper is on stderr, not the tuple.
+        assert "MiB cap" in capsys.readouterr().err
+
 
 class TestNudgeSkipCommands:
     """Only commands that explicitly manage the nudge should skip ensure_nudge.
@@ -174,9 +197,9 @@ class TestConfigFromArgs:
                 "--context",
                 "audit the auth flow",
                 "--advisor-model",
-                "opus-4",
+                "haiku",
                 "--runner-model",
-                "sonnet-3.5",
+                "claude-haiku-4-5",
             ]
         )
         cfg = _config_from_args(args)
@@ -185,8 +208,14 @@ class TestConfigFromArgs:
         assert cfg.max_runners == 7
         assert cfg.min_priority == 2
         assert cfg.context == "audit the auth flow"
-        assert cfg.advisor_model == "opus-4"
-        assert cfg.runner_model == "sonnet-3.5"
+        # Both forms are accepted by Claude Code's Agent() tool: bare
+        # ``haiku`` alias for "always-latest", and the long-form
+        # ``claude-haiku-4-5`` for an explicit version. The test
+        # confirms the CLI threads values through verbatim — neither
+        # is the configured default, so a regression that hardcoded a
+        # default would surface here.
+        assert cfg.advisor_model == "haiku"
+        assert cfg.runner_model == "claude-haiku-4-5"
 
     def test_config_from_args_context_pressure_flags(self):
         """The three context-pressure knobs must thread through the CLI."""
@@ -618,6 +647,73 @@ class TestCmdPlanErrorPaths:
         out = capsys.readouterr().out
         assert "no files" in out or "try --min-priority" in out
 
+    def test_plan_rejects_file_target_not_directory(self, tmp_path, capsys):
+        """Passing a file path to `advisor plan` must fail loudly with a
+        directory-required error rather than silently producing an empty
+        plan via ``_safe_rglob``.
+        """
+        from advisor import __main__ as cli
+
+        f = tmp_path / "single.py"
+        f.write_text("x = 1\n", encoding="utf-8")
+        rc = cli.main(["plan", str(f)])
+        assert rc == 2
+        err = capsys.readouterr().err
+        assert "must be a directory" in err
+
+    def test_max_runners_above_ceiling_warns_and_clamps(self, tmp_path, capsys):
+        """Passing ``--max-runners`` above the ceiling now emits a visible
+        warning instead of silently clamping. The ceiling itself is the
+        same ``_MAX_RUNNERS_CEILING`` value enforced inside the config.
+        """
+        from advisor import __main__ as cli
+
+        (tmp_path / "auth.py").write_text("x = 1\n", encoding="utf-8")
+        rc = cli.main(
+            [
+                "plan",
+                str(tmp_path),
+                "--max-runners",
+                "100",
+                "--min-priority",
+                "1",
+            ]
+        )
+        assert rc == 0
+        err = capsys.readouterr().err
+        assert "100" in err
+        assert "20" in err
+
+    def test_max_runners_flag_and_env_both_set_warns_once(self, tmp_path, capsys, monkeypatch):
+        """Setting BOTH ``--max-runners 100`` AND ``ADVISOR_MAX_RUNNERS=200``
+        must produce exactly one warning (the explicit flag wins; the env
+        path is short-circuited and never re-clamped). A regression that
+        consults both surfaces would emit two warnings, masking which
+        value actually took effect.
+        """
+        from advisor import __main__ as cli
+
+        monkeypatch.setenv("ADVISOR_MAX_RUNNERS", "200")
+        (tmp_path / "auth.py").write_text("x = 1\n", encoding="utf-8")
+        rc = cli.main(
+            [
+                "plan",
+                str(tmp_path),
+                "--max-runners",
+                "100",
+                "--min-priority",
+                "1",
+            ]
+        )
+        assert rc == 0
+        err = capsys.readouterr().err
+        # Exactly one ceiling-overrun warning. The explicit ``100`` wins
+        # so it's the value the warning should mention; the ``200`` from
+        # env is never consulted on this path.
+        assert err.count("exceeds ceiling") == 1
+        assert "100" in err
+        assert "200" not in err
+
     def test_bad_file_types_glob_errors_cleanly(self, tmp_path, capsys):
         """A malformed glob exits non-zero with a visible error, not a trace."""
         from advisor import __main__ as cli
@@ -828,11 +924,20 @@ class TestCmdProtocolDefaults:
         # mislead anyone copy-pasting the protocol into a session.
         assert 'TeamCreate(name="review")' in out
         assert "advisor-review" not in out
-        # Default models are the short aliases ``opus``/``sonnet``; the
-        # old text hardcoded ``opus-4``/``sonnet-4`` which drift every
-        # time the alias set changes.
-        assert 'model="opus"' in out
-        assert 'model="sonnet"' in out
+        # Default models are the long-form IDs ``claude-opus-4-7`` and
+        # ``claude-sonnet-4-6``. Claude Code's Agent() tool only accepts
+        # bare-family aliases or full ``claude-<family>-<version>`` IDs;
+        # short forms (``opus-4-7``) would be rejected at spawn time.
+        # Pinning the long form keeps the live pipeline at the exact
+        # model until someone bumps it, AND survives the bare-alias
+        # retargeting that breaks reproducibility.
+        assert 'model="claude-opus-4-7"' in out
+        assert 'model="claude-sonnet-4-6"' in out
+        # P1-1: the printed protocol must reference the live subagent
+        # type ``advisor-executor`` — the old text said ``deep-reasoning``
+        # which contradicted ``build_advisor_agent``.
+        assert 'subagent_type="advisor-executor"' in out
+        assert "deep-reasoning" not in out
 
 
 class TestCmdPlanResumeConfig:
@@ -1313,3 +1418,47 @@ class TestNoColorFlag:
         cli.main(["--no-color", "status"])
         assert os.environ.get("NO_COLOR") == "1"
         assert _style.supports_color() is False
+
+
+class TestStdinReadCap:
+    """Every subcommand that consumes piped stdin must cap the read so
+    a multi-GB input (accidental or hostile) cannot OOM the process.
+    The cap is the shared :data:`__main__._STDIN_LIMIT` constant; each
+    consumer routes through :func:`__main__._read_stdin_capped`.
+
+    These tests exercise the helper directly with a tiny synthetic
+    cap, plus the real default cap to confirm the constant is wired in.
+    """
+
+    def test_helper_caps_oversize_input(self, monkeypatch, capsys):
+        """The helper raises SystemExit(2) and emits a styled error
+        when the stdin payload exceeds the cap."""
+        import io
+
+        from advisor import __main__ as cli
+
+        # Patch the limit to a tiny value so we don't have to allocate
+        # 50 MiB of test data; the limit is module-level.
+        monkeypatch.setattr(cli, "_STDIN_LIMIT", 16)
+        monkeypatch.setattr("sys.stdin", io.StringIO("x" * 32))
+        with pytest.raises(SystemExit) as exc_info:
+            cli._read_stdin_capped(source_label="test")
+        assert exc_info.value.code == 2
+        err = capsys.readouterr().err
+        assert "test" in err
+        assert "MiB cap" in err
+
+    def test_helper_returns_payload_under_cap(self, monkeypatch):
+        import io
+
+        from advisor import __main__ as cli
+
+        monkeypatch.setattr(cli, "_STDIN_LIMIT", 16)
+        monkeypatch.setattr("sys.stdin", io.StringIO("hello"))
+        assert cli._read_stdin_capped(source_label="test") == "hello"
+
+    def test_default_cap_is_50_mib(self):
+        """Pin the documented default so a future bump is intentional."""
+        from advisor import __main__ as cli
+
+        assert cli._STDIN_LIMIT == 50 * 1024 * 1024

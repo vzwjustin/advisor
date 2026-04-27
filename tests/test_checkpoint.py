@@ -167,3 +167,37 @@ class TestListCheckpoints:
             "20260201T000000Z",
             "20260101T000000Z",
         ]
+
+    def test_skips_files_that_do_not_look_like_checkpoints(self, tmp_path: Path) -> None:
+        """A truncated / non-JSON file matching ``run-*.json`` would
+        otherwise show up in the listing and crash ``load_checkpoint``
+        when the user selects it for resume. The cheap parseability
+        check filters these out before they reach the user.
+        """
+        from advisor.checkpoint import CHECKPOINT_PREFIX, CHECKPOINT_SUFFIX, list_checkpoints
+
+        cp_dir = tmp_path / ".advisor"
+        cp_dir.mkdir(parents=True)
+        # Valid checkpoint
+        save_checkpoint(
+            tmp_path,
+            run_id="20260301T000000Z",
+            tasks=_tasks(),
+            batches=None,
+            team_name="t",
+            file_types="*.py",
+            min_priority=3,
+            max_runners=5,
+            advisor_model="opus",
+            runner_model="sonnet",
+        )
+        # Truncated / not-JSON file matching the pattern
+        bogus = cp_dir / f"{CHECKPOINT_PREFIX}corrupt{CHECKPOINT_SUFFIX}"
+        bogus.write_text("oops, not json\n", encoding="utf-8")
+        # Empty file
+        empty = cp_dir / f"{CHECKPOINT_PREFIX}empty{CHECKPOINT_SUFFIX}"
+        empty.write_text("", encoding="utf-8")
+
+        ids = list_checkpoints(tmp_path)
+        # Only the valid one shows up.
+        assert ids == ["20260301T000000Z"]

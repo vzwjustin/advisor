@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+import sys
+
+from .. import _style
 from ..focus import FocusBatch, FocusTask
 from ._fence import fence
 from ._schema import FINDING_SCHEMA
 from .config import TeamConfig
+
+# Pool ceiling — same number used by the CLI's ``_MAX_RUNNERS_CEILING``.
+# Duplicated rather than imported to keep ``orchestrate`` independent of
+# the CLI module (orchestrate sits below ``__main__`` in the layering).
+_POOL_SIZE_CEILING = 20
 
 # ── Helpers ──────────────────────────────────────────────────────
 
@@ -86,16 +94,16 @@ def build_runner_prompt(
         "2. For each file, hypothesize issues (bugs, security, logic, edge cases)\n"
         "3. Trace call paths and data flow to confirm or reject each hypothesis\n"
         "4. **Checkpoint with the advisor** before writing your final report.\n"
-        "   Send a short draft via `SendMessage(to='advisor')` listing each\n"
+        "   Send a short draft via `SendMessage(to='team-lead')` listing each\n"
         "   candidate finding as `file:line — confidence (HIGH|MED|LOW) — one-line reason`.\n"
-        "   Wait for the advisor's reply (CONFIRM / NARROW / REDIRECT) and\n"
-        "   incorporate it before finalizing.\n"
+        "   Team-lead relays it to the advisor. Wait for the advisor's reply\n"
+        "   (CONFIRM / NARROW / REDIRECT) and incorporate it before finalizing.\n"
         f"5. For each confirmed issue, report:\n{FINDING_SCHEMA}\n"
         "6. If a file is clean, say so explicitly for that file\n\n"
         "Do NOT review other files. Do NOT review files outside this batch. "
         "If you hit a cross-reference, note it but stay scoped.\n\n"
-        "When done, send your complete output to the advisor via "
-        "SendMessage(to='advisor')."
+        "When done, send your complete output to team-lead via "
+        "SendMessage(to='team-lead'). Team-lead relays it to the advisor."
     )
 
 
@@ -104,7 +112,7 @@ def build_runner_prompt(
 
 _SCOPE_ANCHOR_BLOCK = (
     "## Open every reply with a SCOPE anchor line\n\n"
-    "The FIRST line of every message you send to the advisor must be:\n\n"
+    "The FIRST line of every message you send to team-lead must be:\n\n"
     "    SCOPE: <file_path> · <stage>\n\n"
     "where ``<stage>`` is one of ``reading``, ``hypothesizing``, "
     "``confirming``, ``fixing``, ``done``. Use the exact file path the "
@@ -113,11 +121,13 @@ _SCOPE_ANCHOR_BLOCK = (
     "    SCOPE: src/auth.py · confirming\n"
     "    SCOPE: src/session.py · fixing\n"
     "    SCOPE: src/auth.py · done\n\n"
-    "This is a one-line cost that lets the advisor catch drift "
-    "deterministically — the instant you anchor on a file that isn't in "
-    "your batch, or regress a stage (e.g. ``done`` → ``reading`` of a "
-    "new file on the same assignment), they can REDIRECT you before you "
-    "waste further turns. Missing the anchor is treated as drift too.\n\n"
+    "Team-lead relays each message to the advisor verbatim, including "
+    "the SCOPE line. This is a one-line cost that lets the advisor "
+    "catch drift deterministically — the instant you anchor on a file "
+    "that isn't in your batch, or regress a stage (e.g. ``done`` → "
+    "``reading`` of a new file on the same assignment), they can "
+    "REDIRECT you before you waste further turns. Missing the anchor "
+    "is treated as drift too.\n\n"
     "## Keep replies compact\n\n"
     "The advisor tracks the cumulative character length of your replies "
     "(a cheap token-spend proxy). At ~60% of your per-runner character "
@@ -133,30 +143,39 @@ _SCOPE_ANCHOR_BLOCK = (
 
 
 def build_runner_pool_prompt(runner_id: int, config: TeamConfig) -> str:
-    """Spawn prompt for a pool runner — live dialogue with the advisor."""
+    """Spawn prompt for a pool runner — live dialogue with the advisor.
+
+    All outbound messages go to ``team-lead``, who relays each one to the
+    advisor verbatim. Direct ``to='advisor'`` SendMessages are not used
+    in the live pipeline — see SKILL.md rule 7 and advisor.txt Step 3.
+    """
     return (
         f"You are `runner-{runner_id}`, a runner on team "
         f"`{config.team_name}`. The advisor runs the review — you are "
         "their hands. They think and plan; you read, find, and fix. And "
         "while you work, you are in constant conversation with them — they "
-        "are watching you live and expect you to talk.\n\n"
+        "are watching you live and expect you to talk. **Every message you "
+        "send goes to ``team-lead``, who relays it to the advisor verbatim. "
+        "Do not SendMessage the advisor directly.**\n\n"
         "## This is a live dialogue, not batch work\n\n"
         "The advisor is online the whole time you are working. Talk to them "
         "continuously, not just at the end:\n\n"
         "- **Ask when you are stuck or confused.** Hit something ambiguous? "
         "  A convention you don't recognize, a call site you can't find, a "
         "  file you need but don't have, a design decision you don't "
-        "  understand? Stop and SendMessage the advisor. Do not guess. Do "
-        "  not invent context. They would rather answer a two-second "
-        "  question than watch you chase a wrong assumption for ten minutes.\n"
+        "  understand? Stop and SendMessage team-lead — they relay to the "
+        "  advisor. Do not guess. Do not invent context. They would rather "
+        "  answer a two-second question than watch you chase a wrong "
+        "  assumption for ten minutes.\n"
         "- **Ask for context from other runners.** Your peers are reviewing "
         "  other files. If you need to know what they've seen (did runner-2 "
-        "  find auth uses JWT or sessions?), ask the advisor — they have "
-        "  the whole picture and will answer or route your question.\n"
+        "  find auth uses JWT or sessions?), send the question to team-lead "
+        "  — they relay to the advisor, who has the whole picture and will "
+        "  answer or route your question.\n"
         "- **Send progress pings — at least every 5 minutes.** Short status "
         "  updates as you work: `'finished reading auth.py, now tracing "
         "  session handling'`. Heartbeat is mandatory: if you have done more "
-        "  than ~5 min of work since your last message, ping the advisor "
+        "  than ~5 min of work since your last message, ping team-lead "
         "  before you do the next tool call — even if the ping is just "
         "  `'still reading file X, no findings yet'`. Silence longer than "
         "  that is treated as a stall and the advisor may pivot without you.\n"
@@ -182,8 +201,12 @@ def build_runner_pool_prompt(runner_id: int, config: TeamConfig) -> str:
         "**use what you know**. Don't re-derive. Bring it up when it helps "
         "the advisor see the whole picture.\n\n"
         "## Your loop\n\n"
-        "Right now, announce yourself:\n"
-        f"    SendMessage(to='advisor', message='runner-{runner_id} ready')\n"
+        "Right now, announce yourself to team-lead. The SCOPE anchor is "
+        "mandatory on every message you send — for the announcement, use "
+        "the placeholder file path ``<none>`` and stage ``ready`` since "
+        "you have no assigned file yet:\n"
+        f"    SendMessage(to='team-lead', message='SCOPE: <none> · ready\\n"
+        f"runner-{runner_id} ready')\n"
         "Then idle until your first assignment arrives. The advisor will "
         "SendMessage you with one of two kinds of assignment:\n\n"
         "**CRITICAL — no self-directed file changes.** You MUST NOT modify "
@@ -225,9 +248,9 @@ def build_runner_pool_prompt(runner_id: int, config: TeamConfig) -> str:
         "   - **REDIRECT** — re-focus where they point\n"
         "   Push back once with file:line evidence only if they missed "
         "   something primary-source.\n"
-        "6. **Send the final report to the advisor** (the advisor "
-        "   verifies and relays to team-lead):\n"
-        "       SendMessage(to='advisor', message=<structured findings>)\n"
+        "6. **Send the final report to team-lead** (team-lead relays to "
+        "   the advisor, who verifies and folds it into the final report):\n"
+        "       SendMessage(to='team-lead', message=<structured findings>)\n"
         f"   Each issue:\n{FINDING_SCHEMA}\n\n"
         "## Fix assignment\n"
         "A specific file, the problem, the required change, and an "
@@ -267,9 +290,10 @@ def build_runner_pool_prompt(runner_id: int, config: TeamConfig) -> str:
         "earlier in the session — ping immediately. These are late-stage "
         "signals; the two proxies above are what you actually trust.\n\n"
         "Ping format:\n"
-        "    SendMessage(to='advisor', message='CONTEXT_PRESSURE — "
+        "    SendMessage(to='team-lead', message='CONTEXT_PRESSURE — "
         "{your runner name, e.g. runner-2}: N fixes, M reads, recommend rotation')\n"
-        "The advisor will spawn a fresh runner and hand off. Flagging "
+        "Team-lead relays it to the advisor, who will spawn a fresh "
+        "runner and hand off. Flagging "
         "early is cheaper than stalling silently mid-fix.\n\n"
         "## Rules\n\n"
         "- **Never modify a file without a `## Fix assignment` from the "
@@ -304,8 +328,21 @@ def build_runner_pool_agents(
     Pool size defaults to ``config.max_runners``. Pool runners are spawned
     once upfront; the advisor assigns work to them via SendMessage rather
     than spawning fresh agents per batch.
+
+    A direct ``pool_size`` argument is clamped to ``_POOL_SIZE_CEILING``
+    so an API caller bypassing :func:`default_team_config` (which already
+    clamps ``config.max_runners``) cannot spawn an unbounded pool.
     """
-    size = pool_size if pool_size is not None else config.max_runners
+    raw_size = pool_size if pool_size is not None else config.max_runners
+    if raw_size > _POOL_SIZE_CEILING:
+        print(
+            _style.warning_box(
+                f"pool_size={raw_size} exceeds ceiling of "
+                f"{_POOL_SIZE_CEILING}; using {_POOL_SIZE_CEILING}"
+            ),
+            file=sys.stderr,
+        )
+    size = min(raw_size, _POOL_SIZE_CEILING)
     return [
         {
             "description": f"Pool runner {i} — waits for advisor dispatch",
@@ -328,7 +365,17 @@ def build_runner_batch_message(
 
     The advisor should call ``SendMessage(to='runner-<N>', message=<this>)``
     for each batch in its dispatch plan.
+
+    Raises :class:`ValueError` if ``batch`` has no tasks — an empty batch
+    would render a "Review ONLY these files:" header with nothing under
+    it, sending the runner into a no-op assignment. The dispatcher
+    (:func:`build_runner_dispatch_messages`) rejects empty batches up
+    front; this check covers callers that bypass it.
     """
+    if not batch.tasks:
+        raise ValueError(
+            f"batch {batch.batch_id} has no tasks: cannot assign an empty batch to a runner"
+        )
     files_block = _format_batch_files(batch, guidance)
     return (
         f"## New batch assignment (batch {batch.batch_id}, "
@@ -339,12 +386,13 @@ def build_runner_batch_message(
         "1. Read every listed file fully\n"
         "2. Hypothesize issues (bugs, security, logic, edge cases)\n"
         "3. Trace call paths to confirm or reject each\n"
-        "4. Checkpoint draft findings with the advisor via "
-        "`SendMessage(to='advisor')` before finalizing\n"
-        "5. Wait for CONFIRM / NARROW / REDIRECT and incorporate\n"
+        "4. Checkpoint draft findings with team-lead via "
+        "`SendMessage(to='team-lead')` before finalizing — team-lead "
+        "relays to the advisor\n"
+        "5. Wait for CONFIRM / NARROW / REDIRECT from the advisor and incorporate\n"
         f"6. For each confirmed issue, report:\n{FINDING_SCHEMA}\n"
-        "7. Send your complete output to the advisor via "
-        "`SendMessage(to='advisor')`\n"
+        "7. Send your complete output to team-lead via "
+        "`SendMessage(to='team-lead')`\n"
         "8. Then wait for your next batch\n\n"
         "Do NOT review files outside this batch."
     )
@@ -593,12 +641,16 @@ def build_runner_handoff_message(
     ``CONTEXT_PRESSURE``. The brief gives the incoming runner the minimum
     context it needs without replaying the full conversation.
     """
-    files_block = fence("\n".join(files_touched)) if files_touched else "- (none yet)"
-    invariants_block = fence("\n".join(invariants)) if invariants else "- (none)"
+    # Filter empty/whitespace-only entries before joining so a list like
+    # ``[""]`` doesn't produce an empty fenced block — that renders as a
+    # confusing blank section in the handoff brief.
+    _files = [s for s in files_touched if s.strip()]
+    _invariants = [s for s in invariants if s.strip()]
+    _remaining = [s for s in remaining_fixes if s.strip()]
+    files_block = fence("\n".join(_files)) if _files else "- (none yet)"
+    invariants_block = fence("\n".join(_invariants)) if _invariants else "- (none)"
     remaining_block = (
-        fence("\n".join(remaining_fixes))
-        if remaining_fixes
-        else "- (none — you're taking the verify pass)"
+        fence("\n".join(_remaining)) if _remaining else "- (none — you're taking the verify pass)"
     )
     # Fence ``extra_context`` for the same reason the fix-assignment
     # builder fences its untrusted fields — caller text containing
@@ -668,7 +720,16 @@ def check_batch_fix_budget(
                 for t in batch.tasks
                 if file_line_counts.get(t.file_path, 0) >= config.large_file_line_threshold
             ]
-            if large_paths and config.large_file_max_fixes < effective_cap:
+            if large_paths:
+                # ``build_fix_assignment_message`` switches to
+                # ``large_file_max_fixes`` whenever any file in the batch
+                # is large — regardless of whether that cap is tighter or
+                # more permissive than the general cap. Mirror that
+                # exactly so the pre-flight warning agrees with the
+                # actual runtime ceiling. Previously the check skipped
+                # the swap when ``large_file_max_fixes >= effective_cap``,
+                # which let configurations with a *more permissive*
+                # large-file cap silently warn on the wrong threshold.
                 effective_cap = config.large_file_max_fixes
                 cap_reason = (
                     f"large_file_max_fixes (triggered by {large_paths[0]}"

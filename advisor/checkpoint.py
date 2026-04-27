@@ -181,6 +181,13 @@ def list_checkpoints(target: str | Path) -> list[str]:
 
     Ordering is lexical by filename — since run_ids are UTC ISO-like
     timestamps, lexical equals chronological.
+
+    Filters out files whose contents are not parseable JSON (e.g.
+    truncated mid-write after a crash, or a file that happens to
+    match the prefix/suffix but isn't actually a checkpoint). A user
+    selecting one of these IDs would otherwise get a confusing
+    ``ValueError`` from :func:`load_checkpoint` instead of the file
+    just being absent from the list.
     """
     d = _dir(target)
     if not d.is_dir():
@@ -194,6 +201,18 @@ def list_checkpoints(target: str | Path) -> list[str]:
             if not p.is_file():
                 continue
         except OSError:
+            continue
+        # Cheap parseability check — reject anything that won't
+        # roundtrip through ``load_checkpoint``. We only verify the
+        # file contains a JSON object; the deeper schema checks
+        # happen on actual load. This keeps ``list_checkpoints``
+        # O(N file headers) rather than O(N full schema validations).
+        try:
+            with p.open("rb") as fh:
+                first = fh.read(2048).lstrip()
+        except OSError:
+            continue
+        if not first or not first.startswith(b"{"):
             continue
         ids.append(name[len(CHECKPOINT_PREFIX) : -len(CHECKPOINT_SUFFIX)])
     return sorted(ids, reverse=True)

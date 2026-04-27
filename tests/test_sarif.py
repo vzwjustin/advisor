@@ -173,6 +173,95 @@ class TestSchemaShape:
         assert run["tool"]["driver"]["rules"] == []
 
 
+class TestUriEncoding:
+    """SARIF ``artifactLocation.uri`` is a uri-reference per RFC 3986;
+    file paths with spaces or reserved chars must be percent-encoded
+    before they land in the output, or downstream consumers (notably
+    GitHub Code Scanning) misinterpret the path. ``/`` must be
+    preserved so the relative-path structure stays intact.
+    """
+
+    @staticmethod
+    def _result_uri(doc: dict[str, object]) -> str:
+        runs = doc["runs"]
+        assert isinstance(runs, list)
+        results = runs[0]["results"]  # type: ignore[index]
+        return results[0]["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
+
+    def test_space_is_percent_encoded(self, tmp_path: Path) -> None:
+
+        f = _make_finding(file_path="src/file with space.py:5", description="x")
+        doc = findings_to_sarif([f], tool_version="0.5.0", target_dir=tmp_path)
+        assert self._result_uri(doc) == "src/file%20with%20space.py"
+
+    def test_reserved_chars_percent_encoded(self, tmp_path: Path) -> None:
+        f = _make_finding(file_path="src/a#b?c.py:1", description="x")
+        doc = findings_to_sarif([f], tool_version="0.5.0", target_dir=tmp_path)
+        # ``#`` would otherwise be interpreted as the URI fragment;
+        # ``?`` would start the query string. Both must encode.
+        uri = self._result_uri(doc)
+        assert "%23" in uri  # '#'
+        assert "%3F" in uri  # '?'
+
+    def test_slash_preserved(self, tmp_path: Path) -> None:
+        f = _make_finding(file_path="src/sub/auth.py:1", description="x")
+        doc = findings_to_sarif([f], tool_version="0.5.0", target_dir=tmp_path)
+        assert self._result_uri(doc) == "src/sub/auth.py"
+
+
+class TestParseFilePathWhitespace:
+    """``_parse_file_path`` must strip embedded whitespace (newline, tab,
+    CR) before splitting on ``:``. A path like ``"src/foo.py\\n:42"``
+    used to survive into the SARIF ``artifactLocation.uri`` and break
+    path-equality matching for GitHub Code Scanning."""
+
+    def test_embedded_newline_dropped(self) -> None:
+        from advisor.sarif import _parse_file_path
+
+        assert _parse_file_path("src/foo.py\n:42") == ("src/foo.py", 42)
+
+    def test_embedded_tab_dropped(self) -> None:
+        from advisor.sarif import _parse_file_path
+
+        assert _parse_file_path("src/foo.py\t:42") == ("src/foo.py", 42)
+
+    def test_embedded_cr_dropped(self) -> None:
+        from advisor.sarif import _parse_file_path
+
+        assert _parse_file_path("src/foo\rpath.py:42") == ("src/foopath.py", 42)
+
+    def test_embedded_nul_dropped(self) -> None:
+        """NUL bytes survive the original whitespace strip and confuse
+        SARIF consumers that treat the URI as a C string (truncating at
+        the first NUL). Drop them up-front."""
+        from advisor.sarif import _parse_file_path
+
+        assert _parse_file_path("src\x00/foo.py:42") == ("src/foo.py", 42)
+
+
+class TestShortDescriptionWhitespace:
+    """``shortDescription`` is rendered single-line in GitHub Code
+    Scanning's rule list. ``_short_text`` must collapse newlines / CR /
+    tabs to single spaces so an embedded newline doesn't survive into
+    the rendered UI.
+    """
+
+    def test_newline_collapsed_to_space(self, tmp_path: Path) -> None:
+        f = _make_finding(description="line one\nline two")
+        doc = findings_to_sarif([f], tool_version="0.5.0", target_dir=tmp_path)
+        run = doc["runs"][0]  # type: ignore[index]
+        rules = run["tool"]["driver"]["rules"]
+        assert "\n" not in rules[0]["shortDescription"]["text"]
+        assert rules[0]["shortDescription"]["text"] == "line one line two"
+
+    def test_crlf_collapsed_to_space(self, tmp_path: Path) -> None:
+        f = _make_finding(description="a\r\nb\tc")
+        doc = findings_to_sarif([f], tool_version="0.5.0", target_dir=tmp_path)
+        run = doc["runs"][0]  # type: ignore[index]
+        text = run["tool"]["driver"]["rules"][0]["shortDescription"]["text"]
+        assert text == "a b c"
+
+
 class TestCLIIntegration:
     def test_plan_writes_valid_sarif(self, tmp_path: Path, monkeypatch) -> None:
         import subprocess
