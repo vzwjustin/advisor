@@ -70,7 +70,12 @@ class TestLoadRecentFindings:
         p.write_text(
             '{"garbage": true}\n{\n{"timestamp": "x", "file_path": "a.py", "severity": "LOW", "description": "d", "status": "CONFIRMED", "run_id": "r"}\n'
         )
-        with pytest.warns(UserWarning):
+        # Match the specific warning the production code emits — a bare
+        # ``pytest.warns(UserWarning)`` would fire on ANY warning
+        # (including unrelated ones from upstream dependencies) and
+        # silently pass the test even if the production warning was
+        # accidentally removed.
+        with pytest.warns(UserWarning, match="skipping malformed"):
             result = load_recent_findings(p, limit=5)
         assert len(result) == 1
         assert result[0].file_path == "a.py"
