@@ -99,8 +99,8 @@ default_team_config(
     max_runners: int = 5,
     min_priority: int = 3,
     context: str = "",          # ← user's request goes HERE (not 'user_request')
-    advisor_model: str = "opus-4-7",
-    runner_model: str = "sonnet-4-6",
+    advisor_model: str = "claude-opus-4-7",
+    runner_model: str = "claude-sonnet-4-6",
 )
 ```
 
@@ -191,7 +191,7 @@ Agent({
   name: "advisor",
   description: "Investigate, rank, and dispatch runners",
   subagent_type: "advisor-executor",
-  model: "opus-4-7",
+  model: "claude-opus-4-7",
   team_name: "review",
   prompt: <build_advisor_prompt(config)>
 })
@@ -246,7 +246,7 @@ Agent({
   name: "runner-1",
   description: "Pool runner 1 — reads batch from initial prompt",
   subagent_type: "code-review",
-  model: "sonnet-4-6",
+  model: "claude-sonnet-4-6",
   team_name: "review",
   run_in_background: true,
   prompt: <verbatim text from Opus's "### runner-1 / #### Prompt" block>

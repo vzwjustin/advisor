@@ -17,8 +17,8 @@ No external API calls. Runs entirely through Claude Code's native
 
 | Role | Model | Agent type | Job |
 |------|-------|------------|-----|
-| Advisor | Opus 4.7 (`opus-4-7`) | `advisor-executor` | Glob+Grep discovery, P1–P5 ranking, sizes the pool, writes per-runner prompts, dispatches explore + fix waves, verifies each output as it lands |
-| Runner pool | Sonnet 4.6 (`sonnet-4-6`) × N | `code-review` | Long-lived workers; each gets a custom prompt from the advisor; reports findings + diffs to team-lead, who relays to the advisor in live dialogue |
+| Advisor | Opus 4.7 (`claude-opus-4-7`) | `advisor-executor` | Glob+Grep discovery, P1–P5 ranking, sizes the pool, writes per-runner prompts, dispatches explore + fix waves, verifies each output as it lands |
+| Runner pool | Sonnet 4.6 (`claude-sonnet-4-6`) × N | `code-review` | Long-lived workers; each gets a custom prompt from the advisor; reports findings + diffs to team-lead, who relays to the advisor in live dialogue |
 
 Priority scale: **P5** auth/secrets · **P4** user input/parsing · **P3** handlers/DB/exec · **P2** config/crypto/logging · **P1** utils/tests.
 
@@ -114,7 +114,7 @@ long scope description is supported via `--context -` (reads stdin).
 
 Flags: `--team`, `--file-types`, `--max-runners` (advisory — Opus may
 exceed for large repos), `--min-priority`, `--context`, `--advisor-model`,
-`--runner-model`. Default models: `opus-4-7` / `sonnet-4-6`.
+`--runner-model`. Default models: `claude-opus-4-7` / `claude-sonnet-4-6` (full IDs pin the version; bare aliases `opus`/`sonnet`/`haiku` resolve to the latest at spawn time).
 
 Context-pressure knobs (reduce runner context exhaustion):
 `--max-fixes-per-runner N` · `--large-file-line-threshold N` · `--large-file-max-fixes M`.

@@ -174,9 +174,9 @@ class TestConfigFromArgs:
                 "--context",
                 "audit the auth flow",
                 "--advisor-model",
-                "opus-4",
+                "haiku",
                 "--runner-model",
-                "sonnet-3.5",
+                "claude-haiku-4-5",
             ]
         )
         cfg = _config_from_args(args)
@@ -185,8 +185,14 @@ class TestConfigFromArgs:
         assert cfg.max_runners == 7
         assert cfg.min_priority == 2
         assert cfg.context == "audit the auth flow"
-        assert cfg.advisor_model == "opus-4"
-        assert cfg.runner_model == "sonnet-3.5"
+        # Both forms are accepted by Claude Code's Agent() tool: bare
+        # ``haiku`` alias for "always-latest", and the long-form
+        # ``claude-haiku-4-5`` for an explicit version. The test
+        # confirms the CLI threads values through verbatim — neither
+        # is the configured default, so a regression that hardcoded a
+        # default would surface here.
+        assert cfg.advisor_model == "haiku"
+        assert cfg.runner_model == "claude-haiku-4-5"
 
     def test_config_from_args_context_pressure_flags(self):
         """The three context-pressure knobs must thread through the CLI."""
@@ -865,12 +871,15 @@ class TestCmdProtocolDefaults:
         # mislead anyone copy-pasting the protocol into a session.
         assert 'TeamCreate(name="review")' in out
         assert "advisor-review" not in out
-        # Default models are the version-pinned shortcuts ``opus-4-7``
-        # and ``sonnet-4-6``. The old text hardcoded ``opus``/``sonnet``,
-        # which silently drift every time Claude Code retargets the
-        # bare aliases.
-        assert 'model="opus-4-7"' in out
-        assert 'model="sonnet-4-6"' in out
+        # Default models are the long-form IDs ``claude-opus-4-7`` and
+        # ``claude-sonnet-4-6``. Claude Code's Agent() tool only accepts
+        # bare-family aliases or full ``claude-<family>-<version>`` IDs;
+        # short forms (``opus-4-7``) would be rejected at spawn time.
+        # Pinning the long form keeps the live pipeline at the exact
+        # model until someone bumps it, AND survives the bare-alias
+        # retargeting that breaks reproducibility.
+        assert 'model="claude-opus-4-7"' in out
+        assert 'model="claude-sonnet-4-6"' in out
         # P1-1: the printed protocol must reference the live subagent
         # type ``advisor-executor`` — the old text said ``deep-reasoning``
         # which contradicted ``build_advisor_agent``.

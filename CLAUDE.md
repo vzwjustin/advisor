@@ -1,14 +1,14 @@
 # Advisor — Opus-led Agent Team (Claude Code Native)
 
 Two-model team using Claude Code's TeamCreate/Agent/SendMessage. No external API calls.
-Models configurable via `TeamConfig(advisor_model=, runner_model=)` — defaults: opus-4-7 / sonnet-4-6.
+Models configurable via `TeamConfig(advisor_model=, runner_model=)` — defaults: `claude-opus-4-7` / `claude-sonnet-4-6`. Claude Code's Agent() tool accepts bare aliases (`opus`, `sonnet`, `haiku`) for "always-latest" or full `claude-<family>-<version>` IDs to pin a specific version; mid-form strings like `opus-4-5` are not accepted.
 
 ## Team Roles
 
 | Role | Default Model | Agent Type | Job |
 |------|---------------|------------|-----|
-| **Advisor** | Opus 4.7 (`opus-4-7`) | `advisor-executor` | Glob+Grep discovery, ranks P1–P5, sizes runner pool, **writes a unique, file-aware prompt for every runner**, dispatches explore + fix waves, live dialogue with runners, verifies each output as it lands |
-| **Runner** | Sonnet 4.6 (`sonnet-4-6`) | `code-review` | Reads files, finds issues, implements fixes. Each runner gets a domain-specific prompt from the advisor — not a generic template. Works ONLY on what the advisor hands it. In constant two-way conversation with the advisor (via team-lead relay). |
+| **Advisor** | Opus 4.7 (`claude-opus-4-7`) | `advisor-executor` | Glob+Grep discovery, ranks P1–P5, sizes runner pool, **writes a unique, file-aware prompt for every runner**, dispatches explore + fix waves, live dialogue with runners, verifies each output as it lands |
+| **Runner** | Sonnet 4.6 (`claude-sonnet-4-6`) | `code-review` | Reads files, finds issues, implements fixes. Each runner gets a domain-specific prompt from the advisor — not a generic template. Works ONLY on what the advisor hands it. In constant two-way conversation with the advisor (via team-lead relay). |
 
 ## Pipeline
 
@@ -33,7 +33,7 @@ context from its discovery pass.
 Agent(
   name="advisor",
   subagent_type="advisor-executor",
-  model="opus-4-7",
+  model="claude-opus-4-7",
   team_name="review",
   prompt=<build_advisor_prompt(config)>
 )
@@ -58,7 +58,7 @@ Runners are long-lived — reused across assignments for context accumulation.
 Agent(
   name="runner-1",
   subagent_type="code-review",
-  model="sonnet-4-6",
+  model="claude-sonnet-4-6",
   team_name="review",
   run_in_background=true,
   prompt=<verbatim text from Opus's "### runner-1 / #### Prompt" block>

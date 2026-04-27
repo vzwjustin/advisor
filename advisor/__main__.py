@@ -290,12 +290,12 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--context", default="", help="Extra goal context")
     parser.add_argument(
         "--advisor-model",
-        default="opus-4-7",
+        default="claude-opus-4-7",
         help="Model for the advisor agent (default: %(default)s)",
     )
     parser.add_argument(
         "--runner-model",
-        default="sonnet-4-6",
+        default="claude-sonnet-4-6",
         help="Model for the runner pool agents (default: %(default)s)",
     )
     parser.add_argument(
@@ -1250,14 +1250,14 @@ or spawning runners before the advisor) breaks the pipeline.
 
 2. Spawn advisor FIRST (no runners yet):
    Agent(name="advisor", description="Investigate, rank, and dispatch runners",
-         model="opus-4-7", subagent_type="advisor-executor",
+         model="claude-opus-4-7", subagent_type="advisor-executor",
          team_name="review", prompt=<build_advisor_prompt(config)>)
 
 3. Advisor does Glob+Grep discovery, ranks P1–P5, decides runner pool size,
    THEN sends a dispatch plan with a per-runner prompt for each runner.
    Spawn the pool using those Opus-authored prompts verbatim:
    Agent(name="runner-<i>", description="Pool runner <i> — reads batch from initial prompt",
-         model="sonnet-4-6", subagent_type="code-review",
+         model="claude-sonnet-4-6", subagent_type="code-review",
          team_name="review", run_in_background=true,
          prompt=<verbatim text from Opus's "### runner-i / #### Prompt" block>)
 
@@ -1280,7 +1280,7 @@ or spawning runners before the advisor) breaks the pipeline.
 6. TeamDelete()
 
 Names and models shown here are the defaults (team "review", models
-"opus-4-7" / "sonnet-4-6"). Override them via `--team`, `--advisor-model`,
+"claude-opus-4-7" / "claude-sonnet-4-6"). Override them via `--team`, `--advisor-model`,
 `--runner-model` on the CLI; `advisor pipeline <dir>` renders the
 concrete call sites for a given config.
 """

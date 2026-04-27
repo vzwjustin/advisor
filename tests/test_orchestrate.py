@@ -135,7 +135,7 @@ class TestBuildRunnerAgents:
         tasks = [FocusTask("src/a.py", 5, "review")]
         agents = build_runner_agents(tasks, config)
 
-        assert all(a["model"] == "sonnet-4-6" for a in agents)
+        assert all(a["model"] == "claude-sonnet-4-6" for a in agents)
 
     def test_all_run_in_background(self):
         config = default_team_config("/src")
@@ -253,7 +253,7 @@ class TestRunnerPool:
             "runner-4",
         ]
         assert all(a["run_in_background"] is True for a in agents)
-        assert all(a["model"] == "sonnet-4-6" for a in agents)
+        assert all(a["model"] == "claude-sonnet-4-6" for a in agents)
 
     def test_pool_agents_explicit_size(self):
         config = default_team_config("/src", max_runners=10)
@@ -977,14 +977,31 @@ class TestDefaultModelVersions:
         from advisor.orchestrate import default_team_config
 
         cfg = default_team_config("/src", warn_unknown_model=False)
-        assert cfg.advisor_model == "opus-4-7"
-        assert cfg.runner_model == "sonnet-4-6"
+        # Long-form IDs pin the exact model version. Claude Code's
+        # Agent() tool only accepts bare-family aliases (opus/sonnet/
+        # haiku) and full ``claude-<family>-<version>`` IDs — short
+        # forms like ``opus-4-7`` are rejected, so the defaults must
+        # be the long form to actually spawn the agent.
+        assert cfg.advisor_model == "claude-opus-4-7"
+        assert cfg.runner_model == "claude-sonnet-4-6"
 
-    def test_pinned_aliases_are_known(self):
+    def test_pinned_long_form_ids_are_known(self):
         from advisor.orchestrate import is_known_model
 
-        assert is_known_model("opus-4-7") is True
-        assert is_known_model("sonnet-4-6") is True
+        assert is_known_model("claude-opus-4-7") is True
+        assert is_known_model("claude-sonnet-4-6") is True
+
+    def test_unverified_short_forms_are_not_in_known_shortcuts(self):
+        """Mid-form aliases like ``opus-4-7`` / ``sonnet-4-6`` were never
+        accepted by Claude Code's Agent() tool. They must NOT be in the
+        ``KNOWN_MODEL_SHORTCUTS`` whitelist — keeping them would let
+        ``warn_unknown_model`` silently approve a string that the live
+        spawn rejects.
+        """
+        from advisor.orchestrate import KNOWN_MODEL_SHORTCUTS
+
+        for bogus in ("opus-4", "opus-4-5", "opus-4-7", "sonnet-4-6", "haiku-4-5"):
+            assert bogus not in KNOWN_MODEL_SHORTCUTS
 
 
 class TestBuildVerifyMessageRouting:

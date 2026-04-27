@@ -9,24 +9,18 @@ from dataclasses import dataclass
 
 from .. import _style
 
-# Known Claude Code model shortcuts (the strings actually accepted by the
-# Agent() tool). Long-form IDs like ``claude-opus-4-5-20250929`` are also
-# valid — we only warn on something that fails both the shortcut set and
-# the long-form shape.
+# Known Claude Code model shortcuts. Per the Agent() tool, only the
+# bare-family aliases below and full ``claude-<family>-<version>`` IDs
+# (e.g. ``claude-opus-4-7``) are accepted. Mid-form strings like
+# ``opus-4-5`` are NOT accepted — they were in earlier versions of this
+# whitelist but never verified, and Claude Code rejects them. Use a
+# bare alias for "always-latest" or a long-form ID to pin a specific
+# version. The regex below covers the long-form path.
 KNOWN_MODEL_SHORTCUTS = frozenset(
     {
         "opus",
-        "opus-4",
-        "opus-4-5",
-        "opus-4-6",
-        "opus-4-7",
         "sonnet",
-        "sonnet-4",
-        "sonnet-4-5",
-        "sonnet-4-6",
         "haiku",
-        "haiku-4",
-        "haiku-4-5",
     }
 )
 
@@ -129,8 +123,8 @@ def default_team_config(
     max_runners: int | None = None,
     min_priority: int = 3,
     context: str = "",
-    advisor_model: str = "opus-4-7",
-    runner_model: str = "sonnet-4-6",
+    advisor_model: str = "claude-opus-4-7",
+    runner_model: str = "claude-sonnet-4-6",
     max_fixes_per_runner: int = 5,
     large_file_line_threshold: int = 800,
     large_file_max_fixes: int = 3,
@@ -168,17 +162,25 @@ def default_team_config(
     min_priority_is_default = min_priority == 3
     test_command_is_default = test_command == ""
 
-    # NOTE: ``advisor_model="opus-4-7"`` and ``runner_model="sonnet-4-6"``
-    # are the documented default *sentinels* — when a caller leaves these
-    # as the literal default strings, env vars are allowed to override. A
-    # caller who explicitly wants those exact pinned versions must instead
-    # pass them via the env vars or a different surface, since the
-    # equality check here treats them as "not set". This is a known
-    # ergonomic trade-off: it lets ``ADVISOR_MODEL`` work without forcing
-    # every test/caller to thread a ``warn_unknown_model=False``.
-    if advisor_model == "opus-4-7":
+    # NOTE: ``advisor_model="claude-opus-4-7"`` and
+    # ``runner_model="claude-sonnet-4-6"`` are the documented default
+    # *sentinels* — when a caller leaves these as the literal default
+    # strings, env vars are allowed to override. A caller who explicitly
+    # wants those exact pinned versions must instead pass them via the
+    # env vars or a different surface, since the equality check here
+    # treats them as "not set". This is a known ergonomic trade-off: it
+    # lets ``ADVISOR_MODEL`` work without forcing every test/caller to
+    # thread a ``warn_unknown_model=False``.
+    #
+    # Long-form IDs are used as defaults because Claude Code's Agent()
+    # tool accepts only bare-family aliases (``opus``, ``sonnet``,
+    # ``haiku``) and full ``claude-<family>-<version>`` IDs. Short forms
+    # like ``opus-4-7`` are NOT accepted by the live tool — pinning the
+    # long form guarantees the spawn works on the current CC version
+    # and stays at this exact model until someone bumps it.
+    if advisor_model == "claude-opus-4-7":
         advisor_model = _env_or("ADVISOR_MODEL", advisor_model)
-    if runner_model == "sonnet-4-6":
+    if runner_model == "claude-sonnet-4-6":
         runner_model = _env_or("ADVISOR_RUNNER_MODEL", runner_model)
     if max_runners is None:
         raw = _env_int_or("ADVISOR_MAX_RUNNERS", 5)
