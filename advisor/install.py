@@ -33,6 +33,28 @@ def parse_badge(text: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _semver_tuple(v: str) -> tuple[int, ...] | None:
+    """Parse ``v`` as a dotted-int prefix; return ``None`` on parse failure.
+
+    Strips a trailing pre-release / build suffix (e.g. ``0.6.0-rc1``) so the
+    comparison stays focused on the X.Y.Z prefix that drives upgrade order.
+    """
+    head = re.split(r"[-+]", v, maxsplit=1)[0]
+    parts = head.split(".")
+    try:
+        return tuple(int(p) for p in parts if p)
+    except ValueError:
+        return None
+
+
+def _is_semver_newer(installed: str, bundled: str) -> bool:
+    """Return True if ``installed`` parses as strictly newer than ``bundled``."""
+    a, b = _semver_tuple(installed), _semver_tuple(bundled)
+    if a is None or b is None:
+        return False
+    return a > b
+
+
 def get_installed_skill_version(path: Path | None = None) -> str | None:
     """Read ``~/.claude/skills/advisor/SKILL.md`` and return its advisor version.
 
@@ -295,7 +317,13 @@ def ensure_nudge(
         print(_style.warning_box(msg), file=out)
 
     try:
-        if not skill_target.exists() or skill_target.read_text(encoding="utf-8") != SKILL_MD:
+        # Compare with trailing-newline differences ignored — atomic_write_text
+        # may add/strip a final newline depending on platform, and a strict
+        # byte-equality check would re-write the file on every CLI invocation
+        # for a no-op delta.
+        if not skill_target.exists() or skill_target.read_text(encoding="utf-8").rstrip(
+            "\n"
+        ) != SKILL_MD.rstrip("\n"):
             skill_res = install_skill(path=skill_target)
             skill_result_action = skill_res.action
     except (OSError, UnicodeDecodeError) as exc:
@@ -401,6 +429,22 @@ def install_skill(
             current = ""
         if current == body:
             return InstallResult(path=target, action=InstallAction.UNCHANGED.value)
+        # Warn (do not block) when about to overwrite a SKILL.md whose
+        # advisor-version badge is newer than the bundled body — a stale
+        # ``advisor install`` from an older venv shouldn't silently roll
+        # back a fresh skill the user installed via a newer release.
+        installed_v = parse_badge(current)
+        bundled_v = parse_badge(body)
+        if (
+            installed_v is not None
+            and bundled_v is not None
+            and _is_semver_newer(installed_v, bundled_v)
+        ):
+            print(
+                f"warning: overwriting SKILL.md v{installed_v} with bundled "
+                f"v{bundled_v} (downgrade); the installed copy is newer.",
+                file=sys.stderr,
+            )
         _atomic_write_text(target, body)
         return InstallResult(path=target, action=InstallAction.UPDATED.value)
 

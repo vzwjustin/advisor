@@ -639,15 +639,27 @@ def cmd_plan(args: argparse.Namespace) -> int:
         except (FileNotFoundError, ValueError) as exc:
             print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
             return 2
-        tasks = [
-            FocusTask(
-                file_path=str(t["file_path"]),
-                priority=int(str(t["priority"])),
-                prompt=str(t.get("prompt", "")),
+        tasks = []
+        for t in cp.tasks:
+            if not (isinstance(t, dict) and "file_path" in t and "priority" in t):
+                continue
+            try:
+                priority = int(str(t["priority"]))
+            except ValueError:
+                warnings.warn(
+                    f"skipping checkpoint task with non-numeric priority "
+                    f"{t.get('priority')!r}",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                continue
+            tasks.append(
+                FocusTask(
+                    file_path=str(t["file_path"]),
+                    priority=priority,
+                    prompt=str(t.get("prompt", "")),
+                )
             )
-            for t in cp.tasks
-            if isinstance(t, dict) and "file_path" in t and "priority" in t
-        ]
         batches_from_cp = _batches_from_checkpoint(cp) if cp.batches else None
         # Rebuild the TeamConfig from the checkpoint so downstream surfaces
         # (cost estimation, test_command) reflect the run being resumed
@@ -1708,7 +1720,22 @@ def _load_findings_from_input(
                 return [], None
             text = _read_stdin_capped(source_label="findings input")
         else:
-            text = Path(source).read_text(encoding="utf-8", errors="replace")
+            src_path = Path(source)
+            try:
+                size = src_path.stat().st_size
+            except OSError:
+                size = 0
+            if size > _STDIN_LIMIT:
+                print(
+                    _style.error_box(
+                        f"findings input {src_path} is {size} bytes "
+                        f"(> {_STDIN_LIMIT}-byte cap); refusing to load",
+                        stream=sys.stderr,
+                    ),
+                    file=sys.stderr,
+                )
+                return [], 2
+            text = src_path.read_text(encoding="utf-8", errors="replace")
     except SystemExit as exc:
         # ``_read_stdin_capped`` raises SystemExit(2) on overflow. The
         # error message has already been printed; convert back to the
@@ -2748,6 +2775,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         rc = args.func(args)
         return int(rc) if rc is not None else 0
+    except KeyboardInterrupt:
+        return 130
     except BrokenPipeError:
         # Downstream pipe closed (e.g. `| head`); exit quietly.
         try:

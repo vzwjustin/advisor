@@ -321,10 +321,20 @@ class TestFormatBudgetNudge:
 
 
 class TestNewBudgetValidation:
-    @pytest.mark.parametrize("kwarg", ["char_ceiling", "file_read_ceiling", "fix_ceiling"])
+    @pytest.mark.parametrize("kwarg", ["char_ceiling", "file_read_ceiling"])
     def test_non_positive_rejected(self, kwarg: str) -> None:
         with pytest.raises(ValueError):
             new_budget("r", **{kwarg: 0})
+
+    def test_fix_ceiling_zero_accepted(self) -> None:
+        # ``fix_ceiling = 0`` is the explore-only configuration — runners
+        # read files but never apply fixes. Mirrors ``cost.estimate_cost``.
+        b = new_budget("r", fix_ceiling=0)
+        assert b.fix_ceiling == 0
+
+    def test_fix_ceiling_negative_rejected(self) -> None:
+        with pytest.raises(ValueError):
+            new_budget("r", fix_ceiling=-1)
 
 
 class TestFractionConstants:

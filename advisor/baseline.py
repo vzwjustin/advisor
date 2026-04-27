@@ -128,11 +128,17 @@ def findings_to_entries(findings: list[Finding]) -> list[BaselineEntry]:
 
 
 def write_baseline(path: Path, entries: list[BaselineEntry]) -> None:
-    """Write entries to a baseline JSONL file, overwriting any existing file."""
+    """Write entries to a baseline JSONL file, overwriting any existing file.
+
+    Entries are sorted by their identity key before serialization so two
+    runs producing the same set of findings always emit byte-identical
+    files. Unsorted output produced spurious VCS diffs whenever the
+    discovery order shifted between runs.
+    """
     lines: list[str] = [
         json.dumps({_HEADER_KEY: True, "schema_version": SCHEMA_VERSION, "count": len(entries)})
     ]
-    for e in entries:
+    for e in sorted(entries, key=lambda x: x.key()):
         lines.append(
             json.dumps(
                 {

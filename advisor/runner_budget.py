@@ -143,8 +143,12 @@ def new_budget(
         raise ValueError("char_ceiling must be > 0")
     if file_read_ceiling <= 0:
         raise ValueError("file_read_ceiling must be > 0")
-    if fix_ceiling <= 0:
-        raise ValueError("fix_ceiling must be > 0")
+    # ``fix_ceiling = 0`` is the explore-only configuration — runners read
+    # files but never apply fixes. Mirrors ``cost.estimate_cost`` which
+    # explicitly accepts ``max_fixes_per_runner = 0``. Reject only true
+    # negatives.
+    if fix_ceiling < 0:
+        raise ValueError("fix_ceiling must be >= 0")
     return RunnerBudget(
         runner_id=runner_id,
         char_ceiling=char_ceiling,

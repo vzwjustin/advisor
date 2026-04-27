@@ -200,6 +200,20 @@ def load_suppressions(path: Path) -> tuple[Suppression, ...]:
         if not (file_ or file_glob):
             raise ValueError(f"{ctx}: one of 'file' or 'file_glob' is required")
 
+        # Eagerly compile the file_glob so a malformed pattern (including
+        # GlobPatternError raised for too-many wildcards) fails the load
+        # pass at parse time — same fail-loud shape as ``_parse_until``.
+        # Without this, ``_matches_glob`` would only catch ``re.error`` at
+        # match time and a GlobPatternError (ValueError subclass) would
+        # leak past the caught branch and abort an unrelated apply pass.
+        if file_glob:
+            try:
+                _double_star_to_regex(str(file_glob))
+            except ValueError as exc:
+                raise ValueError(
+                    f"{ctx}: invalid file_glob {file_glob!r}: {exc}"
+                ) from exc
+
         until_norm, expired = _parse_until(until_raw, context=ctx)
 
         # Above-MEDIUM requires both until and reason.

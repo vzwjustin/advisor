@@ -291,9 +291,18 @@ def colorize_markdown(text: str, stream: IO[str] | None = None) -> str:
     Returns the input unchanged when ``NO_COLOR`` is set or ``TERM=dumb``.
     Markdown markers (``**``, ``##``, backticks) are preserved so the output
     still works as a paste-into-Claude artifact even with colors on.
+
+    Strips any pre-existing ANSI SGR escape sequences from the input before
+    colorizing. A finding description sourced from a target-repo file (e.g.
+    a literal ``\\x1b[`` in source) would otherwise pass through unchanged
+    and inject terminal escape sequences. The local colorizer adds its own
+    span markers afterward, so dropping inbound escapes is safe.
     """
     if not supports_color(stream):
-        return text
+        # Even on no-color terminals, strip inbound ANSI so a finding
+        # description doesn't smuggle escapes into a "plain" output.
+        return _ANSI_SGR_RE.sub("", text)
+    text = _ANSI_SGR_RE.sub("", text)
 
     def _inside_ansi_span(full: str, pos: int) -> bool:
         """True when ``pos`` falls inside an unclosed SGR span.

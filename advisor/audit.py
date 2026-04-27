@@ -83,6 +83,41 @@ _PROTOCOL_VIOLATION_RE = re.compile(
 
 _HANDOFF_RE = re.compile(r"##\s+Handoff\s+from\s+runner-\d+")
 
+
+def _strip_fenced_blocks(text: str) -> str:
+    """Return ``text`` with triple-backtick / ``~~~`` fenced regions removed.
+
+    Used to suppress PROTOCOL_VIOLATION false-positives when a runner quotes
+    the sentinel inside a code-fenced example. Fence markers may carry
+    leading whitespace — match ``verify.py``'s indent-tolerant parser so a
+    nested-list fence (four-space indent before the triple-backtick) is
+    recognized as a real fence.
+    """
+    lines = text.split("\n")
+    out: list[str] = []
+    in_fence = False
+    marker: str | None = None
+    for ln in lines:
+        stripped = ln.strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            this_marker = "```" if stripped.startswith("```") else "~~~"
+            if marker is None:
+                marker = this_marker
+                in_fence = True
+                out.append("")  # preserve line numbering for any later use
+                continue
+            if marker == this_marker:
+                marker = None
+                in_fence = False
+                out.append("")
+                continue
+        if in_fence:
+            out.append("")
+        else:
+            out.append(ln)
+    return "\n".join(out)
+
+
 #: Maximum ``PROTOCOL_VIOLATION`` lines surfaced in an :class:`AuditReport`.
 #: A pathological transcript with thousands of matches would otherwise
 #: inflate report memory without adding signal — the first thousand are
@@ -376,7 +411,12 @@ def audit_transcript(transcript: str, cp: Checkpoint) -> AuditReport:
     # exists to highlight.
     protocol_violations: list[str] = []
     protocol_violations_truncated = False
-    for m in _PROTOCOL_VIOLATION_RE.finditer(transcript):
+    # Strip fenced code blocks first — a runner quoting the sentinel inside
+    # an Evidence ``` block is documenting, not violating. The ^ anchor
+    # alone catches column-0 prose mentions but not column-0 lines that sit
+    # *inside* a fenced region.
+    transcript_unfenced = _strip_fenced_blocks(transcript)
+    for m in _PROTOCOL_VIOLATION_RE.finditer(transcript_unfenced):
         if len(protocol_violations) >= PROTOCOL_VIOLATION_CAP:
             protocol_violations_truncated = True
             break

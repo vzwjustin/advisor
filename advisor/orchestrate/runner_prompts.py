@@ -26,15 +26,26 @@ def _inline_path(file_path: str) -> str:
     arbitrary markdown into the surrounding instruction text — which a
     runner reads as advisor instructions. Replace any backtick with a
     visually similar single quote so the inline span stays intact.
+    Newlines in a path likewise break out of the inline span; collapse
+    them to spaces so the rendered list stays on one line per entry.
     """
-    return file_path.replace("`", "'")
+    return (
+        file_path.replace("`", "'")
+        .replace("\r\n", " ")
+        .replace("\n", " ")
+        .replace("\r", " ")
+    )
 
 
 def _format_batch_files(batch: FocusBatch, guidance: dict[str, str] | None = None) -> str:
     g_map = guidance or {}
     lines: list[str] = []
     for t in batch.tasks:
-        g = g_map.get(t.file_path, "").strip()
+        # Sanitize the same way as ``_inline_path``: a backtick in the
+        # guidance string would break out of the inline-code span on the
+        # adjacent file path. Guidance currently comes from the advisor's
+        # own dispatch plan, but defensive sanitization is cheap.
+        g = _inline_path(g_map.get(t.file_path, "").strip())
         suffix = f" — {g}" if g else ""
         lines.append(f"- `{_inline_path(t.file_path)}` (P{t.priority}){suffix}")
     return "\n".join(lines)
@@ -278,6 +289,10 @@ def build_runner_pool_prompt(runner_id: int, config: TeamConfig) -> str:
         f"{config.max_fixes_per_runner} fix assignments per runner. Track "
         "your own fix count. "
         + _fix_count_trigger(config.max_fixes_per_runner)
+        + f"For batches containing any file >= "
+        f"{config.large_file_line_threshold} lines, the effective cap is "
+        f"{config.large_file_max_fixes} — the advisor will stamp the "
+        "correct cap on every fix assignment message.\n\n"
         + f"**Read-count proxy (secondary).** Count every file you Read in "
         f"this session (explore + fixes combined). If you cross "
         f"~{config.runner_file_read_ceiling} total reads, treat yourself "

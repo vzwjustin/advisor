@@ -274,6 +274,13 @@ def _parse_blocks(text: str) -> list[Finding]:
         # pasted "## relevant section" inside an Evidence block).
         # When inside a fenced code block, never treat H2 as a boundary —
         # it's source code inside an Evidence or Fix value, not a report section.
+        # Fence auto-recovery (mirror of the ### Finding rule): a column-0 H2
+        # heading while we still think we're in a fence is almost certainly an
+        # unclosed code block from the prior finding's body. Auto-close so the
+        # H2 is honored as a region terminator.
+        if line.startswith("## ") and not line.startswith("### ") and in_fence:
+            in_fence = False
+            fence_marker = None
         if not in_fence and stripped.startswith("## ") and not stripped.startswith("### "):
             block_is_complete = all(k in current for k in _REQUIRED_FIELDS)
             if not active_key or block_is_complete:
@@ -297,8 +304,17 @@ def _parse_blocks(text: str) -> list[Finding]:
         # honor the header as a boundary when either no block is in progress
         # (active_key is None) OR the current block already has every required
         # field (so flushing is safe).
-        # Same fence guard: a runner may include "### Finding" as a comment
-        # inside a code example; don't treat that as a real block delimiter.
+        # Fence auto-recovery: real ``### Finding`` headers from
+        # ``format_findings_block`` are always emitted at column 0. A column-0
+        # header that appears while we still think we're inside a fence is
+        # almost certainly evidence that the previous finding's body had an
+        # unclosed code block — auto-close the fence so the new header is
+        # honored as a boundary instead of silently swallowing the rest of
+        # the input. Indented ``### Finding`` lines (real code examples) are
+        # still suppressed by the fence latch.
+        if line.startswith("### Finding") and in_fence:
+            in_fence = False
+            fence_marker = None
         if not in_fence and stripped.startswith("### Finding"):
             block_is_complete = all(k in current for k in _REQUIRED_FIELDS)
             if not active_key or block_is_complete:

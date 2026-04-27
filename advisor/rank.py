@@ -112,7 +112,7 @@ PRIORITY_KEYWORDS: dict[int, tuple[str, ...]] = {
 LANGUAGE_EXTRA_KEYWORDS: dict[str, dict[int, tuple[str, ...]]] = {
     "python": {
         5: ("passlib", "pyjwt", "itsdangerous"),
-        4: ("pickle", "loads", "yaml.load", "marshal", "pydantic"),
+        4: ("pickle", "loads", "yaml.load", "yaml.load_all", "marshal", "pydantic"),
         3: ("flask", "django", "fastapi", "sqlalchemy", "psycopg", "pymongo"),
         2: ("os.environ", "secrets"),
     },
@@ -675,10 +675,24 @@ def _anchored_keyword_pattern(group: str, kw: str) -> str:
     matches at the start of a token like ``$_GET`` (``$`` is non-word).
     Use lookaround anchors when the keyword's leading or trailing char is
     not a word char; fall back to ``\\b`` otherwise.
+
+    Trailing-underscore prefixes (e.g. ``wp_``) are treated as prefix
+    sentinels: ``\\bwp_\\b`` would never fire before any real WordPress
+    function name (``wp_query`` etc) because ``_`` is itself a word
+    character, so ``\\b`` requires a non-word char to follow. Use
+    ``(?!\\w)`` only for the *bare* leading-underscore case (``$_GET``),
+    not for trailing-underscore prefixes — the latter need an unanchored
+    right side so ``wp_`` matches inside ``wp_query``.
     """
     escaped = re.escape(kw)
     left = r"(?<!\w)" if not kw[:1].isalnum() and kw[:1] != "_" else r"\b"
-    right = r"(?!\w)" if not kw[-1:].isalnum() and kw[-1:] != "_" else r"\b"
+    if not kw[-1:].isalnum() and kw[-1:] != "_":
+        right = r"(?!\w)"
+    elif kw[-1:] == "_":
+        # Prefix sentinel: anchor on the left, allow anything to the right.
+        right = ""
+    else:
+        right = r"\b"
     return rf"(?P<{group}>{left}{escaped}{right})"
 
 
