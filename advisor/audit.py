@@ -97,24 +97,38 @@ def _strip_fenced_blocks(text: str) -> str:
     out: list[str] = []
     in_fence = False
     marker: str | None = None
-    for ln in lines:
+    fence_open_line: int | None = None  # index in ``lines`` of the open marker
+    for idx, ln in enumerate(lines):
         stripped = ln.strip()
         if stripped.startswith("```") or stripped.startswith("~~~"):
             this_marker = "```" if stripped.startswith("```") else "~~~"
             if marker is None:
                 marker = this_marker
                 in_fence = True
+                fence_open_line = idx
                 out.append("")  # preserve line numbering for any later use
                 continue
             if marker == this_marker:
                 marker = None
                 in_fence = False
+                fence_open_line = None
                 out.append("")
                 continue
         if in_fence:
             out.append("")
         else:
             out.append(ln)
+    # Unclosed fence recovery — a missing closing marker would otherwise
+    # blank the entire tail of the transcript, silently suppressing any
+    # ``PROTOCOL_VIOLATION`` lines that appear after the open marker.
+    # That sentinel is the audit's primary safety signal — a false
+    # negative there is worse than a stray code-fenced quote slipping
+    # through. Restore the original lines from one past the fence-open
+    # onward (the open marker line itself stays blanked) so violations
+    # after a forgotten ``\`\`\`` are still detected.
+    if in_fence and fence_open_line is not None:
+        for idx in range(fence_open_line + 1, len(lines)):
+            out[idx] = lines[idx]
     return "\n".join(out)
 
 

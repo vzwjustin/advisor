@@ -155,9 +155,13 @@ def build_runner_pool_prompt(runner_id: int, config: TeamConfig) -> str:
     advisor verbatim. Direct ``to='advisor'`` SendMessages are not used
     in the live pipeline — see SKILL.md rule 7 and advisor.txt Step 3.
     """
+    # Run team_name through the same backtick-sanitizing helper used for
+    # file paths so a stray backtick in a configured name (e.g. a typoed
+    # ``review`backtick``) cannot break the surrounding inline-code span.
+    safe_team_name = _inline_path(config.team_name)
     return (
         f"You are `runner-{runner_id}`, a runner on team "
-        f"`{config.team_name}`. The advisor runs the review — you are "
+        f"`{safe_team_name}`. The advisor runs the review — you are "
         "their hands. They think and plan; you read, find, and fix. And "
         "while you work, you are in constant conversation with them — they "
         "are watching you live and expect you to talk. **Every message you "

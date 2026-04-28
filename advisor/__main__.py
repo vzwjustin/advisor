@@ -1882,8 +1882,10 @@ def _load_findings_from_input(
             if findings:
                 return findings, None
             # JSON parsed but produced no findings — fall through to markdown.
-    # Markdown fallback.
-    return list(parse_findings_from_text(text)), None
+    # Markdown fallback. Use the BOM-stripped text so a Windows-prefixed
+    # input doesn't survive into the markdown parser as ``﻿###``,
+    # which would defeat the Finding-header regex.
+    return list(parse_findings_from_text(stripped)), None
 
 
 def cmd_baseline(args: argparse.Namespace) -> int:
@@ -2143,8 +2145,27 @@ def cmd_audit(args: argparse.Namespace) -> int:
         except SystemExit as exc:
             return int(exc.code) if isinstance(exc.code, int) else 2
     else:
+        src_path = Path(transcript_arg)
         try:
-            transcript = Path(transcript_arg).read_text(encoding="utf-8", errors="replace")
+            size = src_path.stat().st_size
+        except OSError as exc:
+            print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
+            return 2
+        # Mirror the stdin path's cap — a multi-GB log file (accidental
+        # ``--transcript /var/log/syslog`` or adversarial input) would
+        # otherwise be buffered into RAM in one shot.
+        if size > _STDIN_LIMIT:
+            print(
+                _style.error_box(
+                    f"audit transcript {src_path} is {size} bytes "
+                    f"(> {_STDIN_LIMIT}-byte cap); refusing to load",
+                    stream=sys.stderr,
+                ),
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            transcript = src_path.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
             print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
             return 2

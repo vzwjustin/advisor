@@ -194,7 +194,10 @@ def load_checkpoint(target: str | Path, run_id: str) -> Checkpoint:
             context=str(obj.get("context", "")),
             tasks=list(obj.get("tasks", [])),
             batches=list(obj.get("batches", [])),
-            schema_version=version,
+            # An older checkpoint that omitted ``schema_version`` would
+            # otherwise load with ``""`` instead of the dataclass default,
+            # quietly defeating any future code that keys off the sentinel.
+            schema_version=version or CHECKPOINT_SCHEMA_VERSION,
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError(f"checkpoint {path} is missing required fields: {exc}") from exc

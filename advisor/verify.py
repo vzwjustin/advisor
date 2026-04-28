@@ -268,10 +268,16 @@ def _parse_blocks(text: str) -> list[Finding]:
             if fence_marker is None:
                 fence_marker = marker
                 in_fence = True
-            elif fence_marker == marker:
+            else:
+                # Close on any triple-marker line while in a fence — runners
+                # routinely emit mismatched pairs (``~~~`` open, ``\`\`\``
+                # close). The strict same-marker policy left ``in_fence``
+                # latched True past the intended close, swallowing the
+                # subsequent ``Fix:`` line and dropping the finding via the
+                # ``missing fix`` partial-drop. Close-on-any matches the H2
+                # auto-recovery's close-then-recover preference.
                 fence_marker = None
                 in_fence = False
-            # mismatched marker inside an open fence: ignore, stay in fence.
             # Whether or not a field is currently active, a fence-marker line
             # is itself not field content — skip it.
             continue

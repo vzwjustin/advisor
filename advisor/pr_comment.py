@@ -27,8 +27,11 @@ _DETAILS_TAG_RE = re.compile(r"<(/?)details\b", re.IGNORECASE)
 
 _SEVERITY_ORDER = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
 
-# GitHub rejects PR/issue bodies and comments above 65,536 characters with a
-# 422 error. Leave headroom for the trailing truncation notice.
+# GitHub rejects PR/issue bodies and comments above 65,536 UTF-8 bytes
+# with a 422 error. The cap is byte-measured, not char-measured — a
+# CJK-heavy comment (3 bytes/char) was previously able to slip past a
+# 60_000-char guard and still exceed 65_536 bytes. Leave headroom for
+# the trailing truncation notice.
 _GITHUB_BODY_LIMIT = 60_000
 
 
@@ -99,10 +102,14 @@ def format_pr_comment(findings: list[Finding]) -> str:
     lines.append("")
     lines.append("### Details")
     lines.append("")
-    # Track the running character count incrementally so the truncation
-    # check stays O(n) overall. Summing ``lines`` every iteration was
-    # O(n²) — painful for 500+ findings approaching the body cap.
-    projected_chars = sum(len(line) + 1 for line in lines)
+    # Track the running byte count incrementally so the truncation check
+    # stays O(n) overall. GitHub's body cap is measured in UTF-8 bytes,
+    # not characters; a char-only budget under-counted multibyte text and
+    # let CJK-heavy descriptions slip past 60_000 chars while still
+    # tripping the 65_536-byte ceiling. Summing ``lines`` every iteration
+    # would also be O(n²) — painful for 500+ findings approaching the
+    # body cap.
+    projected_chars = sum(len(line.encode("utf-8")) + 1 for line in lines)
     rendered_count = 0
     truncated = False
     for f in findings:
@@ -143,7 +150,7 @@ def format_pr_comment(findings: list[Finding]) -> str:
         # Stop appending once the running body would exceed the GitHub cap.
         # Posting a truncated comment with a "run locally" pointer is more
         # useful than a 422 from the API.
-        block_chars = sum(len(line) + 1 for line in block)
+        block_chars = sum(len(line.encode("utf-8")) + 1 for line in block)
         if projected_chars + block_chars > _GITHUB_BODY_LIMIT:
             truncated = True
             break

@@ -110,18 +110,24 @@ def _parse_file_path(raw: str) -> tuple[str, int | None]:
     if len(stripped) >= 2 and stripped[1] == ":" and stripped[0].isalpha():
         drive_prefix = stripped[:2]
         body = stripped[2:]
-    parts = body.rsplit(":", 2)
-    # Scan from the right: accept ``path:line`` and ``path:line:col``.
-    if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
-        return drive_prefix + parts[0], int(parts[1])
-    # ``path:42:noncol`` — line is salvageable; ignore the malformed
-    # column component rather than dropping the line and corrupting the
-    # path with the trailing fragments.
-    if len(parts) == 3 and parts[1].isdigit():
-        return drive_prefix + parts[0], int(parts[1])
-    if len(parts) >= 2 and parts[-1].isdigit():
-        return drive_prefix + ":".join(parts[:-1]), int(parts[-1])
-    return stripped, None
+    # Scan from the right: peel off trailing numeric segments so an input
+    # with extra colons (e.g. ``src/foo.py:42:10:20`` — line:col:end-col)
+    # doesn't corrupt the path. The previous ``rsplit(":", 2)`` left
+    # ``["src/foo.py:42", "10", "20"]`` and returned
+    # ``("src/foo.py:42", 10)`` — wrong path, wrong line.
+    all_parts = body.split(":")
+    trailing_numeric: list[str] = []
+    while len(all_parts) > 1 and all_parts[-1].isdigit():
+        trailing_numeric.append(all_parts.pop())
+    if not trailing_numeric:
+        return stripped, None
+    # Conventional shape is ``path:line[:col[:end-col[...]]]``. Trailing
+    # numerics were popped right-to-left, so the leftmost trailing
+    # numeric (last popped) is the line number — everything to the
+    # right is column / end-column / extra detail we don't track.
+    line = int(trailing_numeric[-1])
+    path = ":".join(all_parts) or stripped
+    return drive_prefix + path, line
 
 
 def _resolve_relative(path: str, target_dir: Path) -> str:

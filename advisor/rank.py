@@ -339,6 +339,11 @@ class _IgnorePatternMatcher:
 
     pattern: str
     recursive_re: re.Pattern[str] | None = None
+    # Pre-compiled regex for slash-bearing patterns without ``**`` (e.g.
+    # ``src/*.py``). Without this, ``_matches_compiled_pattern`` rebuilt
+    # the same regex on every (file, pattern) pair — O(N×M) string-build
+    # cost on top of Python's re-cache lookup.
+    slash_re: re.Pattern[str] | None = None
     dir_pattern: str | None = None
     bare_component: bool = False
 
@@ -511,6 +516,48 @@ def _double_star_to_regex(pattern: str) -> re.Pattern[str]:
     return re.compile("^" + "".join(parts) + "$")
 
 
+def _slash_pattern_to_regex(pattern: str) -> re.Pattern[str]:
+    """Translate a slash-bearing glob (no ``**``) into a path-aware regex.
+
+    ``*``/``?`` map to character classes that don't cross ``/``. Char
+    classes (``[abc]``, ``[!abc]``) follow the same conventions as
+    :func:`_double_star_to_regex` so a rule like ``src/[!_]*.py``
+    matches ``src/foo.py`` instead of only the literal pattern text.
+    """
+    inline_parts: list[str] = []
+    j = 0
+    while j < len(pattern):
+        pc = pattern[j]
+        if pc == "*":
+            inline_parts.append("[^/]*")
+            j += 1
+        elif pc == "?":
+            inline_parts.append("[^/]")
+            j += 1
+        elif pc == "[":
+            end = pattern.find("]", j)
+            if end == -1:
+                inline_parts.append(re.escape(pc))
+                j += 1
+            else:
+                body = pattern[j + 1 : end]
+                if not body:
+                    inline_parts.append(re.escape("["))
+                    j += 1
+                else:
+                    if body.startswith("!"):
+                        body = "^" + body[1:]
+                    if body in ("^", ""):
+                        inline_parts.append(re.escape(pattern[j : end + 1]))
+                    else:
+                        inline_parts.append("[" + body + "]")
+                    j = end + 1
+        else:
+            inline_parts.append(re.escape(pc))
+            j += 1
+    return re.compile("^" + "".join(inline_parts) + "$")
+
+
 def _compile_ignore_patterns(patterns: list[str]) -> tuple[_IgnorePatternMatcher, ...]:
     """Compile ignore patterns once for a ranking run.
 
@@ -545,10 +592,26 @@ def _compile_ignore_patterns(patterns: list[str]) -> tuple[_IgnorePatternMatcher
                 # so the run continues; the misconfigured rule is silently
                 # skipped (matches the prior behavior).
                 recursive_re = re.compile(r"$.^")
+        # Pre-compile slash-bearing patterns (without ``**``) once, here.
+        # Previously ``_matches_compiled_pattern`` translated and compiled
+        # the same regex per (file, pattern) pair. Skip directory-only
+        # patterns (handled by ``dir_pattern``) and recursive ones.
+        slash_re: re.Pattern[str] | None = None
+        if (
+            "/" in pattern
+            and "**" not in pattern
+            and not (pattern.endswith("/") and "**" not in pattern)
+        ):
+            try:
+                slash_re = _slash_pattern_to_regex(pattern)
+            except re.error:
+                # Malformed translator output — fall back to never-match.
+                slash_re = re.compile(r"$.^")
         compiled.append(
             _IgnorePatternMatcher(
                 pattern=pattern,
                 recursive_re=recursive_re,
+                slash_re=slash_re,
                 # Don't set dir_pattern when ** is present — recursive_re handles it.
                 # Setting both caused dir_pattern's `continue` to shadow recursive_re.
                 dir_pattern=pattern.rstrip("/")
@@ -608,46 +671,12 @@ def _matches_compiled_pattern(
         # incorrectly match ``src/deep/foo.py`` because ``*`` crosses ``/``.
         # Use a non-recursive path-aware match: translate ``*`` and ``?`` to
         # regex metacharacters that don't cross ``/``.
-        if "/" in pattern:
-            # Translate ``*``/``?``/``[...]`` to regex metacharacters that don't
-            # cross ``/``. Char classes (``[abc]``, ``[!abc]``) are translated
-            # the same way as in :func:`_double_star_to_regex` so a rule like
-            # ``src/[!_]*.py`` matches ``src/foo.py`` instead of only the
-            # literal string ``src/[!_]*.py``.
-            inline_parts: list[str] = []
-            j = 0
-            while j < len(pattern):
-                pc = pattern[j]
-                if pc == "*":
-                    inline_parts.append("[^/]*")
-                    j += 1
-                elif pc == "?":
-                    inline_parts.append("[^/]")
-                    j += 1
-                elif pc == "[":
-                    end = pattern.find("]", j)
-                    if end == -1:
-                        inline_parts.append(re.escape(pc))
-                        j += 1
-                    else:
-                        body = pattern[j + 1 : end]
-                        if not body:
-                            inline_parts.append(re.escape("["))
-                            j += 1
-                        else:
-                            if body.startswith("!"):
-                                body = "^" + body[1:]
-                            if body in ("^", ""):
-                                inline_parts.append(re.escape(pattern[j : end + 1]))
-                            else:
-                                inline_parts.append("[" + body + "]")
-                            j = end + 1
-                else:
-                    inline_parts.append(re.escape(pc))
-                    j += 1
-            path_re = re.compile("^" + "".join(inline_parts) + "$")
-            if path_re.match(path_str):
-                return True
+        # Slash-bearing patterns use the matcher's pre-compiled
+        # ``slash_re`` — built once at ignore-pattern compile time so the
+        # match path is O(1) per pattern instead of rebuilding the regex
+        # for every (file, pattern) pair.
+        if matcher.slash_re is not None and matcher.slash_re.match(path_str):
+            return True
         # Match against any path component for bare-word patterns only
         # (no glob metacharacters AND no `.`). Filename-shaped patterns
         # like `foo.py` are excluded — they should match via the filename

@@ -401,3 +401,25 @@ class TestScopeDriftFilter:
         assert kept == []
         assert len(dropped) == 1
         assert any("scope-drift" in r.message for r in caplog.records)
+
+
+def test_mismatched_fence_markers_recover():
+    """Regression: a ``~~~`` open / triple-backtick close (or vice versa)
+    used to leave ``in_fence`` latched True past the intended close,
+    swallowing the subsequent ``Fix:`` field and dropping the finding via
+    the missing-fix partial-drop. Close-on-any-marker policy now
+    recovers."""
+    text = (
+        "### Finding 1\n"
+        "- **File**: test.py\n"
+        "- **Severity**: HIGH\n"
+        "- **Description**: SQL injection\n"
+        "- **Evidence**: here is code:\n"
+        "~~~\n"
+        "some code\n"
+        "```\n"
+        "- **Fix**: use parameterized queries\n"
+    )
+    findings = list(parse_findings_from_text(text))
+    assert len(findings) == 1
+    assert findings[0].fix == "use parameterized queries"

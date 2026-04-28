@@ -484,3 +484,26 @@ class TestAuditCLI:
         )
         # Missing checkpoint errors before stdin is read.
         assert rc == 2
+
+
+def test_unclosed_fence_does_not_blind_protocol_violation():
+    """Regression: an unclosed fenced block in the transcript previously
+    blanked every line through end-of-text, silently suppressing any
+    real ``PROTOCOL_VIOLATION`` lines that appeared after the open
+    marker. That sentinel is the audit's primary safety signal, so the
+    false negative was worse than letting fenced quotes through. Recovery
+    re-emits the trailing lines so violations are still detected."""
+    transcript = (
+        "## Handoff from runner-1\n"
+        "Runner heartbeat ok.\n"
+        "Some example code:\n"
+        "```python\n"
+        "evidence code (no closing fence)\n"
+        "\n"
+        "PROTOCOL_VIOLATION: runner left assigned scope\n"
+    )
+    cp = _mk_checkpoint(batch_files=[["a.py", "b.py"]])
+    report = audit_transcript(transcript, cp)
+    assert any("scope" in v for v in report.protocol_violations), (
+        "PROTOCOL_VIOLATION after unclosed fence must still be detected"
+    )
