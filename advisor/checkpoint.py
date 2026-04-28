@@ -28,6 +28,10 @@ CHECKPOINT_SCHEMA_VERSION = "1.0"
 CHECKPOINT_PREFIX = "run-"
 CHECKPOINT_SUFFIX = ".json"
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+# Reject implausibly large checkpoints before ``read_text`` buffers
+# them; a healthy checkpoint is a few KB. ``list_checkpoints`` already
+# uses a 2 KB sniff cap; this is the stricter outer bound for full load.
+_MAX_CHECKPOINT_BYTES = 10 * 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,6 +140,17 @@ def load_checkpoint(target: str | Path, run_id: str) -> Checkpoint:
     :class:`ValueError` on missing / malformed content.
     """
     path = checkpoint_path(target, run_id)
+    try:
+        size = path.stat().st_size
+    except FileNotFoundError:
+        raise FileNotFoundError(f"no checkpoint at {path}") from None
+    except OSError as exc:
+        raise ValueError(f"could not read checkpoint {path}: {exc}") from exc
+    if size > _MAX_CHECKPOINT_BYTES:
+        raise ValueError(
+            f"could not read checkpoint {path}: size {size} exceeds "
+            f"{_MAX_CHECKPOINT_BYTES} bytes — refusing to load"
+        )
     try:
         obj = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:

@@ -174,6 +174,13 @@ class TestBudgetStatus:
         b = update_budget(b, message_text="ok", fix_completed=True)
         assert budget_status(b) == "ROTATE"
 
+    def test_explore_only_fix_ceiling_zero_stays_ok(self) -> None:
+        # ``fix_ceiling=0`` is the documented explore-only configuration.
+        # A fresh budget must NOT trip ROTATE via ``fixes_done >= 0``.
+        # Regression for pass-Q audit finding (runner_budget.py:233).
+        b = new_budget("r", fix_ceiling=0)
+        assert budget_status(b) == "OK"
+
     def test_rotate_takes_precedence_over_soft(self) -> None:
         # Both conditions true: rotate wins.
         b = new_budget("r", char_ceiling=100, fix_ceiling=1)

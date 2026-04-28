@@ -96,6 +96,28 @@ class TestLoadFindingsFromInput:
         assert findings[0].rule_id is None
         assert findings[1].rule_id == "custom/rule"
 
+    def test_bom_prefixed_json_is_parsed_as_json(self, tmp_path):
+        """Pass-Q regression: ``lstrip("\\xef\\xbb\\xbf")`` stripped three
+        Latin-1 bytes, not the U+FEFF codepoint that ``read_text`` emits.
+        BOM-prefixed JSON from Windows tools used to silently fall through
+        to the markdown parser and return zero findings.
+        """
+        from advisor.__main__ import _load_findings_from_input
+
+        p = tmp_path / "bom-findings.json"
+        body = (
+            b'\xef\xbb\xbf{"findings_in_batch": [{"file_path": "a.py", '
+            b'"severity": "HIGH", "description": "d", "evidence": "e", '
+            b'"fix": "f"}]}'
+        )
+        p.write_bytes(body)
+
+        findings, rc = _load_findings_from_input(p)
+        assert rc is None
+        assert len(findings) == 1
+        assert findings[0].file_path == "a.py"
+        assert findings[0].severity == "HIGH"
+
     def test_oversize_stdin_returns_tuple_not_systemexit(self, monkeypatch, capsys):
         """``_load_findings_from_input`` documents a tuple-return contract.
         An oversize stdin pipe used to leak the SystemExit raised by

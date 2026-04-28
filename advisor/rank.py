@@ -864,7 +864,10 @@ def rank_files(
                     picks ``min(32, os.cpu_count() or 4) * 4`` — enough to
                     saturate SSD read queues without swamping small VMs.
                     Set to ``1`` to disable parallelism entirely (handy for
-                    deterministic tests or debugging).
+                    deterministic tests or debugging). Values ``<= 0`` are
+                    treated the same as ``1`` (serial); the
+                    ``ThreadPoolExecutor(max_workers=0)`` ``ValueError``
+                    is short-circuited by the small-file serial path.
         extra_keywords: Optional per-tier keyword overlay (e.g. from a
                     :class:`~advisor.presets.RulePack`). Layered on top of
                     the language-aware baseline. Each tier's extras are

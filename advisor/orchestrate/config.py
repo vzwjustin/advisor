@@ -24,6 +24,14 @@ KNOWN_MODEL_SHORTCUTS = frozenset(
     }
 )
 
+# Pool size ceiling — single source of truth for both the CLI surface
+# (``__main__._clamp_max_runners``) and the orchestrate library
+# (``runner_prompts._POOL_SIZE_CEILING``). Lives here because
+# ``orchestrate.config`` is already imported by both layers; pulling
+# the constant into one place removes the silent sync risk noted in
+# the pass-Q audit.
+POOL_SIZE_CEILING: int = 20
+
 # Long-form Claude model IDs follow ``claude-<family>-<version>-YYYYMMDD``.
 # ``<version>`` is one or more dot/dash-separated digit groups (e.g. ``4``,
 # ``4-5``, ``4.5``); the trailing ``-YYYYMMDD`` date stamp is optional.
@@ -199,12 +207,15 @@ def default_team_config(
     # Surface ceiling hits with a one-line warning — mirrors the CLI's
     # _clamp_max_runners() so users see the same feedback no matter which
     # surface they came in through.
-    if max_runners > 20:
+    if max_runners > POOL_SIZE_CEILING:
         print(
-            _style.warning_box(f"max_runners={max_runners} exceeds ceiling of 20; using 20"),
+            _style.warning_box(
+                f"max_runners={max_runners} exceeds ceiling of "
+                f"{POOL_SIZE_CEILING}; using {POOL_SIZE_CEILING}"
+            ),
             file=sys.stderr,
         )
-        max_runners = 20
+        max_runners = POOL_SIZE_CEILING
     if file_types_is_default:
         file_types = _env_or("ADVISOR_FILE_TYPES", file_types)
     if min_priority_is_default:

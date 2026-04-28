@@ -227,10 +227,13 @@ def budget_status(budget: RunnerBudget) -> str:
     above :data:`SOFT_WARN_FRACTION` → ``SOFT_WARN``. Otherwise ``OK``.
     """
     rotate_chars = int(budget.char_ceiling * ROTATE_FRACTION)
+    # ``fix_ceiling == 0`` is the documented explore-only configuration;
+    # gate the fix-axis check so a fresh budget (``fixes_done == 0``)
+    # doesn't immediately trip ROTATE via the ``0 >= 0`` corner.
     if (
         budget.output_chars >= rotate_chars
         or len(budget.files_read) >= budget.file_read_ceiling
-        or budget.fixes_done >= budget.fix_ceiling
+        or (budget.fix_ceiling > 0 and budget.fixes_done >= budget.fix_ceiling)
     ):
         return "ROTATE"
     soft_chars = int(budget.char_ceiling * SOFT_WARN_FRACTION)

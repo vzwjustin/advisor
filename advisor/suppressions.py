@@ -209,7 +209,11 @@ def load_suppressions(path: Path) -> tuple[Suppression, ...]:
         if file_glob:
             try:
                 _double_star_to_regex(str(file_glob))
-            except ValueError as exc:
+            except (ValueError, re.error) as exc:
+                # Catch ``re.error`` too: a glob like ``[invalid`` compiles
+                # to a regex that raises ``re.error`` (not ``ValueError``)
+                # — without this branch the eager fail-loud guard would
+                # silently degrade to the fnmatch fallback at match time.
                 raise ValueError(f"{ctx}: invalid file_glob {file_glob!r}: {exc}") from exc
 
         until_norm, expired = _parse_until(until_raw, context=ctx)

@@ -420,6 +420,18 @@ def _dict_to_finding(d: dict[str, str]) -> Finding | None:
     """
     missing = [k for k in _REQUIRED_FIELDS if not d.get(k)]
     if missing:
+        # Surface partial drops: if the block has at least one populated
+        # required field, the body almost certainly intended to be a
+        # finding (e.g. a Fix line consumed inside an unclosed fence
+        # before auto-recovery). Silent loss in that path masked real
+        # findings during pass M-N audits.
+        populated = [k for k in _REQUIRED_FIELDS if d.get(k)]
+        if populated:
+            _log.warning(
+                "verify: dropping partial finding (have %s, missing %s)",
+                populated,
+                missing,
+            )
         return None
     return Finding(
         file_path=d["file_path"],

@@ -76,6 +76,7 @@ from .orchestrate import (
     default_team_config,
     render_pipeline,
 )
+from .orchestrate.config import POOL_SIZE_CEILING
 from .rank import load_advisorignore, rank_files
 from .sarif import findings_to_sarif
 
@@ -185,7 +186,10 @@ def _relative_age(mtime_epoch: float, now_epoch: float | None = None) -> str:
     return f"{min(days, 99)}d ago"
 
 
-_MAX_RUNNERS_CEILING = 20
+# Re-exported from ``orchestrate.config`` so the CLI clamp and the
+# orchestrate library share one source of truth (was independently
+# duplicated before pass Q — flagged for sync drift).
+_MAX_RUNNERS_CEILING = POOL_SIZE_CEILING
 
 
 def _clamp_max_runners(value: int, *, source: str) -> int:
@@ -1769,7 +1773,7 @@ def _load_findings_from_input(
     # commonly prepend one to JSON files. Strip it explicitly so a
     # BOM-prefixed JSON document doesn't fall through to the markdown
     # parser and silently return zero findings.
-    stripped = text.strip().lstrip("﻿")
+    stripped = text.strip().lstrip("\ufeff")
     if stripped.startswith("{") or stripped.startswith("["):
         try:
             doc = json.loads(stripped)

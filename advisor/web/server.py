@@ -399,6 +399,13 @@ def run_server(
     invocations non-reproducible; passing ``port=0`` is the opt-in to let
     the OS pick, and the bound port is printed after the fact.
     """
+    if not isinstance(port, int) or isinstance(port, bool):
+        # Reject non-int (e.g. ``None`` from a caller bug) before the
+        # range check so the comparison doesn't raise ``TypeError`` —
+        # the docstring promises ``OSError`` on bad ports. ``bool`` is
+        # an ``int`` subclass and would silently accept ``True``/``False``;
+        # explicitly reject it.
+        raise OSError(f"could not bind {host}:{port} (port must be an integer)")
     if not 0 <= port <= 65535:
         raise OSError(f"could not bind {host}:{port} (port out of range 0..65535)")
 

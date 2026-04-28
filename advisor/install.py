@@ -510,6 +510,12 @@ def uninstall_skill(path: Path | None = None) -> InstallResult:
     # install path refuses to write through a symlink, so the uninstall
     # path refuses to delete one. Better to require the user to clean up
     # an unexpected symlink themselves than to silently follow it.
+    #
+    # NOTE: There is a benign TOCTOU between ``is_symlink()`` and
+    # ``unlink()``. ``unlink(2)`` on POSIX never follows symlinks — it
+    # removes the symlink entry itself, not its target — so the worst
+    # case if an attacker races a symlink in between is that we delete
+    # the attacker's injected symlink rather than a sensitive file.
     if target.is_symlink():
         raise OSError(f"refusing to unlink symlink at {target}; remove it manually if intended")
     target.unlink()

@@ -146,6 +146,32 @@ class TestLoader:
         assert entries[0].rule_id == "advisor/medium/abc"
         assert entries[0].expired is False
 
+    def test_malformed_glob_re_error_fails_loud(self, tmp_path: Path) -> None:
+        """Pass-Q regression: the eager glob compile only caught
+        ``ValueError``. Some malformed character classes (e.g. an
+        unterminated set with an escaped close bracket) compile to a
+        regex that raises ``re.error`` — without the wider exception
+        catch the fail-loud guard silently degrades to the fnmatch
+        fallback at match time. Now both exceptions surface as
+        ``ValueError`` at load.
+        """
+        p = tmp_path / "s.jsonl"
+        _write_jsonl(
+            p,
+            [
+                {
+                    "rule_id": "advisor/medium/abc",
+                    # ``[\]`` becomes the regex ``[\]`` which is an
+                    # unterminated character set — re.compile raises
+                    # re.error on it.
+                    "file_glob": "[\\]",
+                    "reason": "permissive",
+                },
+            ],
+        )
+        with pytest.raises(ValueError, match="invalid file_glob"):
+            load_suppressions(p)
+
 
 class TestApply:
     def test_active_suppression_drops_match(self) -> None:

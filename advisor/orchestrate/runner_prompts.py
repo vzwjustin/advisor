@@ -8,12 +8,12 @@ from .. import _style
 from ..focus import FocusBatch, FocusTask
 from ._fence import fence
 from ._schema import FINDING_SCHEMA
-from .config import TeamConfig
+from .config import POOL_SIZE_CEILING, TeamConfig
 
-# Pool ceiling — same number used by the CLI's ``_MAX_RUNNERS_CEILING``.
-# Duplicated rather than imported to keep ``orchestrate`` independent of
-# the CLI module (orchestrate sits below ``__main__`` in the layering).
-_POOL_SIZE_CEILING = 20
+# Backwards-compat private alias — internal callers within this module
+# use the imported ``POOL_SIZE_CEILING`` directly. Kept so external code
+# that imported the underscored name doesn't break.
+_POOL_SIZE_CEILING = POOL_SIZE_CEILING
 
 # ── Helpers ──────────────────────────────────────────────────────
 
@@ -287,12 +287,13 @@ def build_runner_pool_prompt(runner_id: int, config: TeamConfig) -> str:
         + f"For batches containing any file >= "
         f"{config.large_file_line_threshold} lines, the effective cap is "
         f"{config.large_file_max_fixes} — the advisor will stamp the "
-        "correct cap on every fix assignment message. **In that case, ping "
-        f"after fix #{max(1, config.large_file_max_fixes - 1)} of "
-        f"{config.large_file_max_fixes}, not the default trigger above.** If "
-        "the advisor stamps any cap lower than "
-        f"{config.max_fixes_per_runner}, use that cap's (cap-1) threshold "
-        "instead.\n\n" + f"**Read-count proxy (secondary).** Count every file you Read in "
+        "correct cap on every fix assignment message. **In that case, "
+        "use the trigger below instead of the default above:**\n\n"
+        + _fix_count_trigger(config.large_file_max_fixes)
+        + "If the advisor stamps any cap lower than "
+        f"{config.max_fixes_per_runner}, apply the same one-before-cap "
+        "rule (or the cap=1 immediate-ping rule) to that cap.\n\n"
+        + f"**Read-count proxy (secondary).** Count every file you Read in "
         f"this session (explore + fixes combined). If you cross "
         f"~{config.runner_file_read_ceiling} total reads, treat yourself "
         "as at-risk and send `CONTEXT_PRESSURE` at the start of your next "

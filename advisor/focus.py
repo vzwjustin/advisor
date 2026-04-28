@@ -103,7 +103,14 @@ def create_focus_tasks(
     """
     tasks: list[FocusTask] = []
 
-    for rf in ranked_files:
+    # Defensive sort: the docstring promises descending-priority input,
+    # but the ``rf.priority < min_priority`` early-break below relies on
+    # monotonicity. If a caller passes an unsorted list we'd silently
+    # drop higher-priority files sitting after a low-priority gap.
+    # Sorting locally is O(n log n) on a small list — cheap insurance.
+    sorted_files = sorted(ranked_files, key=lambda r: r.priority, reverse=True)
+
+    for rf in sorted_files:
         if max_tasks is not None and len(tasks) >= max_tasks:
             break
         if rf.priority < min_priority:
