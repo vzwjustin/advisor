@@ -131,7 +131,16 @@ def save_checkpoint(
         batches=batch_dicts,
     )
     path = checkpoint_path(target, run_id)
-    _shared_atomic_write(path, json.dumps(asdict(checkpoint), indent=2))
+    serialized = json.dumps(asdict(checkpoint), indent=2)
+    # Symmetric guard with ``load_checkpoint``: refuse to write a payload
+    # the loader will refuse to read, otherwise ``--resume`` silently
+    # breaks after a successful save.
+    if len(serialized.encode("utf-8")) > _MAX_CHECKPOINT_BYTES:
+        raise ValueError(
+            f"could not save checkpoint {path}: serialized size exceeds "
+            f"{_MAX_CHECKPOINT_BYTES} bytes — refusing to write"
+        )
+    _shared_atomic_write(path, serialized)
     return path
 
 

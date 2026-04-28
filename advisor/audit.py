@@ -447,10 +447,11 @@ def audit_transcript(transcript: str, cp: Checkpoint) -> AuditReport:
         findings_in_batch=in_batch,
         findings_out_of_batch=out_batch,
         batch_file_count=len(batch_files),
-        # Defensive copy — caller could otherwise mutate the local
-        # ``fix_numbers`` dict after construction and silently change the
-        # report's view. AuditReport is intended to be a snapshot.
-        fix_numbers=dict(fix_numbers),
+        # Defensive deep-ish copy — ``dict(fix_numbers)`` shares the
+        # inner ``list[int]`` references with the caller, so a post-
+        # construction ``fix_numbers[runner].append(...)`` would still
+        # leak into the frozen report. Copy each list too.
+        fix_numbers={k: list(v) for k, v in fix_numbers.items()},
         protocol_violations_truncated=protocol_violations_truncated,
     )
 

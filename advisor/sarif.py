@@ -114,6 +114,11 @@ def _parse_file_path(raw: str) -> tuple[str, int | None]:
     # Scan from the right: accept ``path:line`` and ``path:line:col``.
     if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
         return drive_prefix + parts[0], int(parts[1])
+    # ``path:42:noncol`` — line is salvageable; ignore the malformed
+    # column component rather than dropping the line and corrupting the
+    # path with the trailing fragments.
+    if len(parts) == 3 and parts[1].isdigit():
+        return drive_prefix + parts[0], int(parts[1])
     if len(parts) >= 2 and parts[-1].isdigit():
         return drive_prefix + ":".join(parts[:-1]), int(parts[-1])
     return stripped, None
@@ -196,7 +201,7 @@ def findings_to_sarif(
                 "id": rule_id,
                 "name": rule_id.replace("/", "_"),
                 "shortDescription": {"text": _short_text(f.description)},
-                "fullDescription": {"text": f.description or rule_id},
+                "fullDescription": {"text": f.description or "advisor finding"},
                 "defaultConfiguration": {"level": _level_for(f.severity)},
                 "help": {"text": f.fix or "See advisor output for remediation guidance."},
             }
@@ -230,7 +235,7 @@ def findings_to_sarif(
                 "ruleId": rule_id,
                 "ruleIndex": rule_index_by_id[rule_id],
                 "level": _level_for(f.severity),
-                "message": {"text": f.description or rule_id},
+                "message": {"text": f.description or "advisor finding"},
                 "locations": [{"physicalLocation": physical_location}],
                 "properties": {
                     "severity": f.severity,

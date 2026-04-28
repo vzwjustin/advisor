@@ -105,6 +105,25 @@ def _read_stdin_capped(*, source_label: str) -> str:
     failure mode than an explicit refusal here. ``source_label``
     identifies the surface for the error message (e.g. ``"--context -"``).
     """
+    # Prefer the byte buffer so the cap is measured in bytes, matching
+    # the "MiB" framing in the error message. ``sys.stdin.read`` returns
+    # code-point counts which would let multibyte input (CJK, emoji) sail
+    # past a 50 MiB cap by ~4x. Fall back to text-mode reads when the
+    # caller substituted a text-only stream (e.g. ``io.StringIO`` in
+    # tests, or a custom redirect that doesn't expose ``.buffer``).
+    buffer = getattr(sys.stdin, "buffer", None)
+    if buffer is not None:
+        raw: bytes = buffer.read(_STDIN_LIMIT + 1)
+        if len(raw) > _STDIN_LIMIT:
+            print(
+                _style.error_box(
+                    f"{source_label}: input exceeds {_STDIN_LIMIT // (1024 * 1024)} MiB cap",
+                    stream=sys.stderr,
+                ),
+                file=sys.stderr,
+            )
+            raise SystemExit(2)
+        return raw.decode("utf-8", errors="replace")
     payload = sys.stdin.read(_STDIN_LIMIT + 1)
     if len(payload) > _STDIN_LIMIT:
         print(
@@ -247,8 +266,20 @@ def _resolve_max_runners(raw: int | None) -> int:
                 file=sys.stderr,
             )
             parsed = 5
-        resolved = parsed if parsed >= 1 else 5
-        return _clamp_max_runners(resolved, source="ADVISOR_MAX_RUNNERS")
+        if parsed < 1:
+            # Mirror the malformed-int warning above so a non-positive
+            # value gets the same visible feedback. Otherwise an op
+            # setting ``ADVISOR_MAX_RUNNERS=0`` to disable runners (a
+            # natural mental model) silently gets the default 5.
+            print(
+                _style.warning_box(
+                    f"ADVISOR_MAX_RUNNERS={env_raw!r} must be a positive integer; using default 5",
+                    stream=sys.stderr,
+                ),
+                file=sys.stderr,
+            )
+            parsed = 5
+        return _clamp_max_runners(parsed, source="ADVISOR_MAX_RUNNERS")
     return 5
 
 

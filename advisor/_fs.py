@@ -209,7 +209,12 @@ def normalize_path(path: str) -> str:
     (``C:\\Users\\...`` → ``C:/Users/...``) are never treated as a
     line-number tail (``C`` is not all digits).
     """
-    p = path.strip().strip("`").strip().replace("\\", "/")
+    # Strip a leading BOM (U+FEFF) before whitespace/backtick handling.
+    # Runners on Windows or pipelines that round-trip through ``utf-8-sig``
+    # can prepend a BOM to the file-path field; without this strip the
+    # BOM survives into the batch-membership key and the finding is
+    # silently moved to ``dropped`` with a misleading scope-drift log.
+    p = path.lstrip("﻿").strip().strip("`").strip().replace("\\", "/")
     # Strip *all* leading `./` segments so `./foo.py` and `././foo.py`
     # produce the same identity key. Mirrors `baseline._normalize_identity_path`
     # so suppressions and baseline diffs agree on path equality.

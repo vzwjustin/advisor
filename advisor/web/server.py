@@ -296,6 +296,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "default-src 'none'; base-uri 'none'; form-action 'none'",
         )
         self.end_headers()
+        # ``_response_committed`` flags that headers were flushed and any
+        # subsequent error should not attempt a second ``send_response``;
+        # do_GET's outer except handlers consult this before falling
+        # back to ``_send_error``.
+        self._response_committed = True
         self.wfile.write(body)
 
     def _send_text(self, body: str, content_type: str) -> None:
@@ -309,13 +314,25 @@ class DashboardHandler(BaseHTTPRequestHandler):
         )
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
+        self._response_committed = True
         self.wfile.write(data)
 
     def _send_error(self, status: int, message: str) -> None:
+        # Refuse to write a second response on a connection that already
+        # flushed headers. The send_response/end_headers pair would
+        # otherwise inject a fresh status line into the body of the
+        # half-written response and corrupt the HTTP stream.
+        if getattr(self, "_response_committed", False):
+            return
         self._send_json({"error": message}, status=status)
 
     # --- routing ----------------------------------------------------------
     def do_GET(self) -> None:
+        # Reset the per-request response-committed flag. The flag is
+        # consulted by ``_send_error`` so an exception raised after
+        # headers were flushed does not produce a second ``send_response``
+        # and corrupt the HTTP stream.
+        self._response_committed = False
         parsed = urlparse(self.path)
         route = parsed.path
         qs = parse_qs(parsed.query)
