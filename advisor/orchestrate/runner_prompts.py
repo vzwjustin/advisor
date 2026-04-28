@@ -353,6 +353,16 @@ def build_runner_pool_agents(
     clamps ``config.max_runners``) cannot spawn an unbounded pool.
     """
     raw_size = pool_size if pool_size is not None else config.max_runners
+    if raw_size < 1:
+        # Mirror the ceiling clamp warning below: a silent floor-clamp on
+        # ``pool_size=0`` produced an empty agent list that broke the pipeline
+        # with no diagnostic. ``config.max_runners`` is already floored in
+        # ``default_team_config``; this guard catches the explicit-API path.
+        print(
+            _style.warning_box(f"pool_size={raw_size} is < 1; using 1"),
+            file=sys.stderr,
+        )
+        raw_size = 1
     if raw_size > _POOL_SIZE_CEILING:
         print(
             _style.warning_box(

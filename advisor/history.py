@@ -392,7 +392,14 @@ def file_repeat_scores(
     for entry in findings:
         if entry.status.upper() != "CONFIRMED":
             continue
-        weight = _SEVERITY_WEIGHTS.get(entry.severity.upper(), 1.0)
+        sev_key = entry.severity.upper()
+        # Sanitised entries (severity coerced to "UNKNOWN" by the allowlist
+        # in load_history) carry no signal — drop them rather than letting
+        # them ride the dict.get default and inflate the score with LOW
+        # weight. A corrupted record is not evidence of a finding.
+        if sev_key not in _SEVERITY_WEIGHTS:
+            continue
+        weight = _SEVERITY_WEIGHTS[sev_key]
         age = _age_days(entry, now=now_dt)
         contribution = weight * math.exp(-decay_lambda * age)
         if contribution <= 0:

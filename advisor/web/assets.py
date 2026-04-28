@@ -605,10 +605,10 @@ APP_JS = r"""(() => {
       parts.push(`--file-types ${shellQuote(form.get('file_types'))}`);
     }
     if (form.get('max_runners') && form.get('max_runners') !== '5') {
-      parts.push(`--max-runners ${form.get('max_runners')}`);
+      parts.push(`--max-runners ${shellQuote(form.get('max_runners'))}`);
     }
     if (form.get('min_priority') && form.get('min_priority') !== '3') {
-      parts.push(`--min-priority ${form.get('min_priority')}`);
+      parts.push(`--min-priority ${shellQuote(form.get('min_priority'))}`);
     }
     if (form.get('advisor_model') && form.get('advisor_model') !== 'opus') {
       parts.push(`--advisor-model ${shellQuote(form.get('advisor_model'))}`);

@@ -192,6 +192,13 @@ def default_team_config(
         runner_model = _env_or("ADVISOR_RUNNER_MODEL", runner_model)
     if max_runners is None:
         raw = _env_int_or("ADVISOR_MAX_RUNNERS", 5)
+        if raw < 1:
+            # Mirror the explicit-arg branch below so an env-var typo
+            # (ADVISOR_MAX_RUNNERS=0) doesn't silently revert to the default.
+            print(
+                _style.warning_box(f"ADVISOR_MAX_RUNNERS={raw} is < 1; using 5"),
+                file=sys.stderr,
+            )
         max_runners = raw if raw >= 1 else 5
     elif max_runners < 1:
         # Mirror the ceiling-clamp warning below: silent floor-clamping made

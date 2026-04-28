@@ -982,7 +982,11 @@ def _emit_plan(
             print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
             return 2
 
-    if getattr(args, "output", "") and not getattr(args, "json", False):
+    output_arg = getattr(args, "output", None)
+    if output_arg is not None and not getattr(args, "json", False):
+        # Catch the empty-string case too — a falsy ``output_arg`` previously
+        # bypassed the warning, leaving the user without feedback that
+        # --output was ignored AND nothing was written.
         print(
             _style.warning_box(
                 "--output is ignored without --json; pretty output still goes to stdout",

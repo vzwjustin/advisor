@@ -172,8 +172,17 @@ def estimate_cost(
             f"max_fixes_per_runner must be >= 0 (got {max_fixes_per_runner}); "
             "0 disables fix waves, negative is not meaningful"
         )
-    runner_limit = 5 if max_runners is None else max(1, max_runners)
-    runner_count = len(batches) if batches else min(runner_limit, len(tasks)) or 1
+    # max_runners=0 is a real input (Opus-direct mode skips the pool) — let
+    # it through so the estimate doesn't silently inflate to 1 runner. The
+    # downstream MIN/MAX math is all multiplicative on runner_count, so a
+    # zero count produces a plan that reflects an Opus-only pipeline.
+    runner_limit = 5 if max_runners is None else max(0, max_runners)
+    if batches:
+        runner_count = len(batches)
+    elif runner_limit == 0 or not tasks:
+        runner_count = 0
+    else:
+        runner_count = min(runner_limit, len(tasks))
     file_count = len(tasks)
 
     # Sum of per-file read tokens (runners read every file once during explore).
