@@ -2316,7 +2316,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_plan.add_argument(
         "--output",
-        default="",
+        default=None,
         metavar="FILE",
         help=(
             "Write the JSON plan to FILE instead of stdout "

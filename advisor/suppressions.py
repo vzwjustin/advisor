@@ -158,7 +158,12 @@ def load_suppressions(path: Path) -> tuple[Suppression, ...]:
     if not path.exists():
         return ()
     try:
-        text = path.read_text(encoding="utf-8")
+        # ``utf-8-sig`` strips a leading BOM if present — Windows editors
+        # (Notepad, older VSCode versions) write one, and a raw ``utf-8``
+        # decode would land the BOM inside the first JSONL line, causing
+        # ``json.loads`` to reject the schema-version header. Mirrors
+        # history.py for cross-reader consistency.
+        text = path.read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError) as exc:
         raise ValueError(f"could not read {path}: {exc}") from exc
 

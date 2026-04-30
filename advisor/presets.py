@@ -85,7 +85,7 @@ PRESETS: Final[dict[str, RulePack]] = {
         min_priority=3,
         extra_keywords_by_tier={
             5: ("jsonwebtoken", "bcrypt", "session", "cookie-parser"),
-            4: ("body-parser", "req.body", "eval", "Function("),
+            4: ("body-parser", "req.body", "eval", "new Function"),
         },
         test_command="npm test",
         notes=(),

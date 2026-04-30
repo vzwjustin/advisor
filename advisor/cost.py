@@ -276,21 +276,35 @@ def load_pricing(path: str | Path) -> dict[str, tuple[int, int]]:
         entry = raw[family]
         if isinstance(entry, dict):
             try:
-                in_c = int(entry["input"])
-                out_c = int(entry["output"])
-            except (KeyError, TypeError, ValueError) as exc:
+                raw_in = entry["input"]
+                raw_out = entry["output"]
+            except KeyError as exc:
                 raise ValueError(
                     f"pricing file {p}: family {family!r} object must have "
                     f"integer 'input' and 'output' keys"
                 ) from exc
+            # Reject non-integers explicitly. ``int(15.9)`` would silently
+            # truncate to 15 — wrong at a config boundary where the
+            # docstring promises integer cents-per-Mtok. ``isinstance(True,
+            # int)`` is True in Python, so carve out ``bool`` first.
+            for label, value in (("input", raw_in), ("output", raw_out)):
+                if isinstance(value, bool) or not isinstance(value, int):
+                    raise ValueError(
+                        f"pricing file {p}: family {family!r} {label!r} "
+                        f"must be an integer (got {value!r})"
+                    )
+            in_c = raw_in
+            out_c = raw_out
         elif isinstance(entry, list) and len(entry) == 2:
-            try:
-                in_c = int(entry[0])
-                out_c = int(entry[1])
-            except (TypeError, ValueError) as exc:
-                raise ValueError(
-                    f"pricing file {p}: family {family!r} array must contain two integers"
-                ) from exc
+            raw_in, raw_out = entry[0], entry[1]
+            for label, value in (("input", raw_in), ("output", raw_out)):
+                if isinstance(value, bool) or not isinstance(value, int):
+                    raise ValueError(
+                        f"pricing file {p}: family {family!r} array {label!r} "
+                        f"must be an integer (got {value!r})"
+                    )
+            in_c = raw_in
+            out_c = raw_out
         else:
             raise ValueError(
                 f"pricing file {p}: family {family!r} must be "

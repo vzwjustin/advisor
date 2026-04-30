@@ -29,10 +29,15 @@ def test_supports_color_no_color_env_disables(monkeypatch):
     assert _style.supports_color() is False
 
 
-def test_supports_color_no_color_empty_string_still_disables(monkeypatch):
-    """NO_COLOR spec: presence is what counts, not the value."""
+def test_supports_color_no_color_empty_string_does_not_disable(monkeypatch):
+    """NO_COLOR spec: only a non-empty value disables (https://no-color.org).
+
+    The spec text reads "...present and not an empty string (regardless of
+    its value)..." — so ``NO_COLOR=`` (empty) is explicitly NOT a disable.
+    Treating an empty value as "disable" was a prior misreading.
+    """
     monkeypatch.setenv("NO_COLOR", "")
-    assert _style.supports_color() is False
+    assert _style.supports_color() is True
 
 
 def test_supports_color_term_dumb_disables(monkeypatch):

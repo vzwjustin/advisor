@@ -26,4 +26,8 @@ def fence(payload: str, *, lang: str = "") -> str:
             run = 0
     fence_len = max(3, longest + 1)
     bar = "`" * fence_len
-    return f"{bar}{lang}\n{payload}\n{bar}"
+    # Strip CR/LF from ``lang`` so a caller passing untrusted text can't
+    # break the opening fence header into two lines and inject content as
+    # markdown above the fenced payload.
+    safe_lang = lang.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+    return f"{bar}{safe_lang}\n{payload}\n{bar}"

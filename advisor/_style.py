@@ -2,9 +2,9 @@
 
 Colors are emitted by default so subprocess contexts (Claude Code's
 Bash tool, IDEs, captured output) get the same styled view as a direct
-terminal session. Opt out with ``NO_COLOR=1`` (https://no-color.org) or
-``TERM=dumb``; under either, every helper returns the input string
-unchanged for byte-identical pipe output.
+terminal session. Opt out by setting ``NO_COLOR`` to any non-empty value
+(https://no-color.org) or ``TERM=dumb``; under either, every helper
+returns the input string unchanged for byte-identical pipe output.
 """
 
 from __future__ import annotations
@@ -28,7 +28,10 @@ _CODES = {
 
 
 def _compute_supports_color() -> bool:
-    if "NO_COLOR" in os.environ:
+    # Per https://no-color.org the spec disables color when ``NO_COLOR``
+    # is set to any non-empty value. ``NO_COLOR=`` (empty) does NOT
+    # disable — only a non-empty value does.
+    if os.environ.get("NO_COLOR", "") != "":
         return False
     if os.environ.get("TERM") == "dumb":
         return False

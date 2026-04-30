@@ -588,7 +588,11 @@ def format_audit_report(report: AuditReport) -> str:
     lines.append("## Out-of-batch findings (scope drift)")
     if report.findings_out_of_batch:
         for f in report.findings_out_of_batch:
-            lines.append(f"- `{f.file_path}` [{f.severity}] — {f.description}")
+            # Strip newlines from description: a multi-line string would
+            # break the markdown list and could mis-render continuation
+            # lines as headers if the next line starts with ``#``.
+            desc = f.description.replace("\r\n", " ").replace("\n", " ").replace("\r", " ").strip()
+            lines.append(f"- `{f.file_path}` [{f.severity}] — {desc}")
     else:
         lines.append("- (none — no runner reported on a file outside its batch)")
     lines.append("")
