@@ -996,6 +996,18 @@ def _emit_plan(
             ),
             file=sys.stderr,
         )
+    elif output_arg == "" and getattr(args, "json", False):
+        # ``--output ""`` with ``--json`` previously fell through to stdout
+        # silently — the falsy empty string passed the ``output_arg is not
+        # None`` guard above but tripped the ``if output_file:`` falsy check
+        # below. Warn so the user sees the same feedback as the no-JSON case.
+        print(
+            _style.warning_box(
+                "--output is empty; writing JSON to stdout instead of a file",
+                stream=sys.stderr,
+            ),
+            file=sys.stderr,
+        )
 
     if getattr(args, "json", False):
         estimate = None
@@ -1015,7 +1027,7 @@ def _emit_plan(
         if warnings:
             payload["budget_warnings"] = warnings
         rendered = json.dumps(payload, indent=2)
-        output_file = getattr(args, "output", None)
+        output_file = getattr(args, "output", None) or None
         if output_file:
             try:
                 _atomic_write(Path(output_file), rendered + "\n")

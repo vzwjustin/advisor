@@ -161,7 +161,7 @@ def load_checkpoint(target: str | Path, run_id: str) -> Checkpoint:
             f"{_MAX_CHECKPOINT_BYTES} bytes — refusing to load"
         )
     try:
-        obj = json.loads(path.read_text(encoding="utf-8"))
+        obj = json.loads(path.read_text(encoding="utf-8-sig"))
     except FileNotFoundError:
         raise FileNotFoundError(f"no checkpoint at {path}") from None
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
