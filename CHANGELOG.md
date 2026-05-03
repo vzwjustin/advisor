@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-05-03
+
+Three small UX features layered on top of v0.6.2's "What's new on
+install" banner. 743 tests pass · ruff/format/mypy clean.
+
+### Added
+
+- **`advisor changelog [VERSION]` / `advisor changelog --since X.Y.Z`** —
+  print bundled CHANGELOG entries on demand, not just at install time.
+  `advisor changelog 0.6.1` prints one section. `advisor changelog
+  --since 0.5.0` prints every section newer than that. `--json`
+  emits structured output for scripting.
+- **`advisor update`** — self-upgrade. Detects `uv tool` vs `pipx`
+  install layouts via the running binary's path, runs the right
+  upgrade command via subprocess, then re-execs `advisor install`
+  in a fresh process so the new version's "What's new" banner
+  surfaces automatically. Falls back to a printed manual-upgrade
+  hint when the install method can't be auto-detected.
+- **Behavioral Guidelines parity test** —
+  `tests/test_behavioral_guidelines_parity.py` pins the four rule
+  headings (Think Before / Simplicity First / Surgical Changes /
+  Goal-Driven) across `advisor.txt`, `runner_prompts.py`, and
+  `install.NUDGE_BODY`. CI now catches the "5th surface missed"
+  regression class found in audit pass V at lint time, not at
+  audit time.
+
+### Internal
+
+- `load_changelog_sections(since=None)` in `advisor.install` returns
+  newest-first `[(version, heading, body), ...]` tuples. Skips the
+  `[Unreleased]` heading. Used by the new `changelog` subcommand;
+  also handy for any future "missed-version" digests.
+
 ## [0.6.2] - 2026-05-03
 
 ### Added

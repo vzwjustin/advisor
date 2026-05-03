@@ -63,6 +63,16 @@ _CHANGELOG_CANDIDATES = (
 )
 
 
+def _read_changelog() -> str | None:
+    """Return the bundled CHANGELOG text, or ``None`` if unreadable."""
+    for candidate in _CHANGELOG_CANDIDATES:
+        try:
+            return candidate.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+    return None
+
+
 def load_release_notes(version: str) -> str | None:
     """Return the body of the ``## [version]`` section in the bundled CHANGELOG.
 
@@ -70,19 +80,45 @@ def load_release_notes(version: str) -> str | None:
     ``None`` when the changelog is missing, unreadable, or has no section
     for ``version``.
     """
-    for candidate in _CHANGELOG_CANDIDATES:
-        try:
-            text = candidate.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+    text = _read_changelog()
+    if text is None:
+        return None
+    pattern = re.compile(
+        rf"^## \[{re.escape(version)}\][^\n]*\n(.*?)(?=^## \[|\Z)",
+        re.DOTALL | re.MULTILINE,
+    )
+    m = pattern.search(text)
+    return m.group(1).strip() if m else None
+
+
+_VERSION_HEADING_RE = re.compile(
+    r"^## \[(?P<version>[^\]]+)\](?P<rest>[^\n]*)\n(?P<body>.*?)(?=^## \[|\Z)",
+    re.DOTALL | re.MULTILINE,
+)
+
+
+def load_changelog_sections(since: str | None = None) -> list[tuple[str, str, str]]:
+    """Return ``[(version, heading_rest, body), ...]`` newest-first.
+
+    Skips the ``[Unreleased]`` heading. When ``since`` is given, only
+    sections strictly newer than that version are returned (entries whose
+    ``_semver_tuple`` does not parse are kept so users still see them).
+    """
+    text = _read_changelog()
+    if text is None:
+        return []
+    sections: list[tuple[str, str, str]] = []
+    for m in _VERSION_HEADING_RE.finditer(text):
+        version = m.group("version").strip()
+        if version.lower() == "unreleased":
             continue
-        pattern = re.compile(
-            rf"^## \[{re.escape(version)}\][^\n]*\n(.*?)(?=^## \[|\Z)",
-            re.DOTALL | re.MULTILINE,
-        )
-        m = pattern.search(text)
-        if m:
-            return m.group(1).strip()
-    return None
+        if since is not None:
+            cur = _semver_tuple(version)
+            floor = _semver_tuple(since)
+            if cur is not None and floor is not None and cur <= floor:
+                continue
+        sections.append((version, m.group("rest").rstrip(), m.group("body").strip()))
+    return sections
 
 
 def get_installed_skill_version(path: Path | None = None) -> str | None:

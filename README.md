@@ -100,7 +100,9 @@ advisor prompt verify src/ < findings  # verify-pass prompt
 advisor status                         # install health check
 advisor status --json                  # JSON-formatted health for scripting
 advisor doctor                         # extended diagnostic: git/claude/python/env checks
-advisor install                        # install nudge + /advisor skill
+advisor install                        # install nudge + /advisor skill (prints What's new on upgrade)
+advisor update                         # self-upgrade via uv tool / pipx, then re-runs install
+advisor changelog [VERSION]            # print bundled CHANGELOG section(s); --since X.Y.Z for a digest
 advisor uninstall                      # remove nudge + /advisor skill
 advisor ui                             # launch local web dashboard on 127.0.0.1:8765
 advisor history                        # recent findings from .advisor/history.jsonl

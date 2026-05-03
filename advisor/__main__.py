@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 import time
 import warnings
@@ -56,6 +57,7 @@ from .install import (
     ensure_nudge,
     get_installed_skill_version,
     install_skill,
+    load_changelog_sections,
     load_release_notes,
     uninstall_skill,
 )
@@ -1423,6 +1425,111 @@ def cmd_protocol(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_changelog(args: argparse.Namespace) -> int:
+    """Print bundled CHANGELOG entries — single version or ``--since X.Y.Z``."""
+    requested: str | None = getattr(args, "version", None)
+    since: str | None = getattr(args, "since", None)
+    quiet = getattr(args, "quiet", False)
+    use_json = getattr(args, "json", False)
+
+    if requested:
+        notes = load_release_notes(requested)
+        if use_json:
+            print(
+                json.dumps(
+                    {
+                        "schema_version": JSON_SCHEMA_VERSION,
+                        "version": requested,
+                        "body": notes,
+                    }
+                )
+            )
+            return 0 if notes else _STRICT_NOOP_EXIT
+        if notes is None:
+            print(_style.error_box(f"no changelog section for {requested}", stream=sys.stderr))
+            return _STRICT_NOOP_EXIT
+        print(_style.banner(f"v{requested}"))
+        print(notes)
+        return 0
+
+    sections = load_changelog_sections(since=since)
+    if use_json:
+        print(
+            json.dumps(
+                {
+                    "schema_version": JSON_SCHEMA_VERSION,
+                    "since": since,
+                    "sections": [{"version": v, "heading": h, "body": b} for v, h, b in sections],
+                }
+            )
+        )
+        return 0 if sections else _STRICT_NOOP_EXIT
+    if not sections:
+        target = f"newer than {since}" if since else "available"
+        print(_style.error_box(f"no changelog sections {target}", stream=sys.stderr))
+        return _STRICT_NOOP_EXIT
+    for i, (version, _heading, body) in enumerate(sections):
+        if i:
+            print()
+        print(_style.banner(f"v{version}"))
+        print(body)
+    if not quiet:
+        print()
+        print(_style.cta("next", "advisor update"))
+    return 0
+
+
+def _detect_install_method() -> tuple[str, list[str]] | None:
+    """Best-effort: figure out how this advisor binary was installed.
+
+    Returns ``(label, command_argv)`` or ``None`` if we can't tell. Used by
+    ``advisor update`` to pick the right upgrade command.
+    """
+    exe = Path(sys.argv[0]).resolve() if sys.argv and sys.argv[0] else None
+    if exe is None or not exe.exists():
+        return None
+    parts = {p.lower() for p in exe.parts}
+    if "uv" in parts and "tools" in parts:
+        return "uv tool", ["uv", "tool", "install", "--reinstall", "advisor-agent"]
+    if "pipx" in parts:
+        return "pipx", ["pipx", "upgrade", "advisor-agent"]
+    return None
+
+
+def cmd_update(args: argparse.Namespace) -> int:
+    """Self-upgrade — detect install method, run upgrade, then ``install``."""
+    method = _detect_install_method()
+    if method is None:
+        print(
+            _style.error_box(
+                "Could not auto-detect install method. Upgrade manually:\n"
+                "  uv tool install --reinstall advisor-agent\n"
+                "  # or:\n"
+                "  pipx upgrade advisor-agent\n"
+                "  # or:\n"
+                "  pip install -U advisor-agent",
+                stream=sys.stderr,
+            )
+        )
+        return 1
+    label, cmd = method
+    if not getattr(args, "quiet", False):
+        print(_style.cta(label, " ".join(cmd)))
+    try:
+        completed = subprocess.run(cmd, check=False)
+    except (OSError, FileNotFoundError) as exc:
+        print(_style.error_box(f"upgrade failed: {exc}", stream=sys.stderr))
+        return 1
+    if completed.returncode != 0:
+        return completed.returncode
+    # Run `advisor install` in a fresh subprocess so it picks up the new
+    # version's bundled CHANGELOG and prints the "What's new" banner.
+    install_cmd = [str(Path(sys.argv[0]).resolve()), "install"]
+    if getattr(args, "quiet", False):
+        install_cmd.append("--quiet")
+    return subprocess.run(install_cmd, check=False).returncode
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     """Extended diagnostic: status + git/claude/python/env checks."""
     nudge_target = Path(args.path) if args.path else None
@@ -2610,6 +2717,33 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_protocol.add_argument("--quiet", action="store_true", help="Suppress CTA line")
     p_protocol.set_defaults(func=cmd_protocol)
+
+    p_changelog = sub.add_parser(
+        "changelog",
+        help="Print bundled CHANGELOG entries (single version or --since X.Y.Z)",
+    )
+    p_changelog.add_argument(
+        "version",
+        nargs="?",
+        default=None,
+        help="Specific version to print (e.g. 0.6.2); omit to print all",
+    )
+    p_changelog.add_argument(
+        "--since",
+        default=None,
+        metavar="VERSION",
+        help="Only print sections strictly newer than VERSION",
+    )
+    p_changelog.add_argument("--json", action="store_true", help="Emit sections as JSON")
+    p_changelog.add_argument("--quiet", action="store_true", help="Suppress CTA line")
+    p_changelog.set_defaults(func=cmd_changelog)
+
+    p_update = sub.add_parser(
+        "update",
+        help="Self-upgrade advisor (detects uv tool / pipx) then prints What's new",
+    )
+    p_update.add_argument("--quiet", action="store_true", help="Suppress CTA + install banner")
+    p_update.set_defaults(func=cmd_update)
 
     p_ui = sub.add_parser(
         "ui",
