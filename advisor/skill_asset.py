@@ -351,3 +351,47 @@ The local `advisor` binary provides:
 """
 
 SKILL_MD = SKILL_MD.replace("__VERSION_BADGE__", VERSION_BADGE)
+
+
+SKILL_MD_UPDATE = """---
+name: advisor-update
+description: >-
+  Self-upgrade workflow for the advisor CLI. Mirrors GSD's /gsd-update —
+  fetches the latest version from PyPI, previews the changelog between
+  installed and latest, asks for confirmation, then runs the upgrade and
+  re-runs `advisor install` so the new SKILL.md and CLAUDE.md nudge are
+  current.
+
+  TRIGGER when: the user invokes /advisor-update, says "update advisor",
+  "upgrade advisor", or asks how to get the newest version of the advisor
+  package.
+
+  DO NOT TRIGGER when: the user asks to run the advisor (use /advisor),
+  or to install advisor for the first time (use `advisor install`).
+origin: custom
+---
+__VERSION_BADGE__
+
+# /advisor-update — self-upgrade
+
+When invoked:
+
+1. Run `advisor update` via Bash. The CLI fetches PyPI, prints a
+   GSD-style preview of every changelog section newer than the
+   installed version, asks the user to confirm, runs the upgrade
+   (`uv tool install --reinstall` / `pipx upgrade` / `pip -U`), then
+   re-runs `advisor install` so the bundled CLAUDE.md nudge and
+   SKILL.md files are refreshed.
+2. After it completes, summarize for the user in one or two lines:
+   previous version → new version, and the headline change.
+
+Flags the user may pass through:
+- `-y` / `--yes` — skip the confirmation prompt (non-interactive).
+- `--no-preview` — skip the remote changelog fetch (offline / fast).
+- `--quiet` — suppress the trailing CTA + install banner.
+
+The CLI command owns the upgrade logic — your job is to invoke it and
+report the result, not to re-implement the flow.
+"""
+
+SKILL_MD_UPDATE = SKILL_MD_UPDATE.replace("__VERSION_BADGE__", VERSION_BADGE)

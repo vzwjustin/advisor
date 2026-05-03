@@ -61,10 +61,12 @@ from .install import (
     fetch_remote_changelog,
     get_installed_skill_version,
     install_skill,
+    install_update_skill,
     load_changelog_sections,
     load_release_notes,
     parse_changelog_sections,
     uninstall_skill,
+    uninstall_update_skill,
 )
 from .install import (
     install as install_nudge,
@@ -1223,12 +1225,16 @@ def _format_status(s: Status, version: str) -> str:
         _component_line(s.nudge),
         _component_line(s.skill),
     ]
+    if s.update_skill is not None:
+        lines.append(_component_line(s.update_skill))
     if s.opt_out:
         warn = _style.paint(_style.glyph("⚠", "!"), "yellow")
         lines.append(f"  {warn} auto-install disabled ({OPT_OUT_ENV} set)")
-    if not (s.nudge.present and s.skill.present):
+    update_ok = s.update_skill is None or (s.update_skill.present and s.update_skill.current)
+    update_present = s.update_skill is None or s.update_skill.present
+    if not (s.nudge.present and s.skill.present and update_present):
         lines.append(_style.cta("fix", "advisor install"))
-    elif not (s.nudge.current and s.skill.current):
+    elif not (s.nudge.current and s.skill.current and update_ok):
         lines.append(_style.cta("fix", "advisor install  (refresh outdated bits)"))
     return "\n".join(lines)
 
@@ -1252,14 +1258,28 @@ def _status_to_dict(
     # the badge convention (<= 0.4.0) or file unreadable.
     skill_block["installed_version"] = installed_skill_version
 
-    return {
+    update_skill_block: dict[str, object] | None = (
+        _c(s.update_skill) if s.update_skill is not None else None
+    )
+    update_ok = s.update_skill is None or (s.update_skill.present and s.update_skill.current)
+
+    payload: dict[str, object] = {
         "schema_version": JSON_SCHEMA_VERSION,
         "version": version,
         "nudge": _c(s.nudge),
         "skill": skill_block,
         "opt_out": s.opt_out,
-        "healthy": (s.nudge.present and s.nudge.current and s.skill.present and s.skill.current),
+        "healthy": (
+            s.nudge.present
+            and s.nudge.current
+            and s.skill.present
+            and s.skill.current
+            and update_ok
+        ),
     }
+    if update_skill_block is not None:
+        payload["update_skill"] = update_skill_block
+    return payload
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -1290,10 +1310,12 @@ def _run_install_op(
     nudge_fn: Callable[..., InstallResult],
     skill_fn: Callable[..., InstallResult],
     trailing_cta: tuple[str, str] | None,
+    update_skill_fn: Callable[..., InstallResult] | None = None,
 ) -> int:
-    """Shared body for ``install`` / ``uninstall``: call nudge + skill ops,
-    print per-component status lines, honor ``--skip-skill``/``--strict``
-    /``--quiet`` flags, and emit a trailing call-to-action.
+    """Shared body for ``install`` / ``uninstall``: call nudge + skill +
+    optional update-skill ops, print per-component status lines, honor
+    ``--skip-skill``/``--strict``/``--quiet`` flags, and emit a trailing
+    call-to-action.
     """
     nudge_target = Path(args.path) if args.path else None
     skill_target = Path(args.skill_path) if args.skill_path else None
@@ -1307,6 +1329,7 @@ def _run_install_op(
     if not quiet:
         print(_fmt_action("nudge", nudge_result.action, nudge_result.path))
 
+    update_skill_action = InstallAction.SKIPPED.value
     if args.skip_skill:
         skill_action: str = InstallAction.SKIPPED.value
     else:
@@ -1319,9 +1342,23 @@ def _run_install_op(
         if not quiet:
             print(_fmt_action("skill", skill_result.action, skill_result.path))
 
+        if update_skill_fn is not None:
+            try:
+                update_skill_result = update_skill_fn()
+            except (OSError, UnicodeDecodeError) as exc:
+                print(
+                    _style.error_box(f"update-skill: {exc}", stream=sys.stderr),
+                    file=sys.stderr,
+                )
+                return 1
+            update_skill_action = update_skill_result.action
+            if not quiet:
+                print(_fmt_action("update", update_skill_result.action, update_skill_result.path))
+
     if args.strict and (
         nudge_result.action in _NOOP_ACTIONS
         and skill_action in (*_NOOP_ACTIONS, InstallAction.SKIPPED.value)
+        and update_skill_action in (*_NOOP_ACTIONS, InstallAction.SKIPPED.value)
     ):
         return _STRICT_NOOP_EXIT
     _CHANGE_ACTIONS = (InstallAction.INSTALLED.value, InstallAction.UPDATED.value)
@@ -1329,7 +1366,11 @@ def _run_install_op(
         not quiet
         and trailing_cta
         and trailing_cta[0].startswith("/advisor")  # only on `install`, not `uninstall`
-        and (nudge_result.action in _CHANGE_ACTIONS or skill_action in _CHANGE_ACTIONS)
+        and (
+            nudge_result.action in _CHANGE_ACTIONS
+            or skill_action in _CHANGE_ACTIONS
+            or update_skill_action in _CHANGE_ACTIONS
+        )
     ):
         notes = load_release_notes(_get_version())
         if notes:
@@ -1380,7 +1421,14 @@ def cmd_install(args: argparse.Namespace) -> int:
             print(json.dumps(_status_to_dict(s, _get_version(), installed), indent=2))
         elif not quiet:
             print(_format_status(s, _get_version()))
-        ok = s.nudge.present and s.nudge.current and s.skill.present and s.skill.current
+        update_ok = s.update_skill is None or (s.update_skill.present and s.update_skill.current)
+        ok = (
+            s.nudge.present
+            and s.nudge.current
+            and s.skill.present
+            and s.skill.current
+            and update_ok
+        )
         return 0 if ok else _STRICT_NOOP_EXIT
 
     return _run_install_op(
@@ -1388,6 +1436,7 @@ def cmd_install(args: argparse.Namespace) -> int:
         install_nudge,
         install_skill,
         ("/advisor <path>", "run the advisor on a codebase"),
+        update_skill_fn=install_update_skill,
     )
 
 
@@ -1398,6 +1447,7 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
         uninstall_nudge,
         uninstall_skill,
         ("advisor install", "reinstall if you change your mind"),
+        update_skill_fn=uninstall_update_skill,
     )
 
 
@@ -1644,8 +1694,13 @@ def cmd_update(args: argparse.Namespace) -> int:
     if completed.returncode != 0:
         return completed.returncode
 
-    # Phase 5 — re-exec `advisor install` in a fresh subprocess so the new
-    # version's bundled CHANGELOG is what prints the post-upgrade banner.
+    # Phase 5 — GSD-style boxed "Updated: vX → vY" banner once the upgrade
+    # subprocess has succeeded, then re-exec ``advisor install`` in a fresh
+    # subprocess so the new version's bundled CHANGELOG is what prints the
+    # post-upgrade ``What's new`` digest.
+    if not quiet and latest is not None and latest != current:
+        print()
+        print(_style.banner(f"Updated: v{current} → v{latest}"))
     install_cmd = [str(Path(sys.argv[0]).resolve()), "install"]
     if quiet:
         install_cmd.append("--quiet")

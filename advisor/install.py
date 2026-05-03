@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import IO
 
 from ._fs import atomic_write_text as _shared_atomic_write
-from .skill_asset import SKILL_MD
+from .skill_asset import SKILL_MD, SKILL_MD_UPDATE
 
 #: Matches ``<!-- advisor:0.4.0 -->``; used to extract installed skill version
 #: without hashing or diffing the whole file.
@@ -277,6 +277,7 @@ END_MARKER = "<!-- advisor:nudge:end -->"
 
 SKILL_DIR_NAME = "advisor"
 SKILL_FILE_NAME = "SKILL.md"
+UPDATE_SKILL_DIR_NAME = "advisor-update"
 
 NUDGE_BODY = """## Advisor Tool (review-and-fix pipeline)
 
@@ -375,6 +376,7 @@ class Status:
     nudge: ComponentStatus
     skill: ComponentStatus
     opt_out: bool
+    update_skill: ComponentStatus | None = None
 
 
 def render_block(body: str = NUDGE_BODY) -> str:
@@ -609,6 +611,10 @@ def default_skill_path() -> Path:
     return default_skills_root() / SKILL_DIR_NAME / SKILL_FILE_NAME
 
 
+def default_update_skill_path() -> Path:
+    return default_skills_root() / UPDATE_SKILL_DIR_NAME / SKILL_FILE_NAME
+
+
 def install_skill(
     path: Path | None = None,
     body: str = SKILL_MD,
@@ -663,6 +669,51 @@ def install_skill(
     return InstallResult(path=target, action=InstallAction.INSTALLED.value)
 
 
+def install_update_skill(
+    path: Path | None = None,
+    body: str = SKILL_MD_UPDATE,
+) -> InstallResult:
+    """Write the bundled /advisor-update SKILL.md (default
+    ``~/.claude/skills/advisor-update/SKILL.md``).
+
+    Mirrors :func:`install_skill` — same $HOME guard, same symlink-rejection,
+    same atomic write — but targets the sibling skill directory so Claude
+    Code registers ``/advisor-update`` as its own slash command.
+    """
+    target = path or default_update_skill_path()
+    if path is None:
+        resolved = target.resolve()
+        if not resolved.is_relative_to(Path.home().resolve()):
+            raise OSError(f"refusing to install skill outside $HOME: {resolved}")
+        target = resolved
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    if target.exists():
+        try:
+            current = target.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            current = ""
+        if current == body:
+            return InstallResult(path=target, action=InstallAction.UNCHANGED.value)
+        installed_v = parse_badge(current)
+        bundled_v = parse_badge(body)
+        if (
+            installed_v is not None
+            and bundled_v is not None
+            and _is_semver_newer(installed_v, bundled_v)
+        ):
+            print(
+                f"warning: overwriting SKILL.md v{installed_v} with bundled "
+                f"v{bundled_v} (downgrade); the installed copy is newer.",
+                file=sys.stderr,
+            )
+        _atomic_write_text(target, body)
+        return InstallResult(path=target, action=InstallAction.UPDATED.value)
+
+    _atomic_write_text(target, body)
+    return InstallResult(path=target, action=InstallAction.INSTALLED.value)
+
+
 def status(
     nudge_path: Path | None = None,
     skill_path: Path | None = None,
@@ -671,6 +722,7 @@ def status(
     """Inspect the local advisor install — does not write anything."""
     nudge_target = nudge_path or default_claude_md()
     skill_target = skill_path or default_skill_path()
+    update_skill_target = default_update_skill_path()
     expected_block = render_block().strip()
 
     nudge_present = False
@@ -691,6 +743,16 @@ def status(
         except (OSError, UnicodeDecodeError):
             skill_current = False
 
+    update_skill_present = update_skill_target.exists()
+    update_skill_current = False
+    if update_skill_present:
+        try:
+            update_skill_current = (
+                update_skill_target.read_text(encoding="utf-8") == SKILL_MD_UPDATE
+            )
+        except (OSError, UnicodeDecodeError):
+            update_skill_current = False
+
     return Status(
         nudge=ComponentStatus(
             name="nudge",
@@ -703,6 +765,12 @@ def status(
             path=skill_target,
             present=skill_present,
             current=skill_current,
+        ),
+        update_skill=ComponentStatus(
+            name="update-skill",
+            path=update_skill_target,
+            present=update_skill_present,
+            current=update_skill_current,
         ),
         opt_out=not should_auto_nudge(env),
     )
@@ -733,6 +801,27 @@ def uninstall_skill(path: Path | None = None) -> InstallResult:
     parent = target.parent
     try:
         if parent.name == SKILL_DIR_NAME and not any(parent.iterdir()):
+            parent.rmdir()
+    except OSError:
+        pass
+    return InstallResult(path=target, action=InstallAction.REMOVED.value)
+
+
+def uninstall_update_skill(path: Path | None = None) -> InstallResult:
+    """Remove the /advisor-update SKILL.md and its parent directory if empty.
+
+    Mirrors :func:`uninstall_skill` — same symlink rejection, same parent
+    cleanup — but targets the sibling ``advisor-update`` skill directory.
+    """
+    target = path or default_update_skill_path()
+    if not target.exists():
+        return InstallResult(path=target, action=InstallAction.ABSENT.value)
+    if target.is_symlink():
+        raise OSError(f"refusing to unlink symlink at {target}; remove it manually if intended")
+    target.unlink()
+    parent = target.parent
+    try:
+        if parent.name == UPDATE_SKILL_DIR_NAME and not any(parent.iterdir()):
             parent.rmdir()
     except OSError:
         pass

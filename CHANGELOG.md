@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.7] - 2026-05-03
+
+GSD-parity install/upgrade UX — `/advisor-update` slash command and a
+boxed `Updated: vX → vY` banner.
+
+### Added
+
+- **`/advisor-update` slash command** — bundled SKILL.md installed at
+  `~/.claude/skills/advisor-update/SKILL.md` so the upgrade flow is
+  invocable from inside Claude Code, mirroring `/gsd-update`. The
+  skill shells out to `advisor update`, which already does the
+  preview-confirm-upgrade dance.
+- **Boxed `Updated: vX → vY` banner** on `advisor update` after the
+  upgrade subprocess succeeds — printed once, just before the
+  re-execed `advisor install` prints the `What's new` digest.
+- **`advisor.install.install_update_skill` / `uninstall_update_skill`**
+  — public Python API parallel to `install_skill` / `uninstall_skill`,
+  so scripts can manage the new skill independently.
+- **Third component row** in `advisor status`, `advisor install`, and
+  `advisor install --check --json` reporting the `update` skill state
+  alongside the existing nudge + skill rows.
+
 ## [0.6.6] - 2026-05-03
 
 GSD-style "update available" indicator — surfaces a yellow warning
