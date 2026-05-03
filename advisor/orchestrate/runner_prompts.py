@@ -210,6 +210,30 @@ def build_runner_pool_prompt(runner_id: int, config: TeamConfig) -> str:
         "When a later assignment touches something you have already seen, "
         "**use what you know**. Don't re-derive. Bring it up when it helps "
         "the advisor see the whole picture.\n\n"
+        "## Behavioral guidelines\n\n"
+        "These bias toward caution over speed. For trivial single-line "
+        "edits, use judgment.\n\n"
+        "1. **Think before coding.** State assumptions explicitly. If "
+        "   multiple interpretations exist, surface them to the advisor — "
+        "   don't pick silently. If a simpler approach exists, push back. "
+        "   If something is unclear, name what's confusing and ask.\n"
+        "2. **Simplicity first.** Minimum code that solves the problem. "
+        "   No features beyond what was asked. No abstractions for "
+        "   single-use code. No 'flexibility' or 'configurability' that "
+        "   wasn't requested. No error handling for impossible scenarios. "
+        "   If your diff is 200 lines and could be 50, rewrite it before "
+        "   sending.\n"
+        "3. **Surgical changes.** Touch only what the assignment "
+        "   requires. Do not 'improve' adjacent code, comments, or "
+        "   formatting. Do not refactor things that aren't broken. Match "
+        "   existing style even if you'd do it differently. If you "
+        "   notice unrelated dead code, mention it to the advisor — do "
+        "   not delete it. Every changed line must trace directly to the "
+        "   assignment.\n"
+        "4. **Goal-driven execution.** Treat the assignment's acceptance "
+        "   criterion as your loop condition. Verify it before reporting "
+        "   done. If the criterion is weak ('make it work'), ask the "
+        "   advisor to sharpen it before you start.\n\n"
         "## Your loop\n\n"
         "Right now, announce yourself to team-lead. The SCOPE anchor is "
         "mandatory on every message you send — for the announcement, use "
@@ -288,12 +312,18 @@ def build_runner_pool_prompt(runner_id: int, config: TeamConfig) -> str:
         f"{config.max_fixes_per_runner} fix assignments per runner. Track "
         "your own fix count. "
         + _fix_count_trigger(config.max_fixes_per_runner)
-        + f"For batches containing any file >= "
-        f"{config.large_file_line_threshold} lines, the effective cap is "
-        f"{config.large_file_max_fixes} — the advisor will stamp the "
-        "correct cap on every fix assignment message. **In that case, "
-        "use the trigger below instead of the default above:**\n\n"
-        + _fix_count_trigger(config.large_file_max_fixes)
+        + (
+            (
+                f"For batches containing any file >= "
+                f"{config.large_file_line_threshold} lines, the effective cap is "
+                f"{config.large_file_max_fixes} — the advisor will stamp the "
+                "correct cap on every fix assignment message. **In that case, "
+                "use the trigger below instead of the default above:**\n\n"
+                + _fix_count_trigger(config.large_file_max_fixes)
+            )
+            if config.large_file_max_fixes != config.max_fixes_per_runner
+            else ""
+        )
         + "If the advisor stamps any cap lower than "
         f"{config.max_fixes_per_runner}, apply the same one-before-cap "
         "rule (or the cap=1 immediate-ping rule) to that cap.\n\n"
@@ -564,6 +594,13 @@ def build_fix_assignment_message(
     ``is_large_file`` is True, else ``max_fixes``. When a batch mixes file
     sizes, the caller is responsible for passing the *lowest* applicable
     cap — this function does not try to guess.
+
+    The caller also owns the ``is_large_file`` flag: it must be ``True``
+    iff ``file_path`` has at least ``TeamConfig.large_file_line_threshold``
+    lines (the same ``>=`` boundary used by ``check_batch_fix_budget``). The
+    builder does not re-read the file to verify, so an inconsistent flag
+    silently widens the cap. See ``check_batch_fix_budget`` for the
+    canonical pre-flight check.
 
     Budget enforcement:
 

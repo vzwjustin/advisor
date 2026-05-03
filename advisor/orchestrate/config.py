@@ -229,8 +229,17 @@ def default_team_config(
         min_priority = _env_int_or("ADVISOR_MIN_PRIORITY", min_priority)
     # Clamp to the valid P1–P5 range. Argparse guards the CLI, but the
     # env-var path (ADVISOR_MIN_PRIORITY) and direct API callers could
-    # otherwise pass anything.
-    min_priority = max(1, min(5, min_priority))
+    # otherwise pass anything. Surface the clamp with a warning so a
+    # silent typo (ADVISOR_MIN_PRIORITY=10) doesn't masquerade as the
+    # configured default — mirrors the max_runners floor/ceiling
+    # warnings above so all bound-violations have the same visibility.
+    if not 1 <= min_priority <= 5:
+        clamped = max(1, min(5, min_priority))
+        print(
+            _style.warning_box(f"min_priority={min_priority} outside P1–P5; using {clamped}"),
+            file=sys.stderr,
+        )
+        min_priority = clamped
     if test_command_is_default:
         test_command = _env_or("ADVISOR_TEST_COMMAND", test_command)
 

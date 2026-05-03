@@ -40,6 +40,7 @@ from .._fs import validate_file_types as _validate_file_types
 from ..cost import estimate_cost
 from ..focus import FocusTask, create_focus_tasks
 from ..history import HISTORY_SCHEMA_VERSION, history_path, load_recent
+from ..orchestrate.config import POOL_SIZE_CEILING
 from ..rank import load_advisorignore, rank_files
 from .assets import APP_CSS, APP_JS, INDEX_HTML
 
@@ -104,15 +105,24 @@ def _first(qs: dict[str, list[str]], key: str, default: str) -> str:
     return default
 
 
-def _first_int(qs: dict[str, list[str]], key: str, default: int, *, min_value: int = 0) -> int:
-    """Parse a query-string int with a lower bound.
+def _first_int(
+    qs: dict[str, list[str]],
+    key: str,
+    default: int,
+    *,
+    min_value: int = 0,
+    max_value: int | None = None,
+) -> int:
+    """Parse a query-string int with a lower (and optional upper) bound.
 
-    Negative or malformed values fall back to ``default`` — downstream
-    handlers assume non-negative counts/limits and sanity-clamp the
-    upper bound separately. The returned value is also clamped to at
-    least ``min_value`` so a caller that accidentally passes an invalid
-    ``default`` (e.g. ``default=-1, min_value=1``) still gets a legal
-    result rather than propagating the bug downstream.
+    Negative or malformed values fall back to ``default``. The returned
+    value is clamped to at least ``min_value`` so a caller that
+    accidentally passes an invalid ``default`` (e.g. ``default=-1,
+    min_value=1``) still gets a legal result rather than propagating the
+    bug downstream. When ``max_value`` is supplied, values above it are
+    clamped down — preventing an unbounded query-string int from flowing
+    into cost-estimation math (``estimate_cost(max_runners=10**18)``)
+    and producing nonsensical results.
     """
     try:
         value = int(_first(qs, key, str(default)))
@@ -120,6 +130,8 @@ def _first_int(qs: dict[str, list[str]], key: str, default: int, *, min_value: i
         return max(default, min_value)
     if value < min_value:
         return max(default, min_value)
+    if max_value is not None and value > max_value:
+        return max_value
     return value
 
 
@@ -163,8 +175,15 @@ def _plan_payload(state: AppState, qs: dict[str, list[str]]) -> dict[str, Any]:
 def _cost_payload(state: AppState, qs: dict[str, list[str]]) -> dict[str, Any]:
     advisor_model = _first(qs, "advisor_model", state.default_advisor_model)
     runner_model = _first(qs, "runner_model", state.default_runner_model)
-    max_runners = _first_int(qs, "max_runners", state.default_max_runners, min_value=1)
-    max_fixes = _first_int(qs, "max_fixes_per_runner", 5, min_value=1)
+    # Cap query-string ints so an unbounded value can't flow into estimate_cost
+    # math (e.g. max_runners=10**18) and produce nonsensical float output. The
+    # max_runners ceiling matches the CLI/env-var path (POOL_SIZE_CEILING). The
+    # max_fixes ceiling is generous — well above any real runner config — but
+    # bounded so the cost-estimate divisor stays finite.
+    max_runners = _first_int(
+        qs, "max_runners", state.default_max_runners, min_value=1, max_value=POOL_SIZE_CEILING
+    )
+    max_fixes = _first_int(qs, "max_fixes_per_runner", 5, min_value=1, max_value=100)
     file_types = _first(qs, "file_types", state.default_file_types)
     min_priority = _first_int(qs, "min_priority", state.default_min_priority)
     tasks = _rank_target(state, file_types, min_priority)
@@ -198,7 +217,7 @@ def _history_payload(state: AppState, qs: dict[str, list[str]]) -> dict[str, Any
     # could otherwise be used to exhaust memory on a large history file.
     # Also reject non-positive values so invalid limits fall back to the
     # default window instead of silently looking like "no history" in the UI.
-    limit = min(_first_int(qs, "limit", 100, min_value=1), 1000)
+    limit = _first_int(qs, "limit", 100, min_value=1, max_value=1000)
     entries = load_recent(state.target, limit=limit)
     return {
         "schema_version": HISTORY_SCHEMA_VERSION,

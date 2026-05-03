@@ -288,8 +288,14 @@ def load_recent_findings(history_path: Path, *, limit: int = 500) -> list[Histor
             # Allowlist severity/status — they flow unescaped into the advisor
             # prompt label line (format_history_block) and a CSS class suffix in
             # the dashboard. A crafted newline in either field would inject.
-            sev = obj["severity"] if obj["severity"] in _ALLOWED_SEVERITIES else "UNKNOWN"
-            status = obj["status"] if obj["status"] in _ALLOWED_STATUSES else "UNKNOWN"
+            # Normalize to upper-case so foreign / hand-edited entries with
+            # lowercase values don't diverge between file_repeat_counts (which
+            # ignores severity entirely) and file_repeat_scores (which drops
+            # UNKNOWN at line 395).
+            sev_raw = obj["severity"].upper()
+            status_raw = obj["status"].upper()
+            sev = sev_raw if sev_raw in _ALLOWED_SEVERITIES else "UNKNOWN"
+            status = status_raw if status_raw in _ALLOWED_STATUSES else "UNKNOWN"
             entries.append(
                 HistoryEntry(
                     timestamp=obj["timestamp"],

@@ -452,10 +452,22 @@ def _double_star_to_regex(pattern: str) -> re.Pattern[str]:
     """
     # Count quantifiers up front; reject before compile if pathological.
     # Each ``*`` (single or doubled) and each ``?`` is one quantifier.
+    # Skip the body of ``[...]`` char classes so a literal ``*`` or ``?``
+    # inside a class doesn't inflate the count and silently disable a
+    # legitimate ignore rule via the never-match sentinel below.
     quantifier_count = 0
     j = 0
     while j < len(pattern):
         ch = pattern[j]
+        if ch == "[":
+            end = pattern.find("]", j)
+            if end == -1:
+                # Unterminated class — translator treats the ``[`` as literal,
+                # so do the same here and keep walking.
+                j += 1
+            else:
+                j = end + 1
+            continue
         if ch == "*":
             quantifier_count += 1
             # consume both stars in ``**`` as a single quantifier

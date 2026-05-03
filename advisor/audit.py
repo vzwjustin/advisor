@@ -108,12 +108,18 @@ def _strip_fenced_blocks(text: str) -> str:
                 fence_open_line = idx
                 out.append("")  # preserve line numbering for any later use
                 continue
-            if marker == this_marker:
-                marker = None
-                in_fence = False
-                fence_open_line = None
-                out.append("")
-                continue
+            # Close on any triple-marker line while in a fence — runners
+            # routinely emit mismatched pairs (``~~~`` open, ``\`\`\`` close).
+            # The strict same-marker policy left the fence latched past the
+            # intended close, then the unclosed-fence recovery below restored
+            # the entire tail, exposing any PROTOCOL_VIOLATION inside the
+            # block as a false positive. Mirror verify.py's close-on-any
+            # policy so the two parsers agree on fence boundaries.
+            marker = None
+            in_fence = False
+            fence_open_line = None
+            out.append("")
+            continue
         if in_fence:
             out.append("")
         else:

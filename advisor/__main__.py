@@ -334,7 +334,9 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
         help=(
             "Glob pattern matched against each path's filename during rglob "
             "(recursive). `*.py` already descends into subdirectories — do "
-            "NOT pass `**/*.py`. Examples: `*.py`, `*.{py,pyi}`, `*.ts`."
+            "NOT pass `**/*.py`. Multiple patterns may be comma-separated "
+            "(brace expansion is NOT supported). Examples: `*.py`, "
+            "`*.py,*.pyi`, `*.ts`."
         ),
     )
     parser.add_argument(
@@ -1820,6 +1822,7 @@ def _load_findings_from_input(
             doc = None
         if doc is not None:
             unrecognized_dict_keys: list[str] | None = None
+            unexpected_top_type: str | None = None
             if isinstance(doc, dict):
                 if "findings_in_batch" in doc:
                     raw = doc.get("findings_in_batch") or []
@@ -1834,7 +1837,11 @@ def _load_findings_from_input(
             elif isinstance(doc, list):
                 raw = doc
             else:
+                # Bare JSON primitive (int / str / bool / null). Record the
+                # type so the no-findings branch below warns instead of
+                # silently falling through to the markdown parser.
                 raw = []
+                unexpected_top_type = type(doc).__name__
             findings: list[object] = []
             for f in raw:
                 if not isinstance(f, dict):
@@ -1869,6 +1876,17 @@ def _load_findings_from_input(
                         _style.warning_box(
                             "JSON input has no 'findings' or 'findings_in_batch' key; "
                             f"got keys: {unrecognized_dict_keys}",
+                            stream=sys.stderr,
+                        ),
+                        file=sys.stderr,
+                    )
+                elif unexpected_top_type is not None:
+                    print(
+                        _style.warning_box(
+                            f"JSON input is a bare {unexpected_top_type}; "
+                            "expected a list of findings or an object with "
+                            "a 'findings' / 'findings_in_batch' key. "
+                            "Falling back to the markdown parser.",
                             stream=sys.stderr,
                         ),
                         file=sys.stderr,

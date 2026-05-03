@@ -582,9 +582,10 @@ APP_JS = r"""(() => {
     (data.tasks || []).forEach((t, i) => {
       const tr = document.createElement('tr');
       const pri = escapeHtml(String(t.priority));
+      const priCls = priorityClass(t.priority);
       tr.innerHTML = `
         <td>${i + 1}</td>
-        <td><span class="pri-${pri}">P${pri}</span></td>
+        <td><span class="pri-${priCls}">P${pri}</span></td>
         <td><code>${escapeHtml(t.file_path)}</code></td>
       `;
       tbody.appendChild(tr);
@@ -690,6 +691,14 @@ APP_JS = r"""(() => {
   function severityClass(s) {
     const upper = (s || '').toUpperCase();
     return SEV_ALLOW.has(upper) ? upper : 'LOW';
+  }
+  const PRI_ALLOW = new Set(['1', '2', '3', '4', '5']);
+  function priorityClass(p) {
+    // Defense-in-depth: priority is server-controlled today but mirror
+    // severityClass's allowlist so a future API drift can't inject a
+    // CSS class fragment via the ${pri} template hole.
+    const s = String(p);
+    return PRI_ALLOW.has(s) ? s : '0';
   }
   function shellQuote(s) {
     s = String(s);
