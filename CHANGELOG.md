@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-05-03
+
+Audit pass V — 3 correctness fixes (1 MEDIUM + 2 LOW), 741 tests pass,
+ruff/format/mypy clean.
+
+### Fixed
+
+- **`install.py` NUDGE_BODY now embeds Behavioral Guidelines** (MEDIUM).
+  The 2026-05-02 "all 4 surfaces" rollout of the 4-rule block (Think
+  Before / Simplicity / Surgical / Goal-Driven) covered `advisor.txt`,
+  `runner_prompts.py`, and the user's own `CLAUDE.md` — but missed the
+  `NUDGE_BODY` constant in `install.py`. Result: anyone running a fresh
+  `advisor install` after 2026-05-02 received the pipeline nudge **without**
+  the guidelines. Existing installs were unaffected. Now the sentinel-
+  wrapped block written to `~/.claude/CLAUDE.md` includes the full 4-rule
+  guidelines (user-perspective wording). Existing installs catch up on
+  next `advisor install` via `apply_nudge` atomic replace.
+- **`checkpoint.py:164`** uses `utf-8-sig` instead of `utf-8` (LOW).
+  Aligns with peer JSON/JSONL readers (`baseline.py`, `history.py`,
+  `suppressions.py`). A checkpoint file with a UTF-8 BOM (e.g. one edited
+  on Windows) no longer crashes `json.loads` on the first load.
+- **`advisor plan --output "" --json` no longer silent** (LOW). The
+  empty-string `--output` value previously skipped the "ignored under
+  --json" warning *and* the file-write branch, falling through to stdout
+  silently. Now it warns explicitly and normalizes the path to `None`
+  before constructing `Path()`.
+
+### Reviewed
+
+Runner-2 swept the parser/scoring core (`rank.py`, `verify.py`, `audit.py`,
+`_fence.py`, `runner_prompts.py`, `baseline.py`, `suppressions.py`,
+`history.py`, `checkpoint.py`) and confirmed every fix from passes K
+through U is present and correct. Behavioral Guidelines parity check
+between `advisor.txt:29-36` and `runner_prompts.py:213-236` —
+semantically equivalent (advisor-perspective vs runner-perspective
+phrasing is intentional). No drift.
+
+Runner-3 swept the web layer (`web/assets.py`, `web/server.py`),
+I/O primitives (`_fs.py`, `git_scope.py`), and remaining utilities —
+all PASS, no exploit paths in the localhost-only dashboard.
+
+### Rejected after re-reading the source
+
+- `__main__.py:855` SARIF written before `_emit_plan` completes — the
+  comment at lines 856-861 documents this as intentional ("Plan runs
+  before the live pipeline produces findings"). Empty SARIF is a
+  CI-artifact-slot placeholder, not a stale write.
+- `__main__.py:2838` `_NUDGE_SKIP_COMMANDS` extension for `checkpoints`
+  / `history` — `ensure_nudge()` is itself idempotent (sentinel check
+  before write); the "every other subcommand triggers it" behavior is
+  documented intent.
+
 ## [0.6.0] - 2026-04-27
 
 Six rounds of adversarial audits across the entire `advisor/` tree, plus
