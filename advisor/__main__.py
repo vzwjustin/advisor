@@ -55,6 +55,7 @@ from .install import (
     InstallResult,
     Status,
     _semver_tuple,
+    check_for_update_cached,
     ensure_nudge,
     fetch_pypi_latest_version,
     fetch_remote_changelog,
@@ -1276,6 +1277,8 @@ def cmd_status(args: argparse.Namespace) -> int:
         if healthy:
             print()
             print(_style.cta("/advisor <path>", "run the advisor on a codebase"))
+        if not getattr(args, "quiet", False):
+            _maybe_print_update_indicator()
 
     if getattr(args, "strict", False) and not healthy:
         return _STRICT_NOOP_EXIT
@@ -1333,10 +1336,36 @@ def _run_install_op(
             print()
             print(_style.banner(f"What's new in v{_get_version()}"))
             print(notes)
+    if not quiet and trailing_cta and trailing_cta[0].startswith("/advisor"):
+        update = check_for_update_cached(current=_get_version())
+        if update is not None:
+            warn = _style.glyph("⚠", "[!]")
+            line = (
+                f"  {_style.paint(warn, 'yellow', 'bold')} "
+                f"{_style.paint(f'update available: v{update}', 'yellow')} "
+                f"{_style.dim(f'(current: v{_get_version()} — run `advisor update`)')}"
+            )
+            print()
+            print(line)
     if trailing_cta and not quiet:
         print()
         print(_style.cta(*trailing_cta))
     return 0
+
+
+def _maybe_print_update_indicator() -> None:
+    """Print a yellow `update available` line if PyPI has a newer version."""
+    update = check_for_update_cached(current=_get_version())
+    if update is None:
+        return
+    warn = _style.glyph("⚠", "[!]")
+    line = (
+        f"  {_style.paint(warn, 'yellow', 'bold')} "
+        f"{_style.paint(f'update available: v{update}', 'yellow')} "
+        f"{_style.dim(f'(current: v{_get_version()} — run `advisor update`)')}"
+    )
+    print()
+    print(line)
 
 
 def cmd_install(args: argparse.Namespace) -> int:
@@ -1644,6 +1673,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             else:
                 print(_style.cta("fix", "advisor install"))
     strict = getattr(args, "strict", False)
+    if not getattr(args, "json", False) and not getattr(args, "quiet", False):
+        _maybe_print_update_indicator()
     if strict and not report.healthy:
         return _STRICT_NOOP_EXIT
     return 0

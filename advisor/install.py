@@ -142,6 +142,70 @@ def fetch_pypi_latest_version(package: str = "advisor-agent", timeout: float = 5
     return version if isinstance(version, str) else None
 
 
+def _update_check_cache_path() -> Path:
+    """Return ``~/.claude/.advisor/update-check.json`` (parent created lazily)."""
+    return Path.home() / ".claude" / ".advisor" / "update-check.json"
+
+
+def check_for_update_cached(
+    *,
+    current: str,
+    ttl_seconds: int = 86400,
+    cache_path: Path | None = None,
+) -> str | None:
+    """Return the latest PyPI version when newer than ``current``, else ``None``.
+
+    Caches the PyPI lookup for ``ttl_seconds`` (default 24h) so successive
+    CLI invocations don't hammer the index. Network failures are silent —
+    a stale cache is preferred over breaking the user's CLI.
+    """
+    import json as _json
+    import time as _time
+
+    path = cache_path or _update_check_cache_path()
+    now = _time.time()
+    cached_latest: str | None = None
+    cached_at: float = 0.0
+    try:
+        cached = _json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, _json.JSONDecodeError, ValueError):
+        cached = None
+    if isinstance(cached, dict):
+        latest_val = cached.get("latest")
+        at_val = cached.get("checked_at")
+        if isinstance(latest_val, str):
+            cached_latest = latest_val
+        if isinstance(at_val, (int, float)):
+            cached_at = float(at_val)
+
+    latest: str | None
+    if cached_latest is not None and (now - cached_at) < ttl_seconds:
+        latest = cached_latest
+    else:
+        fetched = fetch_pypi_latest_version()
+        if fetched is None:
+            # Network failed; fall back to the (possibly stale) cache value.
+            latest = cached_latest
+        else:
+            latest = fetched
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(
+                    _json.dumps({"latest": latest, "checked_at": now}),
+                    encoding="utf-8",
+                )
+            except OSError:
+                pass  # Cache is best-effort.
+
+    if latest is None:
+        return None
+    cur_t = _semver_tuple(current)
+    lat_t = _semver_tuple(latest)
+    if cur_t is None or lat_t is None:
+        return None
+    return latest if lat_t > cur_t else None
+
+
 def fetch_remote_changelog(
     url: str = "https://raw.githubusercontent.com/vzwjustin/advisor/main/CHANGELOG.md",
     timeout: float = 5.0,

@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.6] - 2026-05-03
+
+GSD-style "update available" indicator — surfaces a yellow warning
+line whenever a newer version is published on PyPI.
+
+### Added
+
+- **Yellow `⚠ update available: vX.Y.Z` line** appears on
+  `advisor status`, `advisor doctor`, and the trailing CTA of
+  `advisor install` whenever the cached PyPI lookup detects a newer
+  version. Run `advisor update` to consume it (which already shows
+  the GSD-style preview from v0.6.4).
+- **`advisor.install.check_for_update_cached(current=, ttl_seconds=)`** —
+  reads `~/.claude/.advisor/update-check.json`, refreshes the PyPI
+  lookup at most once every 24 hours, returns the new version
+  string when an upgrade is available or ``None`` otherwise.
+  Fails silently on network errors so the indicator never breaks
+  the CLI.
+
+### Fixed
+
+- mypy: tightened the `latest` variable declaration in
+  `check_for_update_cached` so the cached-but-stale fallback path
+  no longer trips `[no-any-return]`.
+
 ## [0.6.5] - 2026-05-03
 
 ### Fixed
