@@ -56,6 +56,7 @@ from .install import (
     ensure_nudge,
     get_installed_skill_version,
     install_skill,
+    load_release_notes,
     uninstall_skill,
 )
 from .install import (
@@ -1314,6 +1315,18 @@ def _run_install_op(
         and skill_action in (*_NOOP_ACTIONS, InstallAction.SKIPPED.value)
     ):
         return _STRICT_NOOP_EXIT
+    _CHANGE_ACTIONS = (InstallAction.INSTALLED.value, InstallAction.UPDATED.value)
+    if (
+        not quiet
+        and trailing_cta
+        and trailing_cta[0].startswith("/advisor")  # only on `install`, not `uninstall`
+        and (nudge_result.action in _CHANGE_ACTIONS or skill_action in _CHANGE_ACTIONS)
+    ):
+        notes = load_release_notes(_get_version())
+        if notes:
+            print()
+            print(_style.banner(f"What's new in v{_get_version()}"))
+            print(notes)
     if trailing_cta and not quiet:
         print()
         print(_style.cta(*trailing_cta))

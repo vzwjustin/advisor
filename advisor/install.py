@@ -55,6 +55,36 @@ def _is_semver_newer(installed: str, bundled: str) -> bool:
     return a > b
 
 
+#: Bundled in the wheel via pyproject force-include. The repo-root fallback
+#: lets ``advisor install`` show release notes when running from source.
+_CHANGELOG_CANDIDATES = (
+    Path(__file__).parent / "_changelog.md",
+    Path(__file__).parent.parent / "CHANGELOG.md",
+)
+
+
+def load_release_notes(version: str) -> str | None:
+    """Return the body of the ``## [version]`` section in the bundled CHANGELOG.
+
+    Used by ``advisor install`` to surface "what's new" on upgrade. Returns
+    ``None`` when the changelog is missing, unreadable, or has no section
+    for ``version``.
+    """
+    for candidate in _CHANGELOG_CANDIDATES:
+        try:
+            text = candidate.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        pattern = re.compile(
+            rf"^## \[{re.escape(version)}\][^\n]*\n(.*?)(?=^## \[|\Z)",
+            re.DOTALL | re.MULTILINE,
+        )
+        m = pattern.search(text)
+        if m:
+            return m.group(1).strip()
+    return None
+
+
 def get_installed_skill_version(path: Path | None = None) -> str | None:
     """Read ``~/.claude/skills/advisor/SKILL.md`` and return its advisor version.
 

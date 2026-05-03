@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-05-03
+
+### Added
+
+- **`advisor install` now prints a "What's new" digest on upgrade**
+  (and on fresh install). When the nudge or skill action is `installed`
+  or `updated`, the bundled `CHANGELOG.md` section for the current
+  version is rendered to stdout above the trailing CTA. No extra flag,
+  no fetch — the changelog ships inside the wheel via hatch
+  `force-include` and is parsed by `advisor.install.load_release_notes`.
+  Mirrors the changelog-on-upgrade UX from `gsd-update` so users see
+  what shipped without leaving the terminal.
+- **README** mentions the Behavioral Guidelines block now bundled with
+  the nudge — fresh installs get the 4-rule guardrail (Think Before /
+  Simplicity / Surgical / Goal-Driven) appended to `~/.claude/CLAUDE.md`
+  alongside the pipeline nudge, no separate setup.
+
+### Internal
+
+- `pyproject.toml` `[tool.hatch.build.targets.wheel.force-include]` now
+  ships `CHANGELOG.md` as `advisor/_changelog.md` so the loader can read
+  it from the installed package. A repo-root fallback keeps it working
+  when running from source.
+
 ## [0.6.1] - 2026-05-03
 
 Audit pass V — 3 correctness fixes (1 MEDIUM + 2 LOW), 741 tests pass,

@@ -30,7 +30,12 @@ advisor status
 ```
 
 That's it. The first run wires up `~/.claude/CLAUDE.md` and the `/advisor`
-slash command automatically. `advisor status` confirms what landed where.
+slash command automatically. The CLAUDE.md block also embeds a 4-rule
+**Behavioral Guidelines** section (Think Before · Simplicity First ·
+Surgical Changes · Goal-Driven Execution) that nudges Claude away from
+the most common LLM coding mistakes. `advisor status` confirms what
+landed where, and every upgrade prints a "What's new" digest from
+`CHANGELOG.md` so you see what changed without leaving the terminal.
 
 <details>
 <summary>Other install methods</summary>
