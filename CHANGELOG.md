@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.5] - 2026-05-03
+
+### Fixed
+
+- **`advisor update -y` no longer downgrades when nothing newer is
+  available.** The v0.6.4 confirmation logic accidentally fell
+  through to the upgrade subprocess when the preview said "nothing
+  to upgrade" but `-y` was set. Now: if the GitHub CHANGELOG has no
+  sections strictly newer than the current version, the command
+  exits cleanly with a green ✓ regardless of `-y`. The `-y` flag
+  only suppresses the prompt; it never forces a reinstall.
+- **Better message when local is ahead of PyPI.** Running `advisor
+  update` from a freshly-cut dev build now prints
+  `✓ ahead of published vX.Y.Z (current: vA.B.C — dev or
+  unreleased)` instead of the misleading "already on vX.Y.Z
+  (current: vA.B.C)" wording.
+
 ## [0.6.4] - 2026-05-03
 
 GSD-style fancy preview before `advisor update` actually upgrades.

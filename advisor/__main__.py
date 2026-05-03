@@ -54,6 +54,7 @@ from .install import (
     InstallAction,
     InstallResult,
     Status,
+    _semver_tuple,
     ensure_nudge,
     fetch_pypi_latest_version,
     fetch_remote_changelog,
@@ -1555,22 +1556,40 @@ def cmd_update(args: argparse.Namespace) -> int:
         new_sections = parse_changelog_sections(remote_changelog, since=current)
 
     # Phase 2 — render preview.
-    if not skip_preview and not quiet:
+    nothing_to_upgrade = False
+    if not skip_preview:
         if latest is None and remote_changelog is None:
-            print(_style.dim("  (offline — preview unavailable, will run upgrade anyway)"))
+            if not quiet:
+                print(_style.dim("  (offline — preview unavailable, will run upgrade anyway)"))
         elif not new_sections:
-            target = f"v{latest}" if latest else "latest"
-            print()
-            print(
-                _style.ok(
-                    f"  {_style.glyph('✓', '[OK]')} already on {target} (current: v{current})"
-                )
-            )
-            if not auto_yes:
-                # Nothing to upgrade — exit cleanly.
-                return 0
+            # No changelog sections strictly newer than current. Detect whether
+            # we're at parity with PyPI or actually ahead of it (dev / unreleased).
+            ahead = False
+            if latest is not None:
+                cur_t = _semver_tuple(current)
+                lat_t = _semver_tuple(latest)
+                ahead = cur_t is not None and lat_t is not None and cur_t > lat_t
+            if not quiet:
+                check = _style.glyph("✓", "[OK]")
+                if ahead:
+                    msg = (
+                        f"  {check} ahead of published v{latest} "
+                        f"(current: v{current} — dev or unreleased)"
+                    )
+                elif latest is not None:
+                    msg = f"  {check} already on the latest published version (v{latest})"
+                else:
+                    msg = f"  {check} already on the latest version (v{current})"
+                print()
+                print(_style.ok(msg))
+            nothing_to_upgrade = True
         else:
             _render_upgrade_preview(current, latest or new_sections[0][0], new_sections)
+
+    if nothing_to_upgrade:
+        # No work to do — exit cleanly regardless of -y. The flag suppresses the
+        # confirmation prompt; it does not force a downgrade.
+        return 0
 
     # Phase 3 — confirm.
     if not auto_yes and not quiet and sys.stdin.isatty() and new_sections:
