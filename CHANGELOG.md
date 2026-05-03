@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-05-03
+
+GSD-style fancy preview before `advisor update` actually upgrades.
+
+### Added
+
+- **`advisor update` now shows a "what's about to land" preview before
+  it touches anything.** It hits PyPI for the latest version, fetches
+  the GitHub `CHANGELOG.md` over HTTPS, parses every section strictly
+  newer than your current version, renders a `vCURRENT → vLATEST`
+  banner, and lists the new release notes inline. You confirm
+  (`[Y/n]`) — *then* it runs `uv tool install --reinstall` or
+  `pipx upgrade`. Mirrors the upgrade UX in `gsd-update`.
+- **New flags on `advisor update`:**
+  - `-y` / `--yes` — non-interactive: skip the confirmation prompt
+  - `--no-preview` — offline / fast path: don't hit PyPI or GitHub,
+    just run the upgrade directly
+- **`advisor.install.parse_changelog_sections(text, since=None)`** —
+  pure parser split out from `load_changelog_sections` so the same
+  section-extraction logic works on bundled and remote text alike.
+- **`fetch_pypi_latest_version()`** and **`fetch_remote_changelog()`** —
+  stdlib-only `urllib` helpers (5 s default timeout) that fail
+  gracefully to ``None`` when offline. No new dependencies.
+
+### Changed
+
+- When the network preview confirms you're already on the latest
+  version, `advisor update` short-circuits with a green ✓ message
+  instead of running an unnecessary reinstall.
+
 ## [0.6.3] - 2026-05-03
 
 Three small UX features layered on top of v0.6.2's "What's new on

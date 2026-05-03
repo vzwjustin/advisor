@@ -97,16 +97,12 @@ _VERSION_HEADING_RE = re.compile(
 )
 
 
-def load_changelog_sections(since: str | None = None) -> list[tuple[str, str, str]]:
-    """Return ``[(version, heading_rest, body), ...]`` newest-first.
+def parse_changelog_sections(text: str, since: str | None = None) -> list[tuple[str, str, str]]:
+    """Parse a CHANGELOG body into ``[(version, heading_rest, body), ...]``.
 
-    Skips the ``[Unreleased]`` heading. When ``since`` is given, only
-    sections strictly newer than that version are returned (entries whose
-    ``_semver_tuple`` does not parse are kept so users still see them).
+    Newest-first. Skips ``[Unreleased]``. When ``since`` is given, only
+    sections strictly newer than that version are returned.
     """
-    text = _read_changelog()
-    if text is None:
-        return []
     sections: list[tuple[str, str, str]] = []
     for m in _VERSION_HEADING_RE.finditer(text):
         version = m.group("version").strip()
@@ -119,6 +115,51 @@ def load_changelog_sections(since: str | None = None) -> list[tuple[str, str, st
                 continue
         sections.append((version, m.group("rest").rstrip(), m.group("body").strip()))
     return sections
+
+
+def load_changelog_sections(since: str | None = None) -> list[tuple[str, str, str]]:
+    """Return bundled CHANGELOG sections newest-first."""
+    text = _read_changelog()
+    return parse_changelog_sections(text, since=since) if text is not None else []
+
+
+def fetch_pypi_latest_version(package: str = "advisor-agent", timeout: float = 5.0) -> str | None:
+    """Return the latest version on PyPI, or ``None`` on network/parse failure."""
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    url = f"https://pypi.org/pypi/{package}/json"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            data = _json.load(resp)
+    except (urllib.error.URLError, OSError, _json.JSONDecodeError, ValueError):
+        return None
+    info = data.get("info") if isinstance(data, dict) else None
+    if not isinstance(info, dict):
+        return None
+    version = info.get("version")
+    return version if isinstance(version, str) else None
+
+
+def fetch_remote_changelog(
+    url: str = "https://raw.githubusercontent.com/vzwjustin/advisor/main/CHANGELOG.md",
+    timeout: float = 5.0,
+) -> str | None:
+    """Fetch a remote CHANGELOG.md, or ``None`` on any network/decode failure."""
+    import urllib.error
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            raw = resp.read()
+    except (urllib.error.URLError, OSError):
+        return None
+    try:
+        text: str = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    return text
 
 
 def get_installed_skill_version(path: Path | None = None) -> str | None:

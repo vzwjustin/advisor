@@ -55,10 +55,13 @@ from .install import (
     InstallResult,
     Status,
     ensure_nudge,
+    fetch_pypi_latest_version,
+    fetch_remote_changelog,
     get_installed_skill_version,
     install_skill,
     load_changelog_sections,
     load_release_notes,
+    parse_changelog_sections,
     uninstall_skill,
 )
 from .install import (
@@ -1496,8 +1499,34 @@ def _detect_install_method() -> tuple[str, list[str]] | None:
     return None
 
 
+def _render_upgrade_preview(
+    current: str, latest: str, sections: list[tuple[str, str, str]]
+) -> None:
+    """Print the GSD-style fancy preview: version diff banner + new sections."""
+    arrow = _style.glyph("→", "->")
+    title = f"v{current}  {arrow}  v{latest}"
+    print()
+    print(_style.banner(title, width=60))
+    n = len(sections)
+    if n == 1:
+        summary = "1 release ahead — here's what's new:"
+    elif n > 1:
+        summary = f"{n} releases ahead — here's what's new:"
+    else:
+        summary = "release notes:"
+    print(f"  {_style.dim(summary)}")
+    for version, _heading, body in sections:
+        print()
+        print(_style.banner(f"v{version}"))
+        print(body)
+
+
 def cmd_update(args: argparse.Namespace) -> int:
-    """Self-upgrade — detect install method, run upgrade, then ``install``."""
+    """Self-upgrade — preview latest changelog, confirm, run upgrade."""
+    quiet = getattr(args, "quiet", False)
+    skip_preview = getattr(args, "no_preview", False)
+    auto_yes = getattr(args, "yes", False)
+
     method = _detect_install_method()
     if method is None:
         print(
@@ -1513,7 +1542,51 @@ def cmd_update(args: argparse.Namespace) -> int:
         )
         return 1
     label, cmd = method
-    if not getattr(args, "quiet", False):
+    current = _get_version()
+
+    # Phase 1 — fetch latest version + remote changelog.
+    if not skip_preview and not quiet:
+        print(_style.dim(f"  checking PyPI for advisor-agent (current: v{current})..."))
+    latest = None if skip_preview else fetch_pypi_latest_version()
+    remote_changelog = None if skip_preview else fetch_remote_changelog()
+
+    new_sections: list[tuple[str, str, str]] = []
+    if remote_changelog is not None:
+        new_sections = parse_changelog_sections(remote_changelog, since=current)
+
+    # Phase 2 — render preview.
+    if not skip_preview and not quiet:
+        if latest is None and remote_changelog is None:
+            print(_style.dim("  (offline — preview unavailable, will run upgrade anyway)"))
+        elif not new_sections:
+            target = f"v{latest}" if latest else "latest"
+            print()
+            print(
+                _style.ok(
+                    f"  {_style.glyph('✓', '[OK]')} already on {target} (current: v{current})"
+                )
+            )
+            if not auto_yes:
+                # Nothing to upgrade — exit cleanly.
+                return 0
+        else:
+            _render_upgrade_preview(current, latest or new_sections[0][0], new_sections)
+
+    # Phase 3 — confirm.
+    if not auto_yes and not quiet and sys.stdin.isatty() and new_sections:
+        try:
+            answer = input(f"\n  Proceed with `{label}` upgrade? [Y/n] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            print(_style.dim("  aborted"))
+            return 130
+        if answer not in ("", "y", "yes"):
+            print(_style.dim("  aborted"))
+            return 0
+
+    # Phase 4 — run upgrade.
+    if not quiet:
+        print()
         print(_style.cta(label, " ".join(cmd)))
     try:
         completed = subprocess.run(cmd, check=False)
@@ -1522,10 +1595,11 @@ def cmd_update(args: argparse.Namespace) -> int:
         return 1
     if completed.returncode != 0:
         return completed.returncode
-    # Run `advisor install` in a fresh subprocess so it picks up the new
-    # version's bundled CHANGELOG and prints the "What's new" banner.
+
+    # Phase 5 — re-exec `advisor install` in a fresh subprocess so the new
+    # version's bundled CHANGELOG is what prints the post-upgrade banner.
     install_cmd = [str(Path(sys.argv[0]).resolve()), "install"]
-    if getattr(args, "quiet", False):
+    if quiet:
         install_cmd.append("--quiet")
     return subprocess.run(install_cmd, check=False).returncode
 
@@ -2740,9 +2814,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_update = sub.add_parser(
         "update",
-        help="Self-upgrade advisor (detects uv tool / pipx) then prints What's new",
+        help="Self-upgrade advisor — preview latest changelog, confirm, then upgrade",
     )
     p_update.add_argument("--quiet", action="store_true", help="Suppress CTA + install banner")
+    p_update.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="Skip the confirmation prompt (non-interactive upgrade)",
+    )
+    p_update.add_argument(
+        "--no-preview",
+        action="store_true",
+        help="Skip fetching remote changelog (offline / fast path)",
+    )
     p_update.set_defaults(func=cmd_update)
 
     p_ui = sub.add_parser(
