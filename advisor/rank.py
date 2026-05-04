@@ -344,8 +344,9 @@ class _IgnorePatternMatcher:
     # the same regex on every (file, pattern) pair — O(N×M) string-build
     # cost on top of Python's re-cache lookup.
     slash_re: re.Pattern[str] | None = None
-    dir_pattern: str | None = None
-    bare_component: bool = False
+    dir_re: re.Pattern[str] | None = None
+    filename_re: re.Pattern[str] | None = None
+    bare_re: re.Pattern[str] | None = None
 
 
 def load_advisorignore(base_dir: str | Path) -> list[str]:
@@ -619,17 +620,36 @@ def _compile_ignore_patterns(patterns: list[str]) -> tuple[_IgnorePatternMatcher
             except re.error:
                 # Malformed translator output — fall back to never-match.
                 slash_re = re.compile(r"$.^")
+
+        dir_re: re.Pattern[str] | None = None
+        if pattern.endswith("/") and "**" not in pattern:
+            try:
+                dir_re = re.compile(fnmatch.translate(pattern.rstrip("/")))
+            except (re.error, TypeError):
+                dir_re = re.compile(r"$.^")
+
+        filename_re: re.Pattern[str] | None = None
+        if not dir_re and not recursive_re and not slash_re:
+            try:
+                filename_re = re.compile(fnmatch.translate(pattern))
+            except (re.error, TypeError):
+                filename_re = re.compile(r"$.^")
+
+        bare_re: re.Pattern[str] | None = None
+        if not any(c in pattern for c in "*?[."):
+            try:
+                bare_re = re.compile(fnmatch.translate(pattern))
+            except (re.error, TypeError):
+                bare_re = re.compile(r"$.^")
+
         compiled.append(
             _IgnorePatternMatcher(
                 pattern=pattern,
                 recursive_re=recursive_re,
                 slash_re=slash_re,
-                # Don't set dir_pattern when ** is present — recursive_re handles it.
-                # Setting both caused dir_pattern's `continue` to shadow recursive_re.
-                dir_pattern=pattern.rstrip("/")
-                if pattern.endswith("/") and "**" not in pattern
-                else None,
-                bare_component=not any(c in pattern for c in "*?[."),
+                dir_re=dir_re,
+                filename_re=filename_re,
+                bare_re=bare_re,
             )
         )
     return tuple(compiled)
@@ -662,8 +682,8 @@ def _matches_compiled_pattern(
     for matcher in matchers:
         pattern = matcher.pattern
         # Pattern ending with / matches directories only
-        if matcher.dir_pattern is not None:
-            if any(fnmatch.fnmatch(part, matcher.dir_pattern) for part in path.parts):
+        if matcher.dir_re is not None:
+            if any(matcher.dir_re.match(part) for part in path.parts):
                 return True
             continue
         # ``**`` recursive glob — PurePath.match treats ``**`` as a single
@@ -673,7 +693,12 @@ def _matches_compiled_pattern(
                 return True
             continue
         # Match against filename only
-        if fnmatch.fnmatch(name, pattern):
+        if matcher.filename_re is not None:
+            if matcher.filename_re.match(name):
+                return True
+        elif fnmatch.fnmatch(name, pattern):
+            # Fallback for patterns that were too complex to pre-compile
+            # into filename_re (e.g. they already hit slash_re or dir_re paths)
             return True
         # Match against full path — but only for patterns that contain a path
         # separator. fnmatch's ``*`` matches ``/``, so applying it to path_str
@@ -695,7 +720,7 @@ def _matches_compiled_pattern(
         # or full-path strategies above, not as directory components,
         # otherwise a single dir named `foo.py/` would shadow every file
         # beneath it.
-        if matcher.bare_component and any(fnmatch.fnmatch(part, pattern) for part in path.parts):
+        if matcher.bare_re is not None and any(matcher.bare_re.match(part) for part in path.parts):
             return True
     return False
 
