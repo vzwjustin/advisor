@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.8] - 2026-05-17
+
+SARIF emitter now strips control characters from LLM-generated text
+fields, and the orchestrate prompt builders are pinned by a new
+snapshot suite.
+
+### Fixed
+
+- **SARIF NUL / C0-control sanitization** — LLM-emitted
+  `description`, `evidence`, `fix`, and `severity` fields are stripped
+  of U+0000–U+001F and U+007F before being emitted in SARIF output.
+  Block-rendered fields (`fullDescription`, `message.text`,
+  `help.text`, `properties.evidence`, `properties.fix`) preserve `\t`,
+  `\n`, `\r`; inline fields (`shortDescription`, `properties.severity`)
+  strip every control char. `json.dumps` already escaped these to
+  `\u00XX` so the SARIF file remained valid JSON, but consumers that
+  treat string values as C strings (notably GitHub Code Scanning
+  historically) silently truncate at the first NUL — corrupting rule
+  grouping (which hashes the description) and dropping post-NUL
+  evidence from the UI. Implemented in
+  `advisor.sarif._strip_controls(text, keep_block_whitespace=)` and
+  applied at all six emission sites.
+
+### Internal
+
+- **Prompt-builder snapshot suite** at `tests/test_prompt_snapshots.py`
+  with baselines under `tests/snapshots/` pinning the byte output of
+  every pure builder in `advisor.orchestrate` — advisor prompt, runner
+  pool prompt, batch / fix / handoff messages, verify dispatch.
+  Regenerate baselines via
+  `ADVISOR_UPDATE_SNAPSHOTS=1 pytest tests/test_prompt_snapshots.py`.
+  Zero new dependencies; intended as a refactor safety net.
+
 ## [0.6.7] - 2026-05-03
 
 GSD-parity install/upgrade UX — `/advisor-update` slash command and a
