@@ -297,6 +297,113 @@ class TestCLIIntegration:
         assert doc["runs"][0]["results"] == []
 
 
+class TestControlCharSanitization:
+    """LLM-emitted text can contain NUL / C0 controls (binary evidence quotes,
+    prompt-injection, etc.). ``json.dumps`` escapes 0x00–0x1F to ``\\u00XX``
+    so the file stays valid JSON, but several SARIF consumers (notably
+    GitHub Code Scanning historically) treat string values as C strings and
+    silently truncate at the first NUL — corrupting rule grouping and
+    dropping evidence from the UI. Strip at the source.
+    """
+
+    def test_nul_stripped_from_short_description(self, tmp_path: Path) -> None:
+        f = _make_finding(description="auth bypass\x00<dropped tail>")
+        doc = findings_to_sarif([f], tool_version="0.5.0", target_dir=tmp_path)
+        rules = doc["runs"][0]["tool"]["driver"]["rules"]  # type: ignore[index]
+        text = rules[0]["shortDescription"]["text"]
+        assert "\x00" not in text
+        # Tail must survive — the bug a NUL-truncating consumer would cause.
+        assert "<dropped tail>" in text
+
+    def test_nul_stripped_from_full_description(self, tmp_path: Path) -> None:
+        f = _make_finding(description="line one\nline two\x00after-nul")
+        doc = findings_to_sarif([f], tool_version="0.5.0", target_dir=tmp_path)
+        rules = doc["runs"][0]["tool"]["driver"]["rules"]  # type: ignore[index]
+        text = rules[0]["fullDescription"]["text"]
+        assert "\x00" not in text
+        # Block fields preserve real newlines — only controls are stripped.
+        assert "\n" in text
+        assert "after-nul" in text
+
+    def test_nul_stripped_from_help_text(self, tmp_path: Path) -> None:
+        f = _make_finding(fix="use env\x00var")
+        doc = findings_to_sarif([f], tool_version="0.5.0", target_dir=tmp_path)
+        rules = doc["runs"][0]["tool"]["driver"]["rules"]  # type: ignore[index]
+        text = rules[0]["help"]["text"]
+        assert "\x00" not in text
+        assert "use envvar" == text
+
+    def test_nul_stripped_from_message_text(self, tmp_path: Path) -> None:
+        f = _make_finding(description="\x01\x02alert\x00here")
+        doc = findings_to_sarif([f], tool_version="0.5.0", target_dir=tmp_path)
+        results = doc["runs"][0]["results"]  # type: ignore[index]
+        text = results[0]["message"]["text"]
+        assert "\x00" not in text
+        assert "\x01" not in text
+        assert "\x02" not in text
+        assert "alert" in text and "here" in text
+
+    def test_nul_stripped_from_properties_evidence(self, tmp_path: Path) -> None:
+        f = _make_finding(evidence="grep showed\x00something")
+        doc = findings_to_sarif([f], tool_version="0.5.0", target_dir=tmp_path)
+        props = doc["runs"][0]["results"][0]["properties"]  # type: ignore[index]
+        assert "\x00" not in props["evidence"]
+        assert props["evidence"] == "grep showedsomething"
+
+    def test_nul_stripped_from_properties_fix(self, tmp_path: Path) -> None:
+        f = _make_finding(fix="apply\x00patch")
+        doc = findings_to_sarif([f], tool_version="0.5.0", target_dir=tmp_path)
+        props = doc["runs"][0]["results"][0]["properties"]  # type: ignore[index]
+        assert "\x00" not in props["fix"]
+        assert props["fix"] == "applypatch"
+
+    def test_del_byte_stripped(self, tmp_path: Path) -> None:
+        """U+007F (DEL) is technically printable in some terminals but is a
+        control character per Unicode and breaks the same consumers."""
+        f = _make_finding(description="contains\x7fdel")
+        doc = findings_to_sarif([f], tool_version="0.5.0", target_dir=tmp_path)
+        rules = doc["runs"][0]["tool"]["driver"]["rules"]  # type: ignore[index]
+        assert "\x7f" not in rules[0]["fullDescription"]["text"]
+
+    def test_block_fields_keep_tab_and_crlf(self, tmp_path: Path) -> None:
+        """Block-rendered fields preserve \\t, \\n, \\r so legitimately
+        multi-line descriptions still render correctly downstream."""
+        f = _make_finding(description="a\tb\nc\r\nd")
+        doc = findings_to_sarif([f], tool_version="0.5.0", target_dir=tmp_path)
+        rules = doc["runs"][0]["tool"]["driver"]["rules"]  # type: ignore[index]
+        results = doc["runs"][0]["results"]  # type: ignore[index]
+        # fullDescription / message.text keep block whitespace.
+        for text in (rules[0]["fullDescription"]["text"], results[0]["message"]["text"]):
+            assert "\t" in text
+            assert "\n" in text
+            assert "\r" in text
+
+    def test_short_description_strips_all_whitespace_controls(self, tmp_path: Path) -> None:
+        """``shortDescription`` is single-line in the GitHub UI. Existing
+        ``_short_text`` collapses python-whitespace via ``str.split()``;
+        adding the strip ensures NUL (which is NOT whitespace) is also
+        removed before the collapse is observable.
+        """
+        f = _make_finding(description="x\x00y\tz")
+        doc = findings_to_sarif([f], tool_version="0.5.0", target_dir=tmp_path)
+        rules = doc["runs"][0]["tool"]["driver"]["rules"]  # type: ignore[index]
+        text = rules[0]["shortDescription"]["text"]
+        assert "\x00" not in text
+        # ``_short_text`` already collapsed \t to a space via split/join.
+        assert "\t" not in text
+
+    def test_unicode_above_ascii_preserved(self, tmp_path: Path) -> None:
+        """Non-ASCII (U+0080+) must survive — only C0 + DEL are stripped."""
+        f = _make_finding(description="café — résumé €", fix="naïve fix")
+        doc = findings_to_sarif([f], tool_version="0.5.0", target_dir=tmp_path)
+        rules = doc["runs"][0]["tool"]["driver"]["rules"]  # type: ignore[index]
+        results = doc["runs"][0]["results"]  # type: ignore[index]
+        assert "café" in rules[0]["fullDescription"]["text"]
+        assert "résumé" in rules[0]["fullDescription"]["text"]
+        assert "naïve" in rules[0]["help"]["text"]
+        assert "café" in results[0]["message"]["text"]
+
+
 @settings(deadline=1000, max_examples=50)
 @given(
     severity=st.sampled_from(["CRITICAL", "HIGH", "MEDIUM", "LOW"]),

@@ -1,0 +1,27 @@
+You are a runner. Review ONLY these files:
+
+- `src/util.py` (P3)
+
+Batch complexity: **medium**. The advisor grouped these together because it judged them reviewable as a unit — respect the scope.
+
+## Process
+1. Read every listed file fully
+2. For each file, hypothesize issues (bugs, security, logic, edge cases)
+3. Trace call paths and data flow to confirm or reject each hypothesis
+4. **Checkpoint with the advisor** before writing your final report.
+   Send a short draft via `SendMessage(to='team-lead')` listing each
+   candidate finding as `file:line — confidence (HIGH|MED|LOW) — one-line reason`.
+   Team-lead relays it to the advisor. Wait for the advisor's reply
+   (CONFIRM / NARROW / REDIRECT) and incorporate it before finalizing.
+5. For each confirmed issue, report:
+- **File**: path:line_number
+- **Severity**: CRITICAL / HIGH / MEDIUM / LOW
+- **Description**: what the issue is
+- **Evidence**: the code path or proof
+- **Expected → Actual**: *(MEDIUM+ only)* what you expected before reading this file · what you actually found — the divergence is the finding
+- **Fix**: suggested remediation
+6. If a file is clean, say so explicitly for that file
+
+Do NOT review other files. Do NOT review files outside this batch. If you hit a cross-reference, note it but stay scoped.
+
+When done, send your complete output to team-lead via SendMessage(to='team-lead'). Team-lead relays it to the advisor.

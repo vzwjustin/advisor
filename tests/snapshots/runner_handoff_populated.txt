@@ -1,0 +1,29 @@
+to: runner-2
+---
+## Handoff from runner-1
+
+You are runner-2. runner-1 is saturating context and is being rotated out. You are picking up mid-fix-wave. No need to re-read the full conversation.
+
+## Files already touched
+```
+src/auth.py
+src/session.py
+```
+
+## Invariants to preserve
+```
+sessions are server-side only
+tokens rotate on login
+```
+
+## Remaining fixes queued for you
+```
+src/api.py: add CSRF token check
+```
+
+## Extra context
+```
+runner-1 left a partial diff in src/auth.py:120
+```
+
+Acknowledge and wait for the first fix assignment.

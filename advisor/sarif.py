@@ -55,6 +55,37 @@ _LEVEL_MAP: dict[str, str] = {
 _DEFAULT_LEVEL = "warning"
 
 
+# Block-text whitespace we keep when stripping control chars: \t (0x09),
+# \n (0x0A), \r (0x0D). Everything else in U+0000..U+001F and U+007F
+# (DEL) is removed. JSON itself escapes these to ``\u00XX`` (so the
+# emitted file stays valid), but several SARIF consumers — GitHub Code
+# Scanning historically, plus some on-prem scanners — treat string
+# values as C strings and silently truncate at the first NUL. That
+# turns a finding like ``"auth bypass\x00<rest>"`` into a different
+# rule-grouping key than intended and drops the post-NUL evidence
+# from the UI. Strip at the source instead.
+_BLOCK_KEEP = frozenset({0x09, 0x0A, 0x0D})
+
+
+def _strip_controls(text: str, *, keep_block_whitespace: bool = False) -> str:
+    """Remove C0 control chars (and DEL) that survive JSON but break consumers.
+
+    ``keep_block_whitespace=True`` preserves tab / newline / carriage return
+    for fields rendered as multi-line text (``message.text``,
+    ``fullDescription``, ``help.text``, ``properties.evidence/fix``).
+    ``False`` (default) strips everything U+0000–U+001F + U+007F — used for
+    inline fields like ``shortDescription`` that GitHub Code Scanning
+    renders on a single line. ``_short_text`` already collapses Python
+    whitespace via ``str.split()``, but ``\\x00`` is not whitespace and
+    survives that pass — so this strip is the only NUL guard for inline
+    fields.
+    """
+    if not text:
+        return text
+    keep = _BLOCK_KEEP if keep_block_whitespace else frozenset()
+    return "".join(c for c in text if ord(c) >= 0x20 and ord(c) != 0x7F or ord(c) in keep)
+
+
 def synthesize_rule_id(severity: str, description: str, *, prefix: str = "advisor") -> str:
     """Stable rule-id for a finding that lacks one.
 
@@ -206,10 +237,19 @@ def findings_to_sarif(
             rules_seen[rule_id] = {
                 "id": rule_id,
                 "name": rule_id.replace("/", "_"),
-                "shortDescription": {"text": _short_text(f.description)},
-                "fullDescription": {"text": f.description or "advisor finding"},
+                "shortDescription": {"text": _strip_controls(_short_text(f.description))},
+                "fullDescription": {
+                    "text": _strip_controls(
+                        f.description or "advisor finding", keep_block_whitespace=True
+                    )
+                },
                 "defaultConfiguration": {"level": _level_for(f.severity)},
-                "help": {"text": f.fix or "See advisor output for remediation guidance."},
+                "help": {
+                    "text": _strip_controls(
+                        f.fix or "See advisor output for remediation guidance.",
+                        keep_block_whitespace=True,
+                    )
+                },
             }
         file_path, line = _parse_file_path(f.file_path)
         rel = _resolve_relative(file_path, target_dir)
@@ -241,12 +281,16 @@ def findings_to_sarif(
                 "ruleId": rule_id,
                 "ruleIndex": rule_index_by_id[rule_id],
                 "level": _level_for(f.severity),
-                "message": {"text": f.description or "advisor finding"},
+                "message": {
+                    "text": _strip_controls(
+                        f.description or "advisor finding", keep_block_whitespace=True
+                    )
+                },
                 "locations": [{"physicalLocation": physical_location}],
                 "properties": {
-                    "severity": f.severity,
-                    "evidence": f.evidence,
-                    "fix": f.fix,
+                    "severity": _strip_controls(f.severity),
+                    "evidence": _strip_controls(f.evidence, keep_block_whitespace=True),
+                    "fix": _strip_controls(f.fix, keep_block_whitespace=True),
                 },
             }
         )

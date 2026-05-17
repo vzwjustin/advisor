@@ -1,0 +1,26 @@
+to: runner-1
+---
+## New batch assignment (batch 1, complexity: high)
+
+Review ONLY these files:
+
+- `src/auth.py` (P1)
+- `src/session.py` (P2)
+
+Process:
+1. Read every listed file fully
+2. Hypothesize issues (bugs, security, logic, edge cases)
+3. Trace call paths to confirm or reject each
+4. Checkpoint draft findings with team-lead via `SendMessage(to='team-lead')` before finalizing — team-lead relays to the advisor
+5. Wait for CONFIRM / NARROW / REDIRECT from the advisor and incorporate
+6. For each confirmed issue, report:
+- **File**: path:line_number
+- **Severity**: CRITICAL / HIGH / MEDIUM / LOW
+- **Description**: what the issue is
+- **Evidence**: the code path or proof
+- **Expected → Actual**: *(MEDIUM+ only)* what you expected before reading this file · what you actually found — the divergence is the finding
+- **Fix**: suggested remediation
+7. Send your complete output to team-lead via `SendMessage(to='team-lead')`
+8. Then wait for your next batch
+
+Do NOT review files outside this batch.

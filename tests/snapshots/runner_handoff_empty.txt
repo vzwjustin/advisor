@@ -1,0 +1,16 @@
+to: runner-2
+---
+## Handoff from runner-1
+
+You are runner-2. runner-1 is saturating context and is being rotated out. You are picking up mid-fix-wave. No need to re-read the full conversation.
+
+## Files already touched
+- (none yet)
+
+## Invariants to preserve
+- (none)
+
+## Remaining fixes queued for you
+- (none — you're taking the verify pass)
+
+Acknowledge and wait for the first fix assignment.

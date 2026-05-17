@@ -1,0 +1,19 @@
+to: runner-1
+---
+## Fix assignment (fix 4 of 5 — after this one, send `CONTEXT_PRESSURE` BEFORE accepting the next assignment (not after). The advisor needs one fix of runway to rotate.)
+
+File: `src/auth.py`
+Problem:
+```
+x
+```
+Change:
+```
+y
+```
+Acceptance:
+```
+z
+```
+
+Make the edit, send the draft diff back for review, and await CONFIRM / REVISE. Do not drift into unrelated refactors.

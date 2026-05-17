@@ -1,0 +1,19 @@
+to: runner-1
+---
+## Fix assignment (fix 1 of 5)
+
+File: `src/auth.py`
+Problem:
+```
+login() does not rate-limit failed attempts
+```
+Change:
+```
+wrap login() body in `rate_limit(by='ip', per='minute')`
+```
+Acceptance:
+```
+11th failed login in 60s returns 429
+```
+
+Make the edit, send the draft diff back for review, and await CONFIRM / REVISE. Do not drift into unrelated refactors.

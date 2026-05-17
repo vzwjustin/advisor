@@ -1,0 +1,19 @@
+to: runner-1
+---
+## Fix assignment (**LAST FIX** (5 of 5). Report the diff, then stand by for rotation — do not accept further fix assignments.)
+
+File: `src/auth.py`
+Problem:
+```
+x
+```
+Change:
+```
+y
+```
+Acceptance:
+```
+z
+```
+
+Make the edit, send the draft diff back for review, and await CONFIRM / REVISE. Do not drift into unrelated refactors.
