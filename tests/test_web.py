@@ -227,7 +227,68 @@ class TestStatusPayload:
     def test_empty_when_no_history_file(self, tmp_path):
         state = build_app_state(tmp_path)
         payload = _status_payload(state)
-        assert payload == {"last_mtime": None, "is_active": False}
+        assert payload == {"last_mtime": None, "token": None, "is_active": False}
+
+    def test_token_combines_mtime_ns_and_size(self, tmp_path):
+        """The token field gives the client a higher-resolution
+        change-detection key than the ISO-microsecond ``last_mtime``."""
+        append_entries(
+            tmp_path,
+            [
+                HistoryEntry(
+                    timestamp="2026-04-21T12:00:00+00:00",
+                    file_path="a.py",
+                    severity="HIGH",
+                    description="one",
+                    status="CONFIRMED",
+                    run_id="r1",
+                ),
+            ],
+        )
+        state = build_app_state(tmp_path)
+        payload = _status_payload(state)
+        token = payload["token"]
+        assert isinstance(token, str)
+        # ``<mtime_ns>:<size>`` — both halves are non-negative integers.
+        mtime_ns_str, _, size_str = token.partition(":")
+        assert mtime_ns_str.isdigit()
+        assert size_str.isdigit()
+        assert int(size_str) > 0  # file has at least one appended entry
+
+    def test_token_changes_when_file_is_appended_to(self, tmp_path):
+        """A second append produces a distinct token even when ``last_mtime``
+        could round-trip to the same ISO microsecond — the size suffix
+        guarantees progress."""
+        append_entries(
+            tmp_path,
+            [
+                HistoryEntry(
+                    timestamp="2026-04-21T12:00:00+00:00",
+                    file_path="a.py",
+                    severity="HIGH",
+                    description="one",
+                    status="CONFIRMED",
+                    run_id="r1",
+                ),
+            ],
+        )
+        state = build_app_state(tmp_path)
+        first_token = _status_payload(state)["token"]
+        append_entries(
+            tmp_path,
+            [
+                HistoryEntry(
+                    timestamp="2026-04-21T12:00:01+00:00",
+                    file_path="b.py",
+                    severity="LOW",
+                    description="two",
+                    status="CONFIRMED",
+                    run_id="r1",
+                ),
+            ],
+        )
+        second_token = _status_payload(state)["token"]
+        assert first_token != second_token
 
     def test_counts_entries_and_reports_mtime(self, tmp_path):
         append_entries(
@@ -392,7 +453,7 @@ class TestLiveEndpoints:
         assert status == 200
         assert "application/json" in headers["Content-Type"]
         data = json.loads(body)
-        assert data == {"last_mtime": None, "is_active": False}
+        assert data == {"last_mtime": None, "token": None, "is_active": False}
 
     def test_api_status_reflects_writes(self, live_server):
         """After appending a finding, /api/status must report count>0, a
@@ -462,6 +523,90 @@ class TestStaticUiState:
 
     def test_cost_request_sends_max_runners(self):
         assert "qs.set('max_runners', form.get('max_runners') || '5');" in APP_JS
+
+    def test_shell_quote_does_not_allow_asterisk_through(self):
+        """``shellQuote`` must NOT pass ``*`` through unquoted — otherwise
+        the rendered CLI preview's ``--file-types *.py`` is expanded by
+        the user's shell on copy-paste, and advisor receives a list of
+        file names instead of the literal glob pattern."""
+        # The regex literal is the entire contract: if ``*`` ever creeps
+        # back into the allow-list, this assertion fires.
+        assert "/^[A-Za-z0-9_./@:=-]+$/.test(s)" in APP_JS
+        assert "/^[A-Za-z0-9_./*@:=-]+$/.test(s)" not in APP_JS
+
+    def test_seen_keys_has_bounded_capacity(self):
+        """seenKeys must FIFO-trim past MAX_SEEN_KEYS so a long-lived
+        dashboard tab doesn't grow the Set without bound."""
+        assert "const MAX_SEEN_KEYS = 5000;" in APP_JS
+        assert "if (seenKeys.size > MAX_SEEN_KEYS) {" in APP_JS
+        # Drop oldest insertion-order entries via Set iteration.
+        assert "const it = seenKeys.values();" in APP_JS
+
+    def test_poll_uses_token_when_present(self):
+        """Client prefers the higher-resolution ``token`` field for
+        change detection, falling back to ``last_mtime`` when the server
+        omits it (older server compat)."""
+        assert "let lastToken = null;" in APP_JS
+        assert "const hasToken = typeof data.token === 'string';" in APP_JS
+        assert "data.token !== lastToken" in APP_JS
+        assert "data.last_mtime !== lastMtime" in APP_JS
+
+
+# ---------------------------------------------------------------------------
+# Banner host display
+# ---------------------------------------------------------------------------
+
+
+class TestDisplayHost:
+    """``_display_host`` renders the banner URL after the bind has succeeded.
+
+    It must (a) sanitize untrusted characters, (b) rewrite wildcard binds
+    to a navigable loopback so Chrome M128+'s ``0.0.0.0`` block doesn't
+    leave the printed URL un-clickable, and (c) bracket-wrap bare IPv6
+    so the ``:<port>`` suffix isn't misread.
+    """
+
+    def test_loopback_passes_through(self):
+        from advisor.web.server import _display_host
+
+        assert _display_host("127.0.0.1") == "127.0.0.1"
+
+    def test_wildcard_ipv4_rewritten_to_loopback(self):
+        from advisor.web.server import _display_host
+
+        # Chrome M128+ refuses to navigate to http://0.0.0.0:<port>/.
+        # The bound socket still accepts loopback traffic, but the
+        # printed URL must surface the address the browser will reach.
+        assert _display_host("0.0.0.0") == "127.0.0.1"
+
+    def test_wildcard_ipv6_rewritten_to_loopback(self):
+        from advisor.web.server import _display_host
+
+        assert _display_host("::") == "127.0.0.1"
+        assert _display_host("[::]") == "127.0.0.1"
+
+    def test_bare_ipv6_gets_bracket_wrapped(self):
+        from advisor.web.server import _display_host
+
+        # Without brackets, ``::1:8765`` is ambiguous to a URL parser.
+        assert _display_host("::1") == "[::1]"
+
+    def test_already_bracketed_ipv6_passes_through(self):
+        from advisor.web.server import _display_host
+
+        assert _display_host("[::1]") == "[::1]"
+
+    def test_control_chars_stripped(self):
+        from advisor.web.server import _display_host
+
+        # CR / LF / NUL / C1 (CSI ``\x9b``) must not survive into the
+        # printed URL — they'd corrupt the terminal banner and could
+        # CRLF-inject a spoofed second host into copy-pasted output.
+        # NB: ``[`` is deliberately kept in the allow-list (legitimate
+        # IPv6 brackets), so an embedded ESC[ sequence is sanitized by
+        # dropping the ESC; the ``[`` itself is preserved.
+        assert _display_host("127.0.0.1\r\nattacker.example") == "127.0.0.1attacker.example"
+        assert _display_host("\x00\x9b127.0.0.1") == "127.0.0.1"
 
 
 # ---------------------------------------------------------------------------

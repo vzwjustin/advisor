@@ -343,6 +343,13 @@ APP_JS = r"""(() => {
   // key is NOT in here get the `.row-new` highlight on the next render.
   // See `findingKey` below for the identity contract.
   let seenKeys = new Set();
+  // Hard ceiling on seenKeys to bound memory in long-lived sessions
+  // (e.g. dashboard left open for hours / days). 5000 is well above the
+  // realistic findings-per-session count; if a user genuinely scrolls
+  // past 5000 distinct findings, the older entries get FIFO-dropped from
+  // the "have we already flashed this row?" set — which at worst causes
+  // a stale row to re-flash on the next render, not data corruption.
+  const MAX_SEEN_KEYS = 5000;
 
   // --------------------------------------------------------------
   // USER CONTRIBUTION POINT — identity of a finding for "is this new?"
@@ -413,7 +420,18 @@ APP_JS = r"""(() => {
     });
     // Track ALL raw entries (not just the filtered view) so clearing a filter
     // never re-flashes entries that were merely hidden by the current query.
+    // FIFO trim: in a long-lived session that polls /api/history every few
+    // seconds, seenKeys would otherwise grow without bound, retaining one
+    // string per finding the user has ever scrolled through. Cap at
+    // MAX_SEEN_KEYS and drop the oldest insertion-order entries when the
+    // cap is exceeded — Set iteration is insertion-ordered in ES2015+, so
+    // .values().next() yields the oldest key first.
     findingsRaw.forEach((e) => { const k = findingKey(e); if (k) seenKeys.add(k); });
+    if (seenKeys.size > MAX_SEEN_KEYS) {
+      const drop = seenKeys.size - MAX_SEEN_KEYS;
+      const it = seenKeys.values();
+      for (let i = 0; i < drop; i++) seenKeys.delete(it.next().value);
+    }
     $('#findings-count').textContent = `${filtered.length} of ${findingsRaw.length}`;
     const hasVisibleFindings = filtered.length !== 0;
     $('#findings-empty').textContent = findingsErrorMessage || (findingsRaw.length === 0
@@ -446,6 +464,14 @@ APP_JS = r"""(() => {
   const POLL_MAX_BACKOFF_MS = 30000;
   let pollErrorStreak = 0;
   let lastMtime = null;
+  // Composite ``${st_mtime_ns}:${st_size}`` token from /api/status.
+  // Preferred over lastMtime for change detection: nanosecond precision
+  // survives same-microsecond writes that lastMtime's ISO rendering can
+  // collapse, and the size suffix catches the (rare) case of a file
+  // rewrite landing on the same timestamp. Falls back to lastMtime when
+  // the server omits the field — keeps older client/server combos
+  // working.
+  let lastToken = null;
   let pollTimer = null;
   let liveEnabled = true;
   let lastStatus = null;      // last successful /api/status payload
@@ -485,9 +511,17 @@ APP_JS = r"""(() => {
       lastStatusTs = Date.now();
       setLiveState(data.is_active ? 'active' : 'idle',
                    data.is_active ? 'LIVE' : 'IDLE');
-      if (data.last_mtime !== lastMtime) {
+      // Prefer the token field when the server emits it (nanosecond +
+      // size). Older servers won't return ``token`` — fall back to the
+      // mtime comparison so the client stays compatible with them.
+      const hasToken = typeof data.token === 'string';
+      const changed = hasToken
+        ? data.token !== lastToken
+        : data.last_mtime !== lastMtime;
+      if (changed) {
         if (await refetchFindings()) {
           lastMtime = data.last_mtime;
+          if (hasToken) lastToken = data.token;
         }
       }
       pollErrorStreak = 0;
@@ -702,7 +736,14 @@ APP_JS = r"""(() => {
   }
   function shellQuote(s) {
     s = String(s);
-    if (/^[A-Za-z0-9_./*@:=-]+$/.test(s)) return s;
+    // ``*`` is deliberately NOT in the allow-list: the rendered CLI
+    // preview surfaces values like ``--file-types *.py`` which the user
+    // copy-pastes into a real shell. With ``*`` allowed through unquoted,
+    // bash/zsh expand the glob against CWD before advisor sees the arg,
+    // so advisor receives a list of file names instead of the literal
+    // pattern. Falling through to the single-quote branch keeps the
+    // glob intact across copy-paste.
+    if (/^[A-Za-z0-9_./@:=-]+$/.test(s)) return s;
     return "'" + s.replace(/'/g, "'\\''") + "'";
   }
   function formatNum(n) {

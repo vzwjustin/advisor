@@ -98,6 +98,41 @@ def build_app_state(
     )
 
 
+def _display_host(host: str) -> str:
+    """Return a URL-safe rendering of ``host`` for the startup banner.
+
+    Two responsibilities, in order:
+
+    1. **Sanitize** with an allow-list of characters legal in a URL host
+       component (alphanumerics, ``.``, ``-``, ``_``, ``:``, ``[``, ``]``).
+       Rejects C0 / C1 control bytes (ESC, CR, LF, the C1 CSI ``\\x9b``)
+       AND printable-but-URL-significant bytes like space, ``@``, ``?``,
+       ``#`` that would otherwise produce a banner URL whose authority a
+       browser parses differently than the bound socket.
+    2. **Rewrite wildcard binds** (``0.0.0.0``, ``::``, ``[::]``) to
+       ``127.0.0.1`` so the printed URL is actually clickable. Chrome
+       M128+ refuses to navigate to ``http://0.0.0.0:<port>/`` from the
+       address bar, and Safari has historically done the same — the
+       bound socket on ``0.0.0.0`` does accept loopback traffic, but the
+       banner needs to surface the address the browser will actually
+       reach. Bare IPv6 addresses get wrapped in ``[...]`` so the
+       ``:<port>`` suffix isn't read as another IPv6 colon segment.
+
+    NOTE: display only — the bind already happened with the original
+    ``host`` string and either succeeded or failed on its own merits.
+    """
+    safe = "".join(ch for ch in host if ch.isalnum() or ch in "._-:[]")
+    if safe in ("0.0.0.0", "::", "[::]"):
+        return "127.0.0.1"
+    # Bare IPv6 (e.g. ``::1`` from ``--host ::1``) needs bracket-wrapping
+    # so the ``:<port>`` suffix isn't misread as another IPv6 segment.
+    # IPv4 contains no colons, so ``":" in safe`` reliably distinguishes
+    # the two; skip strings that already carry brackets.
+    if ":" in safe and not safe.startswith("["):
+        return f"[{safe}]"
+    return safe
+
+
 def _first(qs: dict[str, list[str]], key: str, default: str) -> str:
     vals = qs.get(key)
     if vals and vals[0]:
@@ -241,13 +276,22 @@ def _status_payload(state: AppState) -> dict[str, Any]:
     """Cheap "has anything changed?" probe for the live dashboard poller.
 
     Returns the file's mtime (stable cache key for the client's
-    ``lastMtime`` check) and whether the file was touched in the last
+    ``lastMtime`` check), a composite ``token`` field combining
+    ``st_mtime_ns`` and ``st_size`` for higher-resolution change
+    detection, and whether the file was touched in the last
     :data:`_ACTIVE_WINDOW_SECONDS` (drives the ``LIVE`` indicator).
     Intentionally does not read file contents — the whole point is that
     this endpoint fires every few seconds and must be nearly free.
+
+    ``token`` is preferred by the client for change detection because
+    nanosecond precision survives the same-microsecond-write edge case
+    that ``last_mtime``'s ISO-microsecond rendering can collapse, and
+    the ``st_size`` tiebreaker also catches the (rare) case of a file
+    rewrite that lands on the same timestamp. ``last_mtime`` is kept
+    for the human-readable banner and as a fallback for older clients.
     """
     path = history_path(state.target)
-    empty: dict[str, Any] = {"last_mtime": None, "is_active": False}
+    empty: dict[str, Any] = {"last_mtime": None, "token": None, "is_active": False}
     if not path.exists():
         return empty
     try:
@@ -263,6 +307,7 @@ def _status_payload(state: AppState) -> dict[str, Any]:
     age_seconds = max(0.0, (datetime.now(timezone.utc) - mtime_dt).total_seconds())
     return {
         "last_mtime": mtime_dt.isoformat(),
+        "token": f"{stat.st_mtime_ns}:{stat.st_size}",
         "is_active": age_seconds < _ACTIVE_WINDOW_SECONDS,
     }
 
@@ -458,17 +503,7 @@ def run_server(
     # ``server_address`` tuple is the only reliable source for what we
     # actually bound to, so report that instead of the request value.
     actual_port = server.server_address[1]
-    # Sanitize the user-supplied host before echoing into the printed
-    # URL. Allow-list rather than blocklist: only characters legal in a
-    # URL host component (alphanumerics, ``.``, ``-``, ``_``, ``:``,
-    # ``[``, ``]``) survive. This rejects C0/C1 control bytes (ESC, CR,
-    # LF, the C1 CSI ``\x9b``) AND printable-but-URL-significant bytes
-    # like space, ``@``, ``?``, ``#`` that would otherwise produce a
-    # banner URL whose authority a browser parses differently than the
-    # bound socket. NOTE: banner only — the bind above used the original
-    # ``host`` string and either succeeded or failed on its own merits.
-    host_safe = "".join(ch for ch in host if ch.isalnum() or ch in "._-:[]")
-    url = f"http://{host_safe}:{actual_port}"
+    url = f"http://{_display_host(host)}:{actual_port}"
     print(_style.success_box(f"advisor dashboard serving {state.target} at {url}"))
     print(_style.tip("press Ctrl-C to stop"))
     print(_style.cta("open in browser", url))

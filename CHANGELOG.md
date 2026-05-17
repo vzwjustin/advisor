@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.9] - 2026-05-17
+
+Four narrow correctness fixes in the `advisor ui` dashboard. No API
+changes — the JS payload and JSON shape are additive.
+
+### Fixed
+
+- **CLI preview no longer leaks `*` to the user's shell.** The
+  rendered command for `--file-types *.py` was emitted unquoted; bash
+  / zsh would then expand the glob against the CWD on copy-paste, so
+  advisor received a list of file names instead of the literal
+  pattern. `shellQuote`'s allow-list dropped `*` so glob patterns now
+  fall through to the single-quote escape branch.
+- **`seenKeys` Set has a bounded capacity (5000 entries, FIFO drop).**
+  In long-lived dashboard tabs the "have we already flashed this row?"
+  Set previously grew without bound. The cap is well above realistic
+  findings-per-session counts; older entries get dropped in insertion
+  order when exceeded.
+- **Banner URL rewrites wildcard binds to loopback.** Chrome M128+
+  refuses to navigate to `http://0.0.0.0:<port>/`. The new
+  `_display_host()` helper rewrites `0.0.0.0`, `::`, and `[::]` to
+  `127.0.0.1` for display, bracket-wraps bare IPv6 (e.g. `::1` →
+  `[::1]`), and runs the existing allow-list sanitization so CR / LF
+  / NUL / C1 bytes can't corrupt the printed line.
+- **`/api/status` emits a higher-resolution `token` field.** Returns
+  `f"{st_mtime_ns}:{st_size}"` alongside `last_mtime`. The client
+  prefers `token` for change detection — nanosecond precision survives
+  same-microsecond writes that the ISO-microsecond `last_mtime` can
+  collapse, and the `st_size` tiebreaker catches the (rare) case of a
+  same-timestamp rewrite. Older clients still see `last_mtime` and
+  keep working.
+
 ## [0.6.8] - 2026-05-17
 
 SARIF emitter now strips control characters from LLM-generated text
