@@ -574,7 +574,7 @@ def _append_cap_overruns(lines: list[str], report: AuditReport) -> None:
         lines.extend(f"- {o}" for o in report.cap_overruns)
         lines.append(
             "- _Tip: rotate sooner by lowering `--max-fixes-per-runner` "
-            "(or `--large-file-max-fixes` for ≥800-line files), or raise "
+            f"(or `--large-file-max-fixes` for ≥{report.large_file_line_threshold}-line files), or raise "
             "`--max-runners` so the advisor has fresh capacity to hand off to._"
         )
     else:

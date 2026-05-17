@@ -23,6 +23,19 @@ from .skill_asset import SKILL_MD, SKILL_MD_UPDATE
 #: without hashing or diffing the whole file.
 _BADGE_RE = re.compile(r"<!--\s*advisor:([^\s>]+)\s*-->")
 
+#: Response-size cap for the PyPI ``/json`` endpoint. The endpoint is a small
+#: metadata document (under 100 KB for any real package); ``urlopen(timeout=)``
+#: only bounds connect + first-byte latency, not total transfer or memory, so
+#: a hostile or compromised mirror could otherwise stream a multi-GB body into
+#: ``_json.load(resp)`` and exhaust the process before the timeout fires.
+_PYPI_MAX_BYTES = 1_048_576
+
+#: Response-size cap for the raw GitHub CHANGELOG.md fetch. Same rationale as
+#: ``_PYPI_MAX_BYTES``: ``timeout=`` doesn't bound body size. A truncated read
+#: yields valid UTF-8 prefix text the caller's version-section regex parses
+#: correctly enough — partial CHANGELOG is preferable to OOM.
+_CHANGELOG_MAX_BYTES = 524_288
+
 
 def parse_badge(text: str) -> str | None:
     """Return the version declared by the first advisor badge in ``text``.
@@ -133,7 +146,7 @@ def fetch_pypi_latest_version(package: str = "advisor-agent", timeout: float = 5
     url = f"https://pypi.org/pypi/{package}/json"
     try:
         with urllib.request.urlopen(url, timeout=timeout) as resp:
-            data = _json.load(resp)
+            data = _json.loads(resp.read(_PYPI_MAX_BYTES))
     except (urllib.error.URLError, OSError, _json.JSONDecodeError, ValueError):
         return None
     info = data.get("info") if isinstance(data, dict) else None
@@ -217,7 +230,7 @@ def fetch_remote_changelog(
 
     try:
         with urllib.request.urlopen(url, timeout=timeout) as resp:
-            raw = resp.read()
+            raw = resp.read(_CHANGELOG_MAX_BYTES)
     except (urllib.error.URLError, OSError):
         return None
     try:

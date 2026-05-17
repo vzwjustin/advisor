@@ -1116,7 +1116,14 @@ def _emit_plan(
 
     quiet = getattr(args, "quiet", False)
     resume_id = getattr(args, "resume", None)
-    if run_id:
+    if run_id and context == "resumed":
+        print()
+        # Resume path: the checkpoint already existed on disk — labelling
+        # this "checkpoint saved" used to mislead users into thinking a
+        # second checkpoint had been written, and the trailing resume-tip
+        # is dead (you just resumed).
+        print(_style.info_box(f"resumed checkpoint: {run_id}"))
+    elif run_id:
         print()
         # Green success glyph + bold run_id for fast scanning in Claude
         # Code transcripts, with an immediate hint for the next step so
@@ -2151,21 +2158,28 @@ def _load_findings_from_input(
             text = _read_stdin_capped(source_label="findings input")
         else:
             src_path = Path(source)
+            # Bounded binary read closes the stat-then-read TOCTOU where a
+            # concurrent appender could grow the file past _STDIN_LIMIT between
+            # the size guard and the read. Mirrors ``_fs.read_text_capped`` but
+            # keeps ``errors="replace"`` so a corrupted finding doesn't sink
+            # the whole batch.
             try:
-                size = src_path.stat().st_size
-            except OSError:
-                size = 0
-            if size > _STDIN_LIMIT:
+                with open(src_path, "rb") as fh:
+                    raw_bytes = fh.read(_STDIN_LIMIT + 1)
+            except OSError as exc:
+                print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
+                return [], 2
+            if len(raw_bytes) > _STDIN_LIMIT:
                 print(
                     _style.error_box(
-                        f"findings input {src_path} is {size} bytes "
-                        f"(> {_STDIN_LIMIT}-byte cap); refusing to load",
+                        f"findings input {src_path} exceeds {_STDIN_LIMIT}-byte cap; "
+                        f"refusing to load",
                         stream=sys.stderr,
                     ),
                     file=sys.stderr,
                 )
                 return [], 2
-            text = src_path.read_text(encoding="utf-8", errors="replace")
+            text = raw_bytes.decode("utf-8", errors="replace")
     except SystemExit as exc:
         # ``_read_stdin_capped`` raises SystemExit(2) on overflow. The
         # error message has already been printed; convert back to the
@@ -2540,29 +2554,28 @@ def cmd_audit(args: argparse.Namespace) -> int:
             return int(exc.code) if isinstance(exc.code, int) else 2
     else:
         src_path = Path(transcript_arg)
+        # Bounded binary read mirrors the stdin path's cap and closes the
+        # stat-then-read TOCTOU where a concurrent appender (think a live
+        # ``tail -f``-able log) could grow the file past _STDIN_LIMIT between
+        # the size guard and the read. ``errors="replace"`` preserves the
+        # pre-cap behavior of tolerating non-UTF-8 noise in transcripts.
         try:
-            size = src_path.stat().st_size
+            with open(src_path, "rb") as fh:
+                raw_bytes = fh.read(_STDIN_LIMIT + 1)
         except OSError as exc:
             print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
             return 2
-        # Mirror the stdin path's cap — a multi-GB log file (accidental
-        # ``--transcript /var/log/syslog`` or adversarial input) would
-        # otherwise be buffered into RAM in one shot.
-        if size > _STDIN_LIMIT:
+        if len(raw_bytes) > _STDIN_LIMIT:
             print(
                 _style.error_box(
-                    f"audit transcript {src_path} is {size} bytes "
-                    f"(> {_STDIN_LIMIT}-byte cap); refusing to load",
+                    f"audit transcript {src_path} exceeds {_STDIN_LIMIT}-byte cap; "
+                    f"refusing to load",
                     stream=sys.stderr,
                 ),
                 file=sys.stderr,
             )
             return 2
-        try:
-            transcript = src_path.read_text(encoding="utf-8", errors="replace")
-        except OSError as exc:
-            print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
-            return 2
+        transcript = raw_bytes.decode("utf-8", errors="replace")
 
     report = audit_transcript(transcript, cp)
 

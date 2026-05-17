@@ -22,7 +22,14 @@ from dataclasses import dataclass
 from functools import cache, lru_cache
 from pathlib import Path
 
+from ._fs import read_text_capped
 from .focus import FocusBatch, FocusTask
+
+#: Hard byte cap for ``--pricing FILE`` input. A pricing override is a small
+#: three-family JSON object — under 1 KiB in practice. Capping the read at
+#: 1 MiB closes the window where an accidentally-enormous (or hostile) file
+#: buffers fully into memory before :func:`json.loads` ever sees it.
+_PRICING_MAX_BYTES = 1_048_576
 
 # Default published pricing (USD per million tokens) snapshotted 2025-04.
 # Verify at https://www.anthropic.com/pricing before relying on the estimate.
@@ -263,11 +270,21 @@ def load_pricing(path: str | Path) -> dict[str, tuple[int, int]]:
     """
     p = Path(path)
     try:
-        raw = json.loads(p.read_text(encoding="utf-8"))
+        raw = json.loads(read_text_capped(p, _PRICING_MAX_BYTES, encoding="utf-8"))
+    except ValueError as exc:
+        # ``read_text_capped`` raises ValueError on oversize; ``json.loads``
+        # raises ``JSONDecodeError`` which is a ValueError subclass. Both land
+        # here. Disambiguate via the message so the user sees the right hint —
+        # an oversize-file pointer is more actionable than a JSON parse error
+        # mid-binary-blob.
+        if isinstance(exc, json.JSONDecodeError):
+            raise ValueError(f"pricing file {p} is not valid JSON: {exc}") from exc
+        raise ValueError(
+            f"pricing file {p} exceeds {_PRICING_MAX_BYTES}-byte cap; "
+            f"shape it like `advisor plan --dump-pricing-template`"
+        ) from exc
     except (OSError, UnicodeDecodeError) as exc:
         raise ValueError(f"could not read pricing file {p}: {exc}") from exc
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"pricing file {p} is not valid JSON: {exc}") from exc
     if not isinstance(raw, dict):
         raise ValueError(f"pricing file {p} must be a JSON object at the top level")
     out: dict[str, tuple[int, int]] = {}

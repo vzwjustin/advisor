@@ -2,9 +2,20 @@
 
 Colors are emitted by default so subprocess contexts (Claude Code's
 Bash tool, IDEs, captured output) get the same styled view as a direct
-terminal session. Opt out by setting ``NO_COLOR`` to any non-empty value
-(https://no-color.org) or ``TERM=dumb``; under either, every helper
-returns the input string unchanged for byte-identical pipe output.
+terminal session.
+
+Four env vars control color, in this precedence (highest wins):
+
+* ``CLICOLOR_FORCE=1`` — force color on, even under ``NO_COLOR`` /
+  ``TERM=dumb`` (https://bixense.com/clicolors).
+* ``NO_COLOR`` (any non-empty value, https://no-color.org) or
+  ``TERM=dumb`` — opt out.
+* ``CLICOLOR=0`` — opt out (only honored when ``CLICOLOR_FORCE`` is unset).
+* (default) — color on.
+
+Under any opt-out path, every helper returns the input string unchanged
+for byte-identical pipe output. The ``--no-color`` CLI flag also unsets
+``CLICOLOR_FORCE`` for the process so it wins over a force override.
 """
 
 from __future__ import annotations

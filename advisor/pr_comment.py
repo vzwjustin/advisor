@@ -39,7 +39,12 @@ _GITHUB_BODY_LIMIT = 60_000
 # comment after only 2-3 findings; that mis-attributed truncation to
 # finding count when it was really one outlier. Capping evidence first
 # means truncation is now driven by total finding count.
-_EVIDENCE_CHAR_CAP = 500
+#
+# Measured in **bytes**, not characters — the downstream body budget
+# ``_GITHUB_BODY_LIMIT`` is byte-measured, so a char-only cap let a
+# 500-char CJK evidence block consume up to 1,500 bytes of the body and
+# crowd other findings out of the comment.
+_EVIDENCE_BYTE_CAP = 500
 
 
 def _escape_html(text: str) -> str:
@@ -66,10 +71,13 @@ def _escape_summary(text: str) -> str:
 
 
 def _cap_evidence(evidence: str) -> str:
-    """Cap a single evidence block at ``_EVIDENCE_CHAR_CAP`` chars."""
-    if len(evidence) <= _EVIDENCE_CHAR_CAP:
+    """Cap a single evidence block at ``_EVIDENCE_BYTE_CAP`` UTF-8 bytes."""
+    encoded = evidence.encode("utf-8")
+    if len(encoded) <= _EVIDENCE_BYTE_CAP:
         return evidence
-    return evidence[: _EVIDENCE_CHAR_CAP - 1].rstrip() + "…"
+    # ``errors="ignore"`` drops any trailing partial code point left by
+    # slicing mid-character so the result is always valid UTF-8.
+    return encoded[: _EVIDENCE_BYTE_CAP - 1].decode("utf-8", errors="ignore").rstrip() + "…"
 
 
 def _escape_inline_code(text: str) -> str:

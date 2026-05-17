@@ -7,6 +7,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-05-17
+
+Eight correctness fixes from a follow-up `/advisor` review wave. Patch
+bump — no new flags, no behavior changes beyond the fixes themselves.
+Zero-runtime-dep stance preserved.
+
+Five of the eight fixes (H1, H2, M1, M2, M3) retire the same read-cap
+class the 0.6.10 wave fixed in the `.advisor/` loaders, applied at the
+sites the prior wave missed: the two network `urlopen` calls in
+`install.py`, the two CLI file readers in `__main__.py`
+(`_load_findings_from_input` and `cmd_audit`), and the user-supplied
+`--pricing FILE` reader in `cost.py`. Each follows the same pattern:
+bounded read at a sane per-site cap, no `stat()`-then-read window for a
+concurrent appender to slip past.
+
+### Fixed
+
+- **`install.py` `fetch_pypi_latest_version` caps response body at 1
+  MiB.** Previously `_json.load(resp)` read the PyPI `/json` endpoint
+  unbounded; `urlopen(timeout=)` bounds connect + first-byte latency but
+  not total transfer or memory. A hostile or compromised mirror could
+  stream a multi-GB body and exhaust process memory before the timeout
+  fired. New `_PYPI_MAX_BYTES` constant; truncated bodies degrade
+  cleanly to `None` via the existing `JSONDecodeError`/`ValueError`
+  catch. (HIGH)
+- **`install.py` `fetch_remote_changelog` caps response body at 512
+  KiB.** Same class as above for the raw GitHub CHANGELOG fetch.
+  Partial-CHANGELOG truncation is acceptable for the version-section
+  regex that consumes the result, and is strictly better than OOM.
+  New `_CHANGELOG_MAX_BYTES` constant. (HIGH)
+- **`audit.py` `_append_cap_overruns` Tip line now reflects the
+  configured `--large-file-line-threshold`.** Previously hardcoded
+  `≥800-line files` in the remediation hint regardless of what the user
+  actually configured. The plumbing was already in place
+  (`AuditReport.large_file_line_threshold` is populated from the
+  checkpoint and surfaced in JSON output) — only the Tip-line emitter
+  ignored it. Users running custom thresholds now see accurate guidance.
+  (HIGH)
+- **`__main__.py` `_load_findings_from_input` closes stat-then-read
+  TOCTOU.** Replaces the `stat().st_size` + `read_text()` pattern with a
+  single bounded binary read at `_STDIN_LIMIT + 1` bytes, mirroring
+  `_fs.read_text_capped` but keeping `errors="replace"` so a corrupted
+  finding doesn't sink the whole batch. Closes the window where a
+  concurrent appender could grow the file past the cap between the two
+  syscalls. (MEDIUM)
+- **`__main__.py` `cmd_audit` transcript loader closes the same
+  TOCTOU.** Same shape as the findings-input fix above. The 0.6.10
+  commit message explicitly excluded `audit.py` work; these two CLI
+  readers and the `cost.py` reader below were the remaining gap from
+  that wave. (MEDIUM)
+- **`cost.py` `load_pricing` reads `--pricing FILE` through
+  `_fs.read_text_capped`.** Previously `p.read_text(...)` was unbounded;
+  a 500 MB file passed via `--pricing` buffered fully into memory before
+  `json.JSONDecodeError` fired. New `_PRICING_MAX_BYTES` constant
+  (1 MiB — a three-family pricing JSON is under 1 KiB in practice); the
+  oversize error message points users at
+  `advisor plan --dump-pricing-template` for the expected shape.
+  (MEDIUM)
+- **`pr_comment.py` per-finding evidence cap is now byte-measured, not
+  char-measured.** Renamed `_EVIDENCE_CHAR_CAP` → `_EVIDENCE_BYTE_CAP`;
+  `_cap_evidence` encodes-then-slices and uses `errors="ignore"` to drop
+  a trailing partial code point so the result is always valid UTF-8.
+  The downstream body budget `_GITHUB_BODY_LIMIT` is byte-measured, so a
+  500-char CJK evidence block could consume up to ~1,500 bytes of the
+  budget and crowd out other findings; per-finding fairness is now
+  consistent across encodings. ASCII evidence is byte-identical to
+  before. (LOW)
+- **`__main__.py` `_emit_plan` no longer prints "checkpoint saved" on
+  `--resume`.** The resume path loads a pre-existing checkpoint without
+  writing a new one; the prior message lied about that and the trailing
+  `resume with: advisor plan --resume <id>` tip was dead. Gated on the
+  existing `context == "resumed"` discriminator (no new params threaded)
+  — the resume branch now prints `resumed checkpoint: <id>` via
+  `info_box` and skips the dead tip. (LOW)
+- **`_style.py` module docstring lists all four color env vars** —
+  `CLICOLOR_FORCE`, `NO_COLOR`, `TERM=dumb`, `CLICOLOR=0` — with their
+  precedence. The docstring was stale relative to the 0.7.0 addition
+  of `CLICOLOR_FORCE` / `CLICOLOR`; `_compute_supports_color`'s
+  docstring and the `--no-color` CLI help already listed them. Doc
+  drift only — runtime behavior unchanged. (LOW)
+
 ## [0.7.0] - 2026-05-17
 
 Twenty-four UX and ergonomic improvements surfaced by an `/advisor` review
