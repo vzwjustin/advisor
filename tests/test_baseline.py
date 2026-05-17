@@ -53,6 +53,20 @@ class TestRoundTrip:
             loaded = read_baseline(p)
         assert loaded == []
 
+    def test_oversized_baseline_warns_and_returns_empty(self, tmp_path: Path) -> None:
+        """A baseline file larger than ``_MAX_BASELINE_BYTES`` must not be
+        loaded — defends against unbounded memory growth if a hostile
+        PR injects a giant ``.advisor/baseline.jsonl``. Behavior on
+        oversize matches the pre-existing "unreadable → warn + empty"
+        contract so a corrupt baseline doesn't break the run."""
+        from advisor.baseline import _MAX_BASELINE_BYTES
+
+        p = tmp_path / "huge.jsonl"
+        p.write_bytes(b"a" * (_MAX_BASELINE_BYTES + 1))
+        with pytest.warns(UserWarning, match="could not read baseline"):
+            loaded = read_baseline(p)
+        assert loaded == []
+
     def test_identity_path_collapses_dotdot(self) -> None:
         """A finding's identity path must collapse ``..`` so the
         baseline matcher and the suppressions matcher agree on what

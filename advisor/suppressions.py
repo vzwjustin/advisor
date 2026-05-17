@@ -40,7 +40,14 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path, PurePath
 
-from ._fs import normalize_path
+from ._fs import normalize_path, read_text_capped as _read_text_capped
+
+# Hard byte cap on suppression files. 10 MiB matches the ceiling used by
+# ``checkpoint.py`` and ``baseline.py`` so the three user-controlled
+# ``.advisor/`` loaders share one ceiling — at ~200 bytes per
+# suppression entry that's 50k entries, well beyond any realistic
+# project's exception list.
+_MAX_SUPPRESSIONS_BYTES = 10 * 1024 * 1024
 from .rank import _double_star_to_regex
 from .verify import Finding
 
@@ -158,13 +165,15 @@ def load_suppressions(path: Path) -> tuple[Suppression, ...]:
     if not path.exists():
         return ()
     try:
-        # ``utf-8-sig`` strips a leading BOM if present — Windows editors
-        # (Notepad, older VSCode versions) write one, and a raw ``utf-8``
-        # decode would land the BOM inside the first JSONL line, causing
-        # ``json.loads`` to reject the schema-version header. Mirrors
-        # history.py for cross-reader consistency.
-        text = path.read_text(encoding="utf-8-sig")
-    except (OSError, UnicodeDecodeError) as exc:
+        # Single bounded read — eliminates the stat-then-read TOCTOU
+        # window and caps memory before parsing. ``utf-8-sig`` strips a
+        # leading BOM if present (Windows editors write one), matching
+        # history.py for cross-reader consistency. ``ValueError`` from
+        # the helper specifically means oversized; preserved as the
+        # caller's ValueError so the existing raise-on-load contract
+        # is unchanged.
+        text = _read_text_capped(path, _MAX_SUPPRESSIONS_BYTES)
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
         raise ValueError(f"could not read {path}: {exc}") from exc
 
     entries: list[Suppression] = []

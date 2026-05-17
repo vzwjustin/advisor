@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ._fs import atomic_write_text as _shared_atomic_write
+from ._fs import read_text_capped as _read_text_capped
 from .focus import FocusBatch, FocusTask
 from .history import HISTORY_DIR_NAME
 
@@ -149,22 +150,20 @@ def load_checkpoint(target: str | Path, run_id: str) -> Checkpoint:
     :class:`ValueError` on missing / malformed content.
     """
     path = checkpoint_path(target, run_id)
+    # Single bounded read — _read_text_capped opens once, reads at most
+    # _MAX_CHECKPOINT_BYTES + 1 raw bytes, and raises ValueError if the
+    # file is larger. This replaces the prior ``stat().st_size`` →
+    # ``read_text`` pair, which left a TOCTOU window where a concurrent
+    # writer could grow the file past the guard before the read.
     try:
-        size = path.stat().st_size
+        text = _read_text_capped(path, _MAX_CHECKPOINT_BYTES)
     except FileNotFoundError:
         raise FileNotFoundError(f"no checkpoint at {path}") from None
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
         raise ValueError(f"could not read checkpoint {path}: {exc}") from exc
-    if size > _MAX_CHECKPOINT_BYTES:
-        raise ValueError(
-            f"could not read checkpoint {path}: size {size} exceeds "
-            f"{_MAX_CHECKPOINT_BYTES} bytes — refusing to load"
-        )
     try:
-        obj = json.loads(path.read_text(encoding="utf-8-sig"))
-    except FileNotFoundError:
-        raise FileNotFoundError(f"no checkpoint at {path}") from None
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        obj = json.loads(text)
+    except json.JSONDecodeError as exc:
         raise ValueError(f"could not read checkpoint {path}: {exc}") from exc
 
     version = str(obj.get("schema_version", ""))

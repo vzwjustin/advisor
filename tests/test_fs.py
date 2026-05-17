@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from advisor._fs import normalize_path, safe_rglob_paths
+import pytest
+
+from advisor._fs import normalize_path, read_text_capped, safe_rglob_paths
 
 
 def test_safe_rglob_paths_returns_deterministic_order(tmp_path: Path) -> None:
@@ -77,3 +79,52 @@ class TestNormalizePathLexicalCollapse:
         # downstream uses string equality with other empty paths.
         assert normalize_path("") == ""
         assert normalize_path("   ") == ""
+
+
+class TestReadTextCapped:
+    """``read_text_capped`` eliminates the stat-then-read TOCTOU window
+    and caps memory before any parsing runs. The cap is measured in
+    bytes (not decoded characters) so multi-byte content can't sneak
+    past as a smaller character count."""
+
+    def test_under_cap_returns_full_content(self, tmp_path: Path) -> None:
+        target = tmp_path / "ok.txt"
+        target.write_text("hello world", encoding="utf-8")
+        assert read_text_capped(target, max_bytes=100) == "hello world"
+
+    def test_strips_utf8_sig_bom(self, tmp_path: Path) -> None:
+        """Default encoding is utf-8-sig — must strip a leading BOM so
+        callers comparing the first line against a literal header don't
+        get tripped up by the Windows-editor-emitted BOM byte."""
+        target = tmp_path / "bom.txt"
+        target.write_bytes(b"\xef\xbb\xbf{\"schema\": 1}")
+        assert read_text_capped(target, max_bytes=100) == '{"schema": 1}'
+
+    def test_exactly_at_cap_is_accepted(self, tmp_path: Path) -> None:
+        """A file whose byte length equals the cap must still be
+        returned — the boundary is inclusive on the safe side. Catches
+        an off-by-one where ``>=`` swaps in for ``>``."""
+        target = tmp_path / "edge.txt"
+        target.write_bytes(b"a" * 100)
+        assert read_text_capped(target, max_bytes=100) == "a" * 100
+
+    def test_one_byte_over_cap_raises(self, tmp_path: Path) -> None:
+        target = tmp_path / "big.txt"
+        target.write_bytes(b"a" * 101)
+        with pytest.raises(ValueError, match="exceeds 100 bytes"):
+            read_text_capped(target, max_bytes=100)
+
+    def test_cap_is_bytes_not_characters(self, tmp_path: Path) -> None:
+        """100 characters of euro (``€``, 3 bytes in utf-8) = 300 bytes.
+        A character-based cap would erroneously accept this; the byte
+        cap correctly rejects it."""
+        target = tmp_path / "multibyte.txt"
+        target.write_text("€" * 100, encoding="utf-8")
+        with pytest.raises(ValueError, match="exceeds 100 bytes"):
+            read_text_capped(target, max_bytes=100)
+
+    def test_missing_file_raises_file_not_found(self, tmp_path: Path) -> None:
+        """Callers distinguish "no file" from "bad file" — re-raise the
+        underlying FileNotFoundError so they keep that signal."""
+        with pytest.raises(FileNotFoundError):
+            read_text_capped(tmp_path / "absent.txt", max_bytes=100)

@@ -63,6 +63,44 @@ def read_head(path: str, limit: int = CONTENT_SCAN_LIMIT) -> str:
         return ""
 
 
+def read_text_capped(
+    path: Path,
+    max_bytes: int,
+    *,
+    encoding: str = "utf-8-sig",
+) -> str:
+    """Read a text file with a hard byte cap. Atomic — one open, one read.
+
+    Opens ``path`` in binary mode and reads at most ``max_bytes + 1`` raw
+    bytes; if the result exceeds ``max_bytes`` the file is rejected with
+    :class:`ValueError`. Eliminates the ``stat`` → ``read_text`` TOCTOU
+    window where a concurrent appender, a hostile symlink swap, or any
+    other process growing the file between the two syscalls could
+    deliver an oversized payload despite an up-front size guard.
+
+    The cap is measured in **bytes** (not characters) — opening in
+    binary mode and only decoding after the byte-length check means a
+    file full of multi-byte characters can't sneak past the cap as a
+    smaller character count. ``utf-8-sig`` is the default to strip a
+    leading BOM if present (Windows editors write one and a raw utf-8
+    decode would land it inside the first JSONL line); callers reading
+    other encodings can override.
+
+    Raises:
+        FileNotFoundError: ``path`` doesn't exist (re-raised from open).
+        ValueError: file size exceeds ``max_bytes``.
+        UnicodeDecodeError: bytes are not valid in ``encoding``.
+        OSError: other I/O failure.
+    """
+    with open(path, "rb") as f:
+        raw = f.read(max_bytes + 1)
+    if len(raw) > max_bytes:
+        raise ValueError(
+            f"{path}: file size exceeds {max_bytes} bytes — refusing to load"
+        )
+    return raw.decode(encoding)
+
+
 def safe_rglob_paths(target: Path, pattern: str) -> list[str]:
     """Recursively list files under ``target`` matching ``pattern``.
 

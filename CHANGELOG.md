@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.10] - 2026-05-17
+
+Closes a TOCTOU window in three `.advisor/` file loaders by replacing
+each `stat().st_size` → `read_text()` pair with a single bounded
+binary read. A concurrent writer (or hostile symlink swap) between
+the two syscalls could previously deliver a payload larger than the
+guard into memory before any parsing ran.
+
+### Fixed
+
+- **`advisor.checkpoint.load_checkpoint`** — replaces the stat-then-read
+  pair with a single `_fs.read_text_capped` call. The TOCTOU window
+  where another process could grow the file past `_MAX_CHECKPOINT_BYTES`
+  between the size check and the read is gone.
+- **`advisor.baseline.read_baseline`** — adds a 10 MiB cap on the
+  loader (previously unbounded). Behavior on oversize matches the
+  pre-existing "unreadable → warn + empty" contract so a corrupt
+  baseline doesn't break the run.
+- **`advisor.suppressions.load_suppressions`** — adds a 10 MiB cap
+  (previously unbounded). Preserves the existing `raise ValueError`
+  contract so the size problem surfaces to the caller rather than
+  silently ignoring legitimate suppressions.
+
+### Added
+
+- **`advisor._fs.read_text_capped(path, max_bytes, *, encoding="utf-8-sig")`**
+  — single-open, single-read helper with a true **byte** cap (not a
+  character cap). Reads `max_bytes + 1` raw bytes in binary mode,
+  raises `ValueError` if oversize, then decodes — so a file of 100
+  multi-byte characters (e.g. `€` × 100 = 300 bytes) cannot sneak
+  past a 100-byte ceiling as a smaller character count.
+
 ## [0.6.9] - 2026-05-17
 
 Four narrow correctness fixes in the `advisor ui` dashboard. No API

@@ -26,6 +26,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ._fs import atomic_write_text as _shared_atomic_write
+from ._fs import read_text_capped as _read_text_capped
+
+# Hard byte cap on baseline files. 10 MiB is well beyond any realistic
+# repo's baseline (each entry is ~200-500 bytes, so this is 20k-50k
+# findings — orders of magnitude above any real project). Matches the
+# cap used by ``checkpoint.py`` and ``suppressions.py`` so the three
+# user-controlled ``.advisor/`` loaders share one ceiling.
+_MAX_BASELINE_BYTES = 10 * 1024 * 1024
 from .sarif import synthesize_rule_id
 from .verify import Finding
 
@@ -162,13 +170,15 @@ def read_baseline(path: Path) -> list[BaselineEntry]:
     if not path.exists():
         return []
     try:
-        # ``utf-8-sig`` strips a leading BOM if present — Windows editors
-        # (Notepad, older VSCode versions) write one, and a raw ``utf-8``
-        # decode would land the BOM inside the first JSONL line, causing
-        # ``json.loads`` to reject the schema-version header. Mirrors
-        # history.py for cross-reader consistency.
-        text = path.read_text(encoding="utf-8-sig")
-    except (OSError, UnicodeDecodeError) as exc:
+        # Single bounded read — eliminates the stat-then-read TOCTOU
+        # window and caps memory before parsing. ``utf-8-sig`` strips a
+        # leading BOM if present (Windows editors write one), matching
+        # history.py for cross-reader consistency. ``ValueError`` here
+        # specifically means the file exceeds ``_MAX_BASELINE_BYTES``;
+        # warn-and-return-empty preserves the prior "ignore unreadable
+        # baseline" behavior so a corrupt file doesn't break the run.
+        text = _read_text_capped(path, _MAX_BASELINE_BYTES)
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
         warnings.warn(f"could not read baseline {path}: {exc}", UserWarning, stacklevel=2)
         return []
     entries: list[BaselineEntry] = []

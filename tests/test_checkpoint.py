@@ -123,6 +123,20 @@ class TestSaveAndLoad:
         with pytest.raises(ValueError):
             load_checkpoint(tmp_path, "missing")
 
+    def test_oversized_checkpoint_is_refused(self, tmp_path: Path) -> None:
+        """Loader must reject a checkpoint file larger than
+        ``_MAX_CHECKPOINT_BYTES`` (10 MiB). Eliminating the stat→read
+        TOCTOU window means the check is now part of the single
+        bounded read inside ``_fs.read_text_capped``."""
+        from advisor.checkpoint import _MAX_CHECKPOINT_BYTES
+
+        path = checkpoint_path(tmp_path, "huge")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # One byte over the cap is enough to trip the guard.
+        path.write_bytes(b"a" * (_MAX_CHECKPOINT_BYTES + 1))
+        with pytest.raises(ValueError, match="refusing to load"):
+            load_checkpoint(tmp_path, "huge")
+
     def test_run_id_rejects_path_separators(self, tmp_path: Path) -> None:
         with pytest.raises(ValueError):
             checkpoint_path(tmp_path, "..\\..\\victim")

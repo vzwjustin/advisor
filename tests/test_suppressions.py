@@ -62,6 +62,18 @@ class TestLoader:
         with pytest.raises(ValueError, match="could not read"):
             load_suppressions(p)
 
+    def test_oversized_suppressions_raises_value_error(self, tmp_path: Path) -> None:
+        """A suppressions file larger than ``_MAX_SUPPRESSIONS_BYTES``
+        must be rejected with the existing raise-on-load contract so
+        the caller can surface the size problem rather than silently
+        ignoring legitimate suppressions."""
+        from advisor.suppressions import _MAX_SUPPRESSIONS_BYTES
+
+        p = tmp_path / "huge.jsonl"
+        p.write_bytes(b"a" * (_MAX_SUPPRESSIONS_BYTES + 1))
+        with pytest.raises(ValueError, match="could not read"):
+            load_suppressions(p)
+
     def test_above_medium_requires_until(self, tmp_path: Path) -> None:
         p = tmp_path / "s.jsonl"
         _write_jsonl(
