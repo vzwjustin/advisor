@@ -12,6 +12,8 @@ def _isolated_env(monkeypatch):
     """Strip color-related env vars so each test starts from a clean slate."""
     monkeypatch.delenv("NO_COLOR", raising=False)
     monkeypatch.delenv("TERM", raising=False)
+    monkeypatch.delenv("CLICOLOR_FORCE", raising=False)
+    monkeypatch.delenv("CLICOLOR", raising=False)
 
 
 def test_supports_color_default_is_true(monkeypatch):
@@ -47,6 +49,25 @@ def test_supports_color_term_dumb_disables(monkeypatch):
 
 def test_supports_color_term_xterm_enables(monkeypatch):
     monkeypatch.setenv("TERM", "xterm-256color")
+    assert _style.supports_color() is True
+
+
+def test_supports_color_clicolor_zero_disables(monkeypatch):
+    """CLICOLOR=0 disables color (bixense.com/clicolors convention)."""
+    monkeypatch.setenv("CLICOLOR", "0")
+    assert _style.supports_color() is False
+
+
+def test_supports_color_clicolor_force_overrides_no_color(monkeypatch):
+    """CLICOLOR_FORCE=1 wins over NO_COLOR — the user explicitly asked."""
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setenv("CLICOLOR_FORCE", "1")
+    assert _style.supports_color() is True
+
+
+def test_supports_color_clicolor_force_overrides_term_dumb(monkeypatch):
+    monkeypatch.setenv("TERM", "dumb")
+    monkeypatch.setenv("CLICOLOR_FORCE", "1")
     assert _style.supports_color() is True
 
 

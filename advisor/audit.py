@@ -18,6 +18,12 @@ markers emitted by :func:`advisor.orchestrate.build_fix_assignment_message`,
 :func:`advisor.orchestrate.build_runner_handoff_message`, and the
 runner/advisor prompt templates.
 
+Capturing a transcript: Claude Code does not auto-save sessions. The
+easiest paths are (a) select-all in the terminal and paste into a file,
+or (b) `script` / `tmux capture-pane` if you ran the session under one.
+Then ``advisor audit RUN_ID < transcript.txt`` (or pass ``--transcript
+PATH``).
+
 This is intentionally best-effort. A transcript that has been edited,
 truncated, or produced by a fork of the prompts may under-count or
 mis-attribute events. The audit is a diagnostic aid for post-mortem
@@ -372,14 +378,8 @@ def _attribute_context_pressure_to_runner(transcript: str, match_start: int) -> 
     return "runner-?"
 
 
-def audit_transcript(transcript: str, cp: Checkpoint) -> AuditReport:
-    """Produce an :class:`AuditReport` for a transcript / checkpoint pair.
-
-    ``transcript`` is treated as opaque text. ``cp`` supplies the caps and
-    the batch layout against which the transcript is judged. Unknown fields
-    (anything the transcript doesn't mention) show up as zeros / empty lists
-    — the absence of a signal is itself informative and is preserved.
-    """
+def _audit_fix_assignments(transcript: str) -> tuple[dict[str, int], dict[str, list[int]]]:
+    """Count and attribute every ``## Fix assignment`` marker."""
     fix_counts: dict[str, int] = {}
     fix_numbers: dict[str, list[int]] = {}
     for m in _FIX_ASSIGNMENT_RE.finditer(transcript):
@@ -387,8 +387,11 @@ def audit_transcript(transcript: str, cp: Checkpoint) -> AuditReport:
         runner = _attribute_fix_to_runner(transcript, m.start())
         fix_counts[runner] = fix_counts.get(runner, 0) + 1
         fix_numbers.setdefault(runner, []).append(fix_num)
+    return fix_counts, fix_numbers
 
-    cap = cp.max_fixes_per_runner
+
+def _audit_cap_overruns(fix_counts: dict[str, int], cap: int) -> list[str]:
+    """Human-readable lines for runners whose observed count > cap."""
     cap_overruns: list[str] = []
     for runner, count in sorted(fix_counts.items(), key=lambda kv: _runner_sort_key(kv[0])):
         if count > cap:
@@ -402,56 +405,79 @@ def audit_transcript(transcript: str, cp: Checkpoint) -> AuditReport:
                     f"{runner}: observed {count} fix assignments (cap={cap}) "
                     "— rotation was late or missed"
                 )
+    return cap_overruns
 
-    # Context-pressure: per-runner first-mention order + raw total count.
-    # Uses a separate attribution path (SendMessage envelope-aware) because
-    # CONTEXT_PRESSURE pings are self-reports *from* a runner — the message
-    # envelope's ``to=`` field points at the advisor, not the runner —
-    # whereas fix assignments are dispatches *to* a runner. Reusing
-    # ``_attribute_fix_to_runner`` here would attribute the ping to
-    # whichever runner the advisor most recently addressed, not the one
-    # actually pinging.
+
+def _audit_context_pressure(transcript: str) -> tuple[list[str], int]:
+    """Per-runner first-mention order + raw occurrence total.
+
+    Uses a separate attribution path (SendMessage envelope-aware) because
+    CONTEXT_PRESSURE pings are self-reports *from* a runner — the message
+    envelope's ``to=`` field points at the advisor, not the runner — whereas
+    fix assignments are dispatches *to* a runner. Reusing
+    ``_attribute_fix_to_runner`` here would attribute the ping to whichever
+    runner the advisor most recently addressed, not the one actually pinging.
+    """
     cp_matches = list(_CONTEXT_PRESSURE_RE.finditer(transcript))
     cp_runners_ordered: list[str] = []
-    seen_cp: set[str] = set()
+    seen: set[str] = set()
     for m in cp_matches:
         runner = _attribute_context_pressure_to_runner(transcript, m.start())
-        if runner not in seen_cp:
-            seen_cp.add(runner)
+        if runner not in seen:
+            seen.add(runner)
             cp_runners_ordered.append(runner)
+    return cp_runners_ordered, len(cp_matches)
 
-    rotations = sum(1 for _ in _HANDOFF_RE.finditer(transcript))
 
-    # Cap protocol_violations at PROTOCOL_VIOLATION_CAP entries — a
-    # pathological transcript with thousands of matches would otherwise
-    # inflate AuditReport memory without adding signal. Mirrors the cap
-    # on _history_payload. The ``_truncated`` flag surfaces in the
-    # final report so a reader can tell "0 violations" from "we stopped
-    # at the cap" — silent truncation hides the very signal the audit
-    # exists to highlight.
-    protocol_violations: list[str] = []
-    protocol_violations_truncated = False
-    # Strip fenced code blocks first — a runner quoting the sentinel inside
-    # an Evidence ``` block is documenting, not violating. The ^ anchor
-    # alone catches column-0 prose mentions but not column-0 lines that sit
-    # *inside* a fenced region.
+def _audit_protocol_violations(transcript: str) -> tuple[list[str], bool]:
+    """Top-level ``PROTOCOL_VIOLATION`` strings, capped for memory safety.
+
+    Strip fenced code blocks first — a runner quoting the sentinel inside an
+    Evidence ``` block is documenting, not violating. The ^ anchor alone
+    catches column-0 prose mentions but not column-0 lines that sit *inside*
+    a fenced region. The ``_truncated`` flag surfaces in the final report so
+    a reader can tell "0 violations" from "we stopped at the cap" — silent
+    truncation hides the very signal the audit exists to highlight.
+    """
+    violations: list[str] = []
+    truncated = False
     transcript_unfenced = _strip_fenced_blocks(transcript)
     for m in _PROTOCOL_VIOLATION_RE.finditer(transcript_unfenced):
-        if len(protocol_violations) >= PROTOCOL_VIOLATION_CAP:
-            protocol_violations_truncated = True
+        if len(violations) >= PROTOCOL_VIOLATION_CAP:
+            truncated = True
             break
-        protocol_violations.append(m.group(0))
+        violations.append(m.group(0))
+    return violations, truncated
 
-    batch_files = _collect_batch_files(cp)
-    in_batch: list[Finding]
-    out_batch: list[Finding]
+
+def _audit_scope_drift(
+    transcript: str, batch_files: set[str]
+) -> tuple[list[Finding], list[Finding]]:
+    """Classify parsed findings against the assigned batch-file universe.
+
+    Legacy/empty plan: no reliable denominator — treat all parsed findings
+    as in-batch so the audit doesn't falsely flag drift.
+    """
     if batch_files:
-        in_batch, out_batch = parse_findings_with_drift(transcript, batch_files)
-    else:
-        # Nothing to compare against — treat all parsed findings as in-batch
-        # so the audit doesn't falsely flag drift on a legacy/empty plan.
-        in_batch = parse_findings_with_drift(transcript, None)[0]
-        out_batch = []
+        return parse_findings_with_drift(transcript, batch_files)
+    return parse_findings_with_drift(transcript, None)[0], []
+
+
+def audit_transcript(transcript: str, cp: Checkpoint) -> AuditReport:
+    """Produce an :class:`AuditReport` for a transcript / checkpoint pair.
+
+    ``transcript`` is treated as opaque text. ``cp`` supplies the caps and
+    the batch layout against which the transcript is judged. Unknown fields
+    (anything the transcript doesn't mention) show up as zeros / empty lists
+    — the absence of a signal is itself informative and is preserved.
+    """
+    fix_counts, fix_numbers = _audit_fix_assignments(transcript)
+    cap_overruns = _audit_cap_overruns(fix_counts, cp.max_fixes_per_runner)
+    cp_runners_ordered, cp_total = _audit_context_pressure(transcript)
+    rotations = sum(1 for _ in _HANDOFF_RE.finditer(transcript))
+    protocol_violations, protocol_violations_truncated = _audit_protocol_violations(transcript)
+    batch_files = _collect_batch_files(cp)
+    in_batch, out_batch = _audit_scope_drift(transcript, batch_files)
 
     return AuditReport(
         run_id=cp.run_id,
@@ -461,16 +487,16 @@ def audit_transcript(transcript: str, cp: Checkpoint) -> AuditReport:
         fix_counts=fix_counts,
         cap_overruns=cap_overruns,
         context_pressure_runners=cp_runners_ordered,
-        context_pressure_count=len(cp_matches),
+        context_pressure_count=cp_total,
         rotations=rotations,
         protocol_violations=protocol_violations,
         findings_in_batch=in_batch,
         findings_out_of_batch=out_batch,
         batch_file_count=len(batch_files),
-        # Defensive deep-ish copy — ``dict(fix_numbers)`` shares the
-        # inner ``list[int]`` references with the caller, so a post-
-        # construction ``fix_numbers[runner].append(...)`` would still
-        # leak into the frozen report. Copy each list too.
+        # Defensive deep-ish copy — ``dict(fix_numbers)`` shares the inner
+        # ``list[int]`` references with the caller, so a post-construction
+        # ``fix_numbers[runner].append(...)`` would still leak into the
+        # frozen report. Copy each list too.
         fix_numbers={k: list(v) for k, v in fix_numbers.items()},
         protocol_violations_truncated=protocol_violations_truncated,
     )
@@ -521,24 +547,16 @@ def audit_to_dict(report: AuditReport) -> dict[str, object]:
     }
 
 
-def format_audit_report(report: AuditReport) -> str:
-    """Render an :class:`AuditReport` as a human-readable markdown block.
+def _single_line(value: str) -> str:
+    """Flatten newlines in free-form text so it renders as one markdown list item.
 
-    Empty sections are collapsed to a single ``(none)`` line so the report
-    remains scannable even when a run had no violations or drift — the
-    absence of red flags is itself a useful signal and should be visible.
+    A multi-line description would break the list and could mis-render
+    continuation lines as headers if the next line starts with ``#``.
     """
-    lines: list[str] = []
-    lines.append(f"# Audit — run {report.run_id}")
-    lines.append("")
-    lines.append(
-        f"Caps: max_fixes_per_runner={report.max_fixes_per_runner}, "
-        f"large_file_line_threshold={report.large_file_line_threshold}, "
-        f"large_file_max_fixes={report.large_file_max_fixes}"
-    )
-    lines.append(f"Batch file universe: {report.batch_file_count} files")
-    lines.append("")
+    return value.replace("\r\n", " ").replace("\n", " ").replace("\r", " ").strip()
 
+
+def _append_fix_counts(lines: list[str], report: AuditReport) -> None:
     lines.append("## Fix counts per runner")
     if report.fix_counts:
         for runner in sorted(report.fix_counts, key=_runner_sort_key):
@@ -549,14 +567,22 @@ def format_audit_report(report: AuditReport) -> str:
         lines.append("- (none)")
     lines.append("")
 
+
+def _append_cap_overruns(lines: list[str], report: AuditReport) -> None:
     lines.append("## Cap overruns")
     if report.cap_overruns:
-        for o in report.cap_overruns:
-            lines.append(f"- {o}")
+        lines.extend(f"- {o}" for o in report.cap_overruns)
+        lines.append(
+            "- _Tip: rotate sooner by lowering `--max-fixes-per-runner` "
+            "(or `--large-file-max-fixes` for ≥800-line files), or raise "
+            "`--max-runners` so the advisor has fresh capacity to hand off to._"
+        )
     else:
         lines.append("- (none — every runner stayed within cap)")
     lines.append("")
 
+
+def _append_context_pressure(lines: list[str], report: AuditReport) -> None:
     lines.append("## CONTEXT_PRESSURE pings")
     if report.context_pressure_runners:
         runner_word = "runner" if len(report.context_pressure_runners) == 1 else "runners"
@@ -566,43 +592,86 @@ def format_audit_report(report: AuditReport) -> str:
         )
         for r in report.context_pressure_runners:
             lines.append(f"  - {r}")
+        lines.append(
+            "- _Tip: pings are expected and healthy — they trigger rotation. "
+            "Investigate only if a ping landed but no rotation followed (see "
+            "the Rotations section below)._"
+        )
     else:
         lines.append("- (none — no runner self-reported saturation)")
     lines.append("")
 
+
+def _append_rotations(lines: list[str], report: AuditReport) -> None:
     lines.append("## Rotations (handoffs)")
     lines.append(f"- count: {report.rotations}")
     lines.append("")
 
+
+def _append_protocol_violations(lines: list[str], report: AuditReport) -> None:
     lines.append("## PROTOCOL_VIOLATION strings")
     if report.protocol_violations:
-        for v in report.protocol_violations:
-            lines.append(f"- {v}")
+        lines.extend(f"- {v}" for v in report.protocol_violations)
         if report.protocol_violations_truncated:
-            # Make the silent cap explicit so a reader can tell
-            # "1000 violations" from "1000+ violations and we stopped
-            # counting" — the latter is itself a finding worth
-            # surfacing rather than hiding inside an undocumented limit.
+            # Make the silent cap explicit so a reader can tell "1000
+            # violations" from "1000+ violations and we stopped counting" —
+            # the latter is itself a finding worth surfacing rather than
+            # hiding inside an undocumented limit.
             lines.append(
                 f"- … (truncated at {PROTOCOL_VIOLATION_CAP}; "
                 f"transcript contains additional matches)"
             )
+        lines.append(
+            "- _Tip: every PROTOCOL_VIOLATION is a near-miss the advisor "
+            "self-flagged — read the surrounding transcript to see what "
+            "the advisor was about to do and why it stopped. Recurring "
+            "violations of the same shape suggest a prompt change._"
+        )
     else:
         lines.append("- (none)")
     lines.append("")
 
+
+def _append_scope_drift(lines: list[str], report: AuditReport) -> None:
     lines.append("## Out-of-batch findings (scope drift)")
     if report.findings_out_of_batch:
         for f in report.findings_out_of_batch:
-            # Strip newlines from description: a multi-line string would
-            # break the markdown list and could mis-render continuation
-            # lines as headers if the next line starts with ``#``.
-            desc = f.description.replace("\r\n", " ").replace("\n", " ").replace("\r", " ").strip()
-            lines.append(f"- `{f.file_path}` [{f.severity}] — {desc}")
+            lines.append(f"- `{f.file_path}` [{f.severity}] — {_single_line(f.description)}")
+        lines.append(
+            "- _Tip: drift means a runner reported on a file outside its "
+            "batch. Triage each one as either (a) a real finding worth "
+            "promoting to a follow-up run, or (b) signal the runner's "
+            "scope anchors weren't being enforced — tighten the per-runner "
+            "REDIRECT cadence._"
+        )
     else:
         lines.append("- (none — no runner reported on a file outside its batch)")
     lines.append("")
 
-    lines.append(f"## In-batch findings: {len(report.findings_in_batch)}")
 
+def format_audit_report(report: AuditReport) -> str:
+    """Render an :class:`AuditReport` as a human-readable markdown block.
+
+    Empty sections are collapsed to a single ``(none)`` line so the report
+    remains scannable even when a run had no violations or drift — the
+    absence of red flags is itself a useful signal and should be visible.
+    """
+    lines: list[str] = [
+        f"# Audit — run {report.run_id}",
+        "",
+        (
+            f"Caps: max_fixes_per_runner={report.max_fixes_per_runner}, "
+            f"large_file_line_threshold={report.large_file_line_threshold}, "
+            f"large_file_max_fixes={report.large_file_max_fixes}"
+        ),
+        f"Batch file universe: {report.batch_file_count} files",
+        "",
+    ]
+    _append_fix_counts(lines, report)
+    _append_cap_overruns(lines, report)
+    _append_context_pressure(lines, report)
+    _append_rotations(lines, report)
+    _append_protocol_violations(lines, report)
+    _append_scope_drift(lines, report)
+    lines.append(f"## In-batch findings: {len(report.findings_in_batch)}")
     return "\n".join(lines)

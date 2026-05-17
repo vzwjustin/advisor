@@ -110,7 +110,8 @@ def _check_claude_cli() -> Check:
     return Check(
         "claude-cli",
         "warn",
-        "`claude` CLI not on PATH; you cannot run the live pipeline from this shell",
+        "`claude` CLI not on PATH; you cannot run the live pipeline from this "
+        "shell — install Claude Code from https://claude.ai/code",
     )
 
 

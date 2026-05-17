@@ -3,11 +3,36 @@
 This project uses Claude Code's Agent tool to replicate the Anthropic API
 advisor pattern. See CLAUDE.md for the workflow protocol.
 
-Core building blocks:
-  rank        — Priority-rank files by likelihood of containing issues
-  focus       — Batched file review for parallel analysis
-  verify      — Verification pass to filter noise from findings
-  orchestrate — Team config, prompt builders, dispatch message specs
+Public surface (grouped by intent — see ``__all__`` below for the full list):
+
+  Core building blocks
+    rank        — Priority-rank files by likelihood of containing issues
+    focus       — Batched file review for parallel analysis
+    verify      — Verification pass to filter noise from findings
+    orchestrate — Team config, prompt builders, dispatch message specs
+
+  Findings lifecycle
+    history       — Persist confirmed findings across runs
+    baseline      — Snapshot-and-compare for accepted-noise workflows
+    suppressions  — Per-rule, per-file gate with expiry
+    checkpoint    — Resume an interrupted dispatch plan
+
+  Output sinks
+    sarif       — SARIF 2.1.0 emitter for Code Scanning
+    pr_comment  — GitHub-flavored PR body formatter
+    cost        — Token / dollar estimator
+
+  Operator tools (advisor-implementation territory — most users won't touch)
+    runner_budget — Char-budget + scope-anchor primitives for live runners
+    audit         — Post-hoc transcript analyser
+    presets       — Curated rule-pack bundles
+    git_scope     — ``--since`` / ``--staged`` / ``--base`` resolver
+    install       — One-shot CLAUDE.md + skill wiring
+    doctor        — Setup diagnostics
+    skill_asset   — Bundled SKILL.md content
+
+Modules prefixed with ``_`` (``_fs``, ``_style``, ``_version``) are
+internal helpers and are not exported.
 """
 
 from ._version import resolve_version as _resolve_version

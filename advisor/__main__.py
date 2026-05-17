@@ -659,6 +659,27 @@ def _resolve_plan_files(
 
 def cmd_plan(args: argparse.Namespace) -> int:
     """Rank local files and print a batch dispatch plan — no agents spawned."""
+    # ``--dump-pricing-template`` short-circuits all discovery. Output is
+    # the exact top-level shape ``load_pricing`` accepts so the round-trip
+    # is zero-effort: ``advisor plan . --dump-pricing-template > p.json``
+    # then edit and pass back via ``--pricing p.json``. A ``_comment`` key
+    # is embedded for users browsing the file — ``load_pricing`` reads
+    # only the three canonical family keys and ignores anything else.
+    if getattr(args, "dump_pricing_template", False):
+        from .cost import DEFAULT_PRICING_CENTS_PER_MTOK
+
+        payload: dict[str, object] = {
+            "_comment": (
+                "values are cents per 1M tokens — verify at "
+                "https://www.anthropic.com/pricing; opus/sonnet/haiku "
+                "are all required, extra keys (like this one) are ignored"
+            ),
+        }
+        for family, prices in DEFAULT_PRICING_CENTS_PER_MTOK.items():
+            payload[family] = {"input": prices[0], "output": prices[1]}
+        print(json.dumps(payload, indent=2))
+        return 0
+
     target = Path(args.target)
     if not target.exists():
         print(_style.error_box(f"target not found: {target}", stream=sys.stderr), file=sys.stderr)
@@ -1093,6 +1114,8 @@ def _emit_plan(
         print()
         print(_style.colorize_markdown(format_estimate(est)))
 
+    quiet = getattr(args, "quiet", False)
+    resume_id = getattr(args, "resume", None)
     if run_id:
         print()
         # Green success glyph + bold run_id for fast scanning in Claude
@@ -1100,9 +1123,31 @@ def _emit_plan(
         # users don't have to guess the exact ``--resume`` flag name.
         print(_style.success_box(f"checkpoint saved: {run_id}"))
         print(_style.tip(f"resume with: advisor plan --resume {run_id}"))
+    elif not quiet and not resume_id:
+        # Surface ``--resume`` discoverability when the user *didn't* opt
+        # into a fresh checkpoint but has prior saved runs sitting in
+        # ``.advisor/``. Without this, the only way to learn about resume
+        # is to read the changelog.
+        try:
+            prior_ids = list_checkpoints(target)
+        except (OSError, ValueError):
+            prior_ids = []
+        if prior_ids:
+            print()
+            print(
+                _style.tip(
+                    f"{len(prior_ids)} saved checkpoint(s) at {target}/.advisor/ — "
+                    "see `advisor checkpoints` or resume with `advisor plan --resume <id>`"
+                )
+            )
 
     print()
     print(_style.cta(f"/advisor {target}", "run the live pipeline in Claude Code"))
+    if not quiet:
+        # The browser dashboard is invisible to users who don't read the
+        # README — add an inline pointer so they discover it after their
+        # first ``advisor plan`` instead of months later.
+        print(_style.tip(f"explore findings in a browser: advisor ui {target}"))
     return 0
 
 
@@ -1957,21 +2002,37 @@ def cmd_checkpoints(args: argparse.Namespace) -> int:
         print(_style.tip("save one with: advisor plan --checkpoint"))
         return 0
     print(_style.colorize_markdown(f"## Checkpoints ({len(ids)})"))
-    # Widest run_id + the backtick quotes, so the age/path columns line up
-    # regardless of suffix length variations across checkpoints. Aligning
-    # in Python space (not with a Markdown table) keeps the output
-    # pipe-friendly while still reading as columns in Claude Code.
+    # Widest run_id + the backtick quotes, so the age/files/model columns
+    # line up regardless of suffix length variations across checkpoints.
+    # Aligning in Python space (not with a Markdown table) keeps the
+    # output pipe-friendly while still reading as columns in Claude Code.
     id_col_width = max(len(rid) for rid in ids) + 2  # +2 for the backticks
     age_col_width = 10  # fits "just now" / "99d ago"
+    files_col_width = 9  # fits "999 files"
     for rid in ids:
         path = checkpoint_path(target, rid)
         try:
             age = _relative_age(path.stat().st_mtime)
         except OSError:
             age = ""
+        # Load the checkpoint header for file-count + model fields. A
+        # malformed checkpoint (truncated, schema-mismatch) shouldn't kill
+        # the whole listing — degrade to id+age only for that row.
+        try:
+            cp = load_checkpoint(target, rid)
+            file_count = len(cp.tasks)
+            model = cp.advisor_model or "?"
+        except (FileNotFoundError, ValueError, OSError):
+            file_count = None
+            model = ""
         id_cell = f"`{rid}`".ljust(id_col_width)
         age_cell = _style.dim(age.ljust(age_col_width))
-        print(f"- {id_cell}  {age_cell}  {_style.dim(str(path))}")
+        files_cell = _style.dim(
+            (f"{file_count} file{'' if file_count == 1 else 's'}" if file_count is not None else "")
+            .ljust(files_col_width)
+        )
+        model_cell = _style.dim(model) if model else ""
+        print(f"- {id_cell}  {age_cell}  {files_cell}  {model_cell}")
     if not getattr(args, "quiet", False):
         print()
         print(_style.cta("resume", "advisor plan --resume <RUN_ID>"))
@@ -2540,6 +2601,19 @@ def cmd_audit(args: argparse.Namespace) -> int:
                     f"suppressed {f.severity} {f.file_path!r} — "
                     f"rule {s.rule_id!r} ({s.reason or 'no reason'})"
                 )
+            # One-line totals so the user sees something fired even when
+            # ``--quiet`` silences the per-finding info lines above.
+            # Without this, suppressions look like the findings were never
+            # there in the first place.
+            if not getattr(args, "quiet", False) and not getattr(args, "json", False):
+                noun = "finding" if len(dropped) == 1 else "findings"
+                print(
+                    _style.dim(
+                        f"{len(dropped)} {noun} suppressed via "
+                        f"{suppr_path} — run `advisor suppressions` for details"
+                    ),
+                    file=sys.stderr,
+                )
         report = _replace_findings(report, kept)
 
     sarif_path = getattr(args, "sarif", None)
@@ -2594,7 +2668,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-color",
         action="store_true",
         default=False,
-        help="Disable ANSI color output (also honored via NO_COLOR env var)",
+        help=(
+            "Disable ANSI color output. NO_COLOR / TERM=dumb / CLICOLOR=0 also "
+            "disable; CLICOLOR_FORCE=1 forces color on (overrides NO_COLOR)."
+        ),
     )
     # Optional shell-completion (shtab) — ships as an extras dep so the
     # core tool stays dependency-free. When shtab is installed, users can
@@ -2720,6 +2797,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="FILE",
         help="Load model pricing (cents per 1M tokens) from JSON FILE",
+    )
+    # Dump a starter pricing template the user can edit and pass back
+    # via --pricing. Avoids the "what shape does this file want?" trip
+    # to the source code. Exits 0 after printing.
+    p_plan.add_argument(
+        "--dump-pricing-template",
+        action="store_true",
+        help=(
+            "Print the default per-family pricing (cents per 1M tokens) as "
+            "JSON and exit — pipe to a file, edit, then pass via --pricing."
+        ),
     )
     # SARIF output — for GitHub Code Scanning / other CI consumers. The
     # plan stage emits an empty-results document (no findings yet); the
@@ -3045,6 +3133,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_baseline = sub.add_parser(
         "baseline",
         help="Snapshot-and-compare: create a baseline or diff current findings vs. it",
+        description=(
+            "Findings match across runs on (file, rule_id, description_hash) "
+            "where description_hash is a 16-hex-char SHA-1 of the first 120 "
+            "chars of the description — a trivial reword still matches. A "
+            "substantive rewrite surfaces as a new finding."
+        ),
     )
     p_baseline.add_argument("action", choices=("create", "diff"), help="create or diff")
     p_baseline.add_argument(
@@ -3108,6 +3202,13 @@ def build_parser() -> argparse.ArgumentParser:
             "Post-hoc audit of an advisor run — loads a checkpoint and a "
             "transcript, reports fix counts, CONTEXT_PRESSURE pings, "
             "rotations, PROTOCOL_VIOLATION strings, and scope drift."
+        ),
+        description=(
+            "Reads the transcript from stdin or --transcript PATH. Claude "
+            "Code does not auto-save sessions; capture one by selecting "
+            "the terminal output and saving to a file, or by running the "
+            "session under `script(1)` / `tmux capture-pane`. Example: "
+            "`advisor audit 20260517T143012Z-ab12cd34 < transcript.txt`."
         ),
     )
     p_audit.add_argument(
@@ -3200,6 +3301,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if getattr(args, "no_color", False):
         os.environ["NO_COLOR"] = "1"
+        # Explicit ``--no-color`` must beat ``CLICOLOR_FORCE=1`` env, so
+        # drop the force flag for this process. NO_COLOR alone is enough
+        # without CLICOLOR_FORCE — the precedence in _compute_supports_color
+        # has FORCE winning over NO_COLOR.
+        os.environ.pop("CLICOLOR_FORCE", None)
         _style.reset_color_cache()
     if args.print_completion:
         try:
@@ -3217,7 +3323,12 @@ def main(argv: list[str] | None = None) -> int:
         print(shtab.complete(parser, shell=args.print_completion))
         return 0
     if not args.command:
-        parser.error("a subcommand is required (try `advisor --help`)")
+        # Bare ``advisor`` is a discovery moment, not a user error. Print
+        # the full help (which includes subcommand descriptions) and exit
+        # 0, matching the convention git / gh / ruff use. argparse's own
+        # ``parser.error`` would exit 2 with just the usage line.
+        parser.print_help()
+        return 0
     if args.command not in _NUDGE_SKIP_COMMANDS:
         ensure_nudge()
     try:

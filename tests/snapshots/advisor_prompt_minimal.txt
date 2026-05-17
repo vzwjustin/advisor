@@ -54,7 +54,7 @@ These bias toward caution over speed. For trivial single-line edits, use judgmen
 ## Step 1 — Structural discovery (you, directly)
 Glob the target yourself. Skip `__pycache__`, `.venv`, `node_modules`, `.git`, `dist`, `build`. Grep for anything that hints at risk or complexity: auth flows, input parsing, SQL, shell exec, crypto, session state, deserialization, file I/O, anywhere trust crosses a boundary. You do not Read files in this step — you're building a structural map, and your context window is the right place to hold it. Do not delegate this; it's cheap for you and the map is yours to keep.
 
-**Scope ambiguity check — do this before ranking.** If the configured file type is `*.py` (the default `*.py`) but the Glob reveals non-Python source files (e.g. `*.rs`, `*.go`, `*.ts`, `*.js`, `*.java`, `*.cpp`) that look like the primary codebase, STOP. SendMessage the team-lead: "Glob found [languages]. The configured file type is `*.py` — should I target those instead, or a different pattern?" Wait for the answer before proceeding to Step 2. Do not guess.
+**Scope ambiguity check — do this before ranking.** If the configured file type is `*.py` (the default `*.py`) but the Glob reveals non-Python source files (e.g. `*.rs`, `*.go`, `*.ts`, `*.js`, `*.java`, `*.cpp`) that look like the primary codebase, STOP. SendMessage the team-lead naming the actual file extensions you found (e.g. "Glob found mostly `*.rs` and `*.toml`; the configured pattern `*.py` is excluding them — should I switch to `*.rs`, or stay with `*.py`?"). Wait for the answer before proceeding to Step 2. Do not guess.
 
 ## Step 2 — Rank and size the pool
 From Glob+Grep alone, score each candidate file P1–P5:

@@ -272,6 +272,7 @@ common stacks:
 
 | Preset             | Stack                        | Defaults                           |
 |--------------------|------------------------------|------------------------------------|
+| `general-python`   | Generic Python codebase      | `*.py`, no stack-specific boosting |
 | `python-web`       | Flask / Django / FastAPI     | `*.py`, P5 auth keywords           |
 | `python-cli`       | argparse / click CLIs        | `*.py`, P3 subprocess keywords     |
 | `node-api`         | Express / Fastify / Koa      | `*.js,*.ts`, P5 JWT/session        |
@@ -287,14 +288,20 @@ advisor presets --json     # machine-readable
 
 ## Automation flags
 
-| Flag                | Applies to        | Effect                                       |
-|---------------------|-------------------|----------------------------------------------|
-| `--sarif PATH`      | `plan`, `audit`   | Write SARIF 2.1.0 for Code Scanning          |
-| `--fail-on LEVEL`   | `plan`, `audit`   | Exit 4 if any finding ≥ LEVEL                |
-| `--format pr-comment` | `plan`          | Emit a PR-body-ready markdown summary        |
-| `--no-history`      | `plan`            | Ignore history for deterministic CI plans    |
-| `--baseline PATH`   | `plan`            | Suppress findings matching a baseline        |
-| `--json` / `--output FILE` | `plan` / `audit` | Machine-readable output                |
+Findings come from `advisor audit` (the verify pass) — `advisor plan`
+prints the dispatch ranking. The gating + emit flags that depend on
+findings (`--fail-on`, `--format pr-comment`, `--baseline`) only exist
+on `audit`. `--sarif` exists on both — `plan` writes an empty-results
+document (no findings yet), `audit` writes the real one.
+
+| Flag                       | Applies to      | Effect                                    |
+|----------------------------|-----------------|-------------------------------------------|
+| `--sarif PATH`             | `plan`, `audit` | Write SARIF 2.1.0 for Code Scanning       |
+| `--fail-on LEVEL`          | `audit`         | Exit 4 if any finding ≥ LEVEL             |
+| `--format pr-comment`      | `audit`         | Emit a PR-body-ready markdown summary     |
+| `--baseline PATH`          | `audit`         | Suppress findings matching a baseline     |
+| `--no-history`             | `plan`          | Ignore history for deterministic CI plans |
+| `--json` / `--output FILE` | `plan`, `audit` | Machine-readable output                   |
 
 Exit codes: `0` clean · `4` `--fail-on` threshold tripped · `3` `--strict`
 no-op or unhealthy install · `2` argparse / user error · `1` unexpected.
@@ -305,7 +312,7 @@ no-op or unhealthy install · `2` argparse / user error · `1` unexpected.
 - **`advisor baseline create`** — snapshot current findings as an accepted baseline
 - **`advisor baseline diff`** — compare current run vs. baseline
 - **`.advisor/suppressions.jsonl`** — per-rule, per-file suppressions with
-  expiry dates (run `advisor suppressions --list`)
+  expiry dates (run `advisor suppressions` to list, add `--expired` to filter)
 
 ## Further reading
 

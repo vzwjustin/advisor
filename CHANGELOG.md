@@ -7,6 +7,121 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-05-17
+
+Twenty-four UX and ergonomic improvements surfaced by an `/advisor` review
+wave. No runtime dependencies added (zero-dep stance preserved); no behavior
+change beyond the additions noted below. Minor bump because several entries
+add new CLI flags (`--dump-pricing-template`), a new preset (`general-python`),
+new SARIF output fields (`partialFingerprints`, `driver.properties`), and new
+`CLICOLOR_FORCE` / `CLICOLOR` env-var handling.
+
+### Fixed
+
+- **README automation flags table now matches the CLI.** Previously listed
+  `--fail-on`, `--format`, and `--baseline` on `advisor plan`; they only
+  exist on `advisor audit`. CI authors following the README hit
+  `unrecognized arguments` on first attempt. Table reworded; `--sarif`
+  is correctly shown on both `plan` and `audit`. The Findings-lifecycle
+  bullet for `.advisor/suppressions.jsonl` also dropped the bogus
+  `--list` flag (the CLI takes no subcommand, with `--expired` to filter).
+- **`advisor` (no subcommand) now prints help and exits 0** instead of
+  `parser.error` exit-2 — bare invocation is a discovery moment, not a
+  user error. Matches `git` / `gh` / `ruff` convention.
+- **`install.py` SKILL.md downgrade warnings route through
+  `_style.warning_box`** instead of bare `print(file=sys.stderr)` — now
+  visually consistent with every other warning in the codebase. Affects
+  both `install_skill` and `install_update_skill`.
+- **`history.format_history_block` groups entries by file path** so
+  cross-file recurrence patterns surface at a glance. Per-description
+  prompt-injection fences are preserved (still tested by `test_fence`).
+- **`format_audit_report` emits per-section `_Tip:_` lines** for cap
+  overruns, CONTEXT_PRESSURE pings, PROTOCOL_VIOLATION strings, and
+  scope drift — diagnostic output now also tells the operator what to
+  do about a non-zero count.
+- **`runner_budget.format_budget_nudge` includes remaining-chars hint**
+  (e.g. `~32,000 remaining`) so a runner reading the nudge can size its
+  next reply concretely instead of guessing from a percentage.
+- **`rank_to_prompt` prepends a one-line `P5 = highest risk · P1 = lowest`
+  legend** so the priority numbers in dispatch output are interpretable
+  without tracing back to source.
+- **`orchestrate/_prompts/advisor.txt` scope-ambiguity check** rephrased
+  so the question doesn't compare `{file_types}` to itself; the rendered
+  sentence now disambiguates configured pattern vs discovered languages.
+- **`runner_prompts._fix_count_trigger` docstring + body cross-reference
+  the per-assignment budget stamp** as the authoritative trigger restatement,
+  so the two CONTEXT_PRESSURE phrasings stop drifting against each other.
+- **`doctor.py` claude-cli check** now points users at
+  `https://claude.ai/code` instead of just reporting "not on PATH".
+- **`advisor ui` config tab target field is `readonly`** with a one-line
+  hint that it's CLI-preview-only — previously editable but had no effect
+  on the live dashboard, which always stayed bound to the launch directory.
+
+### Added
+
+- **`advisor plan` exit emits two new tips:** one pointing at
+  `advisor plan --resume <id>` when prior checkpoints exist in
+  `.advisor/`, and one pointing at `advisor ui <dir>` so the browser
+  dashboard isn't invisible to users who never read the README.
+- **`advisor plan --dump-pricing-template`** prints the default
+  per-family pricing as a JSON object accepted by `--pricing FILE`, so
+  the round-trip is `advisor plan . --dump-pricing-template > p.json` →
+  edit → `--pricing p.json`. Includes a `_comment` key with the source-
+  of-truth URL.
+- **`advisor checkpoints` listing** now shows files-count and advisor-model
+  per row alongside the existing id+age columns, loaded from each
+  checkpoint header. A malformed checkpoint degrades to id+age only for
+  that row instead of breaking the listing.
+- **`advisor audit` plan output one-line suppression summary** — when
+  `.advisor/suppressions.jsonl` filters findings, prints `N findings
+  suppressed via <path> — run `advisor suppressions` for details` so the
+  effect is visible even under `--quiet`.
+- **`general-python` preset** — `*.py`, `min_priority=3`, no
+  stack-specific keyword boosting. Fills the gap for codebases that
+  don't match any of the framework-specific presets.
+- **SARIF output advertises `driver.properties.advisor_schema_version`**
+  so downstream consumers can pin against the emitter schema separately
+  from advisor's release version.
+- **SARIF results carry `partialFingerprints.primaryLocationLineHash`**
+  using the synthesized rule_id — GitHub Code Scanning uses this to
+  dedupe alerts across re-scans (without it every re-run created "new"
+  alerts for persisting findings).
+- **`pr_comment` caps per-finding evidence at 500 chars** before the
+  body-budget check. Previously a single 10 KB evidence block could
+  truncate the comment after only 2-3 findings; now truncation is driven
+  by total finding count.
+- **`_style` honors `CLICOLOR_FORCE=1`** (overrides `NO_COLOR` and
+  `TERM=dumb` per https://bixense.com/clicolors) and **`CLICOLOR=0`**
+  (disables when `CLICOLOR_FORCE` is unset). `--no-color` still wins by
+  unsetting `CLICOLOR_FORCE` for the process.
+
+### Changed
+
+- **`__init__.py` module docstring** groups the public API into Core /
+  Findings lifecycle / Output sinks / Operator tools so consumers can
+  tell stable surface from advisor-implementation territory.
+- **`orchestrate/config.py default_team_config` docstring** now spells
+  out the model-string sentinel-equality trap (passing the literal
+  default still allows env-var override) that's been internally
+  commented since the function shipped.
+- **`baseline` subcommand description** advertises the
+  `(file, rule_id, description_hash)` matching key + 120-char hash
+  tolerance so users diagnosing baseline churn don't have to read
+  source.
+- **`audit` subcommand description** includes an example invocation and
+  a note that Claude Code does not auto-save sessions — users now know
+  how to capture a transcript before running the command.
+- **`cost.py` module + default-pricing comment** include
+  https://www.anthropic.com/pricing so users know the snapshotted prices
+  may have drifted.
+
+### Tests
+
+- `test_presets.test_seven_presets_registered` (renamed from `_six_`)
+  pins the new preset count.
+- `test_style` adds CLICOLOR / CLICOLOR_FORCE coverage and strips the
+  two new env vars in its autouse fixture.
+
 ## [0.6.10] - 2026-05-17
 
 Closes a TOCTOU window in three `.advisor/` file loaders by replacing

@@ -486,13 +486,19 @@ class TestPrintCompletion:
         # Bash completion uses `complete -F ...`:
         assert "complete" in out.lower()
 
-    def test_no_subcommand_errors_helpfully(self, capsys):
+    def test_no_subcommand_prints_help_and_exits_zero(self, capsys):
+        """Bare ``advisor`` is a discovery moment, not an error.
+
+        Prints the full help (including subcommand descriptions) and exits 0
+        so the new-user flow matches ``git`` / ``gh`` / ``ruff``.
+        """
         from advisor import __main__ as cli
 
-        with pytest.raises(SystemExit):
-            cli.main([])
-        err = capsys.readouterr().err
-        assert "subcommand" in err.lower()
+        rc = cli.main([])
+        assert rc == 0
+        out = capsys.readouterr().out
+        # argparse's print_help dumps the subcommand list on stdout.
+        assert "subcommands" in out.lower() or "plan" in out.lower()
 
 
 class TestCmdProtocol:
@@ -543,16 +549,15 @@ class TestMainEntrypoint:
         out = capsys.readouterr().out
         assert pkg_version in out
 
-    def test_missing_subcommand_errors(self, capsys):
-        """Running ``advisor`` with no subcommand prints an argparse error."""
+    def test_missing_subcommand_prints_help(self, capsys):
+        """Running ``advisor`` with no subcommand prints help and exits 0."""
         from advisor import __main__ as cli
 
-        with pytest.raises(SystemExit) as exc_info:
-            cli.main([])
-        # argparse.error() exits with code 2
-        assert exc_info.value.code == 2
-        err = capsys.readouterr().err
-        assert "subcommand" in err.lower()
+        rc = cli.main([])
+        assert rc == 0
+        out = capsys.readouterr().out
+        # Help body lists at least one subcommand name.
+        assert "plan" in out.lower()
 
     def test_broken_pipe_exits_cleanly(self, monkeypatch):
         """A downstream pipe closing mid-output must not raise.

@@ -6,8 +6,11 @@ only) and maximum (explore + up to ``max_fixes_per_runner`` fix waves per
 runner) scenarios.
 
 Token math (per million tokens) uses published public pricing as of 2025-04.
-Users can override via ``cost_cents_per_mtok`` if pricing changes. Prices are
-advisory — treat the output as "order of magnitude", not invoice-accurate.
+Users can override via ``cost_cents_per_mtok`` (or ship a JSON pricing file —
+see :func:`load_pricing` and ``advisor plan --pricing FILE``) if pricing
+changes; verify current rates at https://www.anthropic.com/pricing before
+relying on the estimate. Prices are advisory — treat the output as "order
+of magnitude", not invoice-accurate.
 """
 
 from __future__ import annotations
@@ -21,9 +24,10 @@ from pathlib import Path
 
 from .focus import FocusBatch, FocusTask
 
-# Default published pricing (USD per million tokens) as of 2025 April.
-# These are intentionally encoded as cents to avoid float drift during
-# aggregation. Override via ``price_override=`` if Anthropic changes list price.
+# Default published pricing (USD per million tokens) snapshotted 2025-04.
+# Verify at https://www.anthropic.com/pricing before relying on the estimate.
+# Intentionally encoded as cents to avoid float drift during aggregation.
+# Override via ``price_override=`` if Anthropic changes list price.
 DEFAULT_PRICING_CENTS_PER_MTOK: dict[str, tuple[int, int]] = {
     # family → (input_cents_per_mtok, output_cents_per_mtok)
     "opus": (1500, 7500),

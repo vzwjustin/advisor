@@ -309,18 +309,24 @@ def format_budget_nudge(budget: RunnerBudget) -> tuple[str | None, RunnerBudget]
     if status == "SOFT_WARN":
         if budget.soft_nudge_sent:
             return None, budget
+        # Include a remaining-chars hint so the runner can size its next
+        # reply concretely instead of guessing — "you have ~32k chars left"
+        # is actionable; "80% used" is not.
+        remaining = max(0, budget.char_ceiling - budget.output_chars)
         msg = (
-            f"BUDGET SOFT — {budget.output_chars}/{budget.char_ceiling} chars used. "
-            "Compact your next reply: one primary finding, skip recaps, "
-            "then confirm you are still under budget."
+            f"BUDGET SOFT — {budget.output_chars}/{budget.char_ceiling} chars used "
+            f"(~{remaining:,} remaining). Compact your next reply: one primary "
+            "finding, skip recaps, then confirm you are still under budget."
         )
         return msg, replace(budget, soft_nudge_sent=True)
     # ROTATE
     if budget.rotate_nudge_sent:
         return None, budget
+    remaining = max(0, budget.char_ceiling - budget.output_chars)
     msg = (
         f"BUDGET ROTATE — {budget.runner_id} has crossed the hard ceiling "
-        f"(chars {budget.output_chars}/{budget.char_ceiling}, "
+        f"(chars {budget.output_chars}/{budget.char_ceiling}; ~{remaining:,} "
+        f"chars left, "
         f"files {len(budget.files_read)}/{budget.file_read_ceiling}, "
         f"fixes {budget.fixes_done}/{budget.fix_ceiling}). "
         "Finish the current tool call, emit a one-paragraph handoff "

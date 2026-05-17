@@ -287,6 +287,13 @@ def findings_to_sarif(
                     )
                 },
                 "locations": [{"physicalLocation": physical_location}],
+                # GitHub Code Scanning uses ``partialFingerprints`` to
+                # deduplicate the "same finding" across runs. Without it,
+                # every re-scan creates new alerts for findings that
+                # already exist, drowning users in churn. The synthesized
+                # rule_id is already a stable per-(file, severity, desc)
+                # hash, so it's a reasonable fingerprint value.
+                "partialFingerprints": {"primaryLocationLineHash": rule_id},
                 "properties": {
                     "severity": _strip_controls(f.severity),
                     "evidence": _strip_controls(f.evidence, keep_block_whitespace=True),
@@ -302,6 +309,13 @@ def findings_to_sarif(
                 "version": tool_version,
                 "informationUri": "https://github.com/vzwjustin/advisor",
                 "rules": list(rules_seen.values()),
+                "properties": {
+                    # Advisor's own emitter schema version — separate from
+                    # the SARIF spec version above. Downstream tools that
+                    # consume our SARIF can pin against this rather than
+                    # against ``driver.version`` (which changes every release).
+                    "advisor_schema_version": SCHEMA_VERSION,
+                },
             },
         },
         "originalUriBaseIds": {

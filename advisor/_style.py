@@ -28,12 +28,17 @@ _CODES = {
 
 
 def _compute_supports_color() -> bool:
-    # Per https://no-color.org the spec disables color when ``NO_COLOR``
-    # is set to any non-empty value. ``NO_COLOR=`` (empty) does NOT
-    # disable — only a non-empty value does.
+    # Precedence: CLICOLOR_FORCE=1 wins over everything (per
+    # https://bixense.com/clicolors — explicit user-override of NO_COLOR
+    # for CI-with-colors workflows). Then NO_COLOR / TERM=dumb / CLICOLOR=0
+    # all independently disable.
+    if os.environ.get("CLICOLOR_FORCE", "") == "1":
+        return True
     if os.environ.get("NO_COLOR", "") != "":
         return False
     if os.environ.get("TERM") == "dumb":
+        return False
+    if os.environ.get("CLICOLOR", "") == "0":
         return False
     return True
 
@@ -53,17 +58,24 @@ def _stream_supports_unicode(stream: IO[str] | None) -> bool:
 
 
 # Cached env snapshot used by ``supports_color``. Each styled span on a
-# rendered pipeline can call this dozens of times; re-reading the two
-# env vars in tight loops is wasteful. The cache is invalidated either
+# rendered pipeline can call this dozens of times; re-reading the env
+# vars in tight loops is wasteful. The cache is invalidated either
 # explicitly via :func:`reset_color_cache` (used by the autouse pytest
 # fixture so ``monkeypatch.setenv`` is observed) or implicitly by detecting
-# the env snapshot changed.
+# the env snapshot changed. Keep the snapshot tuple in sync with every
+# var consulted by ``_compute_supports_color`` — a var that's read but
+# not snapshotted will go stale silently.
 _CACHED_SUPPORT: bool | None = None
-_CACHED_ENV_SNAPSHOT: tuple[str | None, str | None] | None = None
+_CACHED_ENV_SNAPSHOT: tuple[str | None, str | None, str | None, str | None] | None = None
 
 
-def _env_snapshot() -> tuple[str | None, str | None]:
-    return (os.environ.get("NO_COLOR"), os.environ.get("TERM"))
+def _env_snapshot() -> tuple[str | None, str | None, str | None, str | None]:
+    return (
+        os.environ.get("NO_COLOR"),
+        os.environ.get("TERM"),
+        os.environ.get("CLICOLOR_FORCE"),
+        os.environ.get("CLICOLOR"),
+    )
 
 
 def reset_color_cache() -> None:

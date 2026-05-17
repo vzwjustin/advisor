@@ -11,7 +11,7 @@ Applying a preset does two things at CLI dispatch time:
        baseline in :func:`advisor.rank._score_file` — additive, never
        subtractive.
 
-Presets ship six out of the box. Pick via ``advisor plan --preset <name>``
+Presets ship seven out of the box. Pick via ``advisor plan --preset <name>``
 or list with ``advisor presets`` / ``advisor presets --json``.
 """
 
@@ -55,6 +55,18 @@ class RulePack:
 # scoring as high-priority just by mentioning "request").
 
 PRESETS: Final[dict[str, RulePack]] = {
+    "general-python": RulePack(
+        name="general-python",
+        description="Generic Python codebase — no stack-specific keyword boosting",
+        file_types="*.py",
+        min_priority=3,
+        extra_keywords_by_tier={},
+        test_command="pytest -q",
+        notes=(
+            "use when no python-web / python-cli preset fits — "
+            "the ranker still uses its language-aware baseline keywords",
+        ),
+    ),
     "python-web": RulePack(
         name="python-web",
         description="Flask / Django / FastAPI — auth + request handling focus",

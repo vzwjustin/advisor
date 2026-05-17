@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
 
+from . import _style
 from ._fs import atomic_write_text as _shared_atomic_write
 from .skill_asset import SKILL_MD, SKILL_MD_UPDATE
 
@@ -658,8 +659,11 @@ def install_skill(
             and _is_semver_newer(installed_v, bundled_v)
         ):
             print(
-                f"warning: overwriting SKILL.md v{installed_v} with bundled "
-                f"v{bundled_v} (downgrade); the installed copy is newer.",
+                _style.warning_box(
+                    f"overwriting SKILL.md v{installed_v} with bundled "
+                    f"v{bundled_v} (downgrade); the installed copy is newer.",
+                    stream=sys.stderr,
+                ),
                 file=sys.stderr,
             )
         _atomic_write_text(target, body)
@@ -703,8 +707,11 @@ def install_update_skill(
             and _is_semver_newer(installed_v, bundled_v)
         ):
             print(
-                f"warning: overwriting SKILL.md v{installed_v} with bundled "
-                f"v{bundled_v} (downgrade); the installed copy is newer.",
+                _style.warning_box(
+                    f"overwriting SKILL.md v{installed_v} with bundled "
+                    f"v{bundled_v} (downgrade); the installed copy is newer.",
+                    stream=sys.stderr,
+                ),
                 file=sys.stderr,
             )
         _atomic_write_text(target, body)

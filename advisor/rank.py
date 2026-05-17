@@ -1131,7 +1131,11 @@ def _read_contents_parallel(
 def rank_to_prompt(ranked: list[RankedFile], top_n: int = 10) -> str:
     """Format ranked files into a prompt-ready priority list."""
     top_n = max(0, top_n)
-    lines = ["## File Priority Ranking", ""]
+    lines = [
+        "## File Priority Ranking",
+        "_P5 = highest risk · P1 = lowest. Reasons are the keywords that drove the score._",
+        "",
+    ]
     for i, rf in enumerate(ranked[:top_n], 1):
         reasons_str = ", ".join(rf.reasons) if rf.reasons else "general"
         lines.append(f"{i}. **P{rf.priority}** `{rf.path}` — {reasons_str}")

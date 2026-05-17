@@ -58,6 +58,11 @@ def _fix_count_trigger(cap: int) -> str:
 
     When ``cap <= 1`` there is no "one-before-cap" fix to anchor on, so the
     runner is told to ping immediately after the first fix instead.
+
+    The spawn prompt states the rule once; the canonical, authoritative
+    restatement of the trigger condition ships on every fix assignment
+    via the ``budget_note`` in ``build_fix_assignment_message`` — keep
+    that one in sync if you change the wording here.
     """
     if cap <= 1:
         return (
@@ -67,11 +72,12 @@ def _fix_count_trigger(cap: int) -> str:
         )
     return (
         f"**The moment you finish fix #{cap - 1} of {cap} — BEFORE "
-        "accepting the next assignment — send `CONTEXT_PRESSURE`.** Do "
-        "not wait for the cap itself; the advisor needs one fix's worth "
-        "of runway to spawn your successor and build a handoff brief. "
-        "If you only flag at the cap, rotation happens mid-stall, which "
-        "is the case this rule exists to prevent.\n\n"
+        "accepting the next assignment — send `CONTEXT_PRESSURE`.** Each "
+        "fix assignment also restates this trigger inline (see the "
+        "`fix N of M` budget note) — the inline stamp is authoritative if "
+        "the two ever diverge. Do not wait for the cap itself; the advisor "
+        "needs one fix's worth of runway to spawn your successor and build "
+        "a handoff brief.\n\n"
     )
 
 

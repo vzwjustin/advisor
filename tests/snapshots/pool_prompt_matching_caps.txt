@@ -94,7 +94,7 @@ Do not shut down. The advisor may queue more work to you — your accumulated co
 ## Flag context pressure before you stall
 You have no direct read on your remaining context window — no tool reports it, and gut-feel self-reports ('I feel foggy') are unreliable because saturation is what saturation feels like from the inside. Instead, track concrete proxies and ping preemptively.
 
-**Fix-count proxy (primary).** Hard cap: 5 fix assignments per runner. Track your own fix count. **The moment you finish fix #4 of 5 — BEFORE accepting the next assignment — send `CONTEXT_PRESSURE`.** Do not wait for the cap itself; the advisor needs one fix's worth of runway to spawn your successor and build a handoff brief. If you only flag at the cap, rotation happens mid-stall, which is the case this rule exists to prevent.
+**Fix-count proxy (primary).** Hard cap: 5 fix assignments per runner. Track your own fix count. **The moment you finish fix #4 of 5 — BEFORE accepting the next assignment — send `CONTEXT_PRESSURE`.** Each fix assignment also restates this trigger inline (see the `fix N of M` budget note) — the inline stamp is authoritative if the two ever diverge. Do not wait for the cap itself; the advisor needs one fix's worth of runway to spawn your successor and build a handoff brief.
 
 If the advisor stamps any cap lower than 5, apply the same one-before-cap rule (or the cap=1 immediate-ping rule) to that cap.
 

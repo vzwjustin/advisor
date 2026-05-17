@@ -34,6 +34,13 @@ _SEVERITY_ORDER = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
 # the trailing truncation notice.
 _GITHUB_BODY_LIMIT = 60_000
 
+# Per-finding evidence cap. A single verbose evidence block (e.g. a
+# pasted 10KB stack trace) used to be able to truncate the whole
+# comment after only 2-3 findings; that mis-attributed truncation to
+# finding count when it was really one outlier. Capping evidence first
+# means truncation is now driven by total finding count.
+_EVIDENCE_CHAR_CAP = 500
+
 
 def _escape_html(text: str) -> str:
     """HTML-escape a user-controlled field that lands inside HTML markup.
@@ -56,6 +63,13 @@ def _escape_summary(text: str) -> str:
     summary table on some Markdown renderers).
     """
     return _escape_html(text).replace("|", "\\|").replace("\n", " ")
+
+
+def _cap_evidence(evidence: str) -> str:
+    """Cap a single evidence block at ``_EVIDENCE_CHAR_CAP`` chars."""
+    if len(evidence) <= _EVIDENCE_CHAR_CAP:
+        return evidence
+    return evidence[: _EVIDENCE_CHAR_CAP - 1].rstrip() + "…"
 
 
 def _escape_inline_code(text: str) -> str:
@@ -135,7 +149,8 @@ def format_pr_comment(findings: list[Finding]) -> str:
             # so a renderer that mishandles the fence can't accidentally
             # close our outer ``<details>`` early.
             _DETAILS_TAG_RE.sub(
-                lambda m: f"&lt;{m.group(1)}details", f.evidence.replace("```", "'''")
+                lambda m: f"&lt;{m.group(1)}details",
+                _cap_evidence(f.evidence).replace("```", "'''"),
             ),
             "```",
             "",

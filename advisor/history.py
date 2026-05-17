@@ -216,18 +216,41 @@ def format_history_block(entries: list[HistoryEntry]) -> str:
     """Format recent history as a Markdown block for the advisor prompt.
 
     Empty ``entries`` returns an empty string so the caller can skip the
-    whole section. Otherwise produces a bulleted list keyed by file path
-    with severity and short description — enough for the advisor to notice
-    recurrences without bloating its context.
+    whole section. Otherwise produces a list grouped by file path so the
+    advisor can see cross-file recurrence patterns at a glance — multiple
+    entries on the same file cluster under one header instead of being
+    scattered through a flat list.
+
+    Each ``file_path`` and ``description`` is wrapped in :func:`fence` as
+    a prompt-injection guard; the upstream ``build_advisor_prompt`` adds
+    a labeled outer fence on top of that. Severity and status come from
+    allowlists in :class:`HistoryEntry` ingestion, so they flow into the
+    label line as bare text.
     """
     if not entries:
         return ""
-    lines = ["## Recent findings from prior runs", ""]
+    # Group while preserving first-seen order so newest-first input
+    # ordering (per ``load_recent_findings``) carries through to the
+    # block — the file with the most recent finding stays at the top.
+    grouped: dict[str, list[HistoryEntry]] = {}
     for e in entries:
-        lines.append(f"- [{e.severity}] ({e.status}):")
-        lines.append(fence(e.file_path))
-        lines.append(fence(e.description))
-    return "\n".join(lines)
+        grouped.setdefault(e.file_path, []).append(e)
+
+    lines = ["## Recent findings from prior runs", ""]
+    for file_path, file_entries in grouped.items():
+        count_note = (
+            f" — {len(file_entries)} prior findings" if len(file_entries) > 1 else ""
+        )
+        # Severity glyphs ([HIGH], etc.) come from an allowlist so the
+        # bullet label is safe to render unfenced; ``description`` and
+        # ``file_path`` stay individually fenced as the injection guard.
+        lines.append(f"### File{count_note}")
+        lines.append(fence(file_path))
+        for e in file_entries:
+            lines.append(f"- [{e.severity}] ({e.status}):")
+            lines.append(fence(e.description))
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def new_run_id() -> str:

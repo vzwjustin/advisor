@@ -66,9 +66,13 @@ INDEX_HTML = """<!doctype html>
   </section>
 
   <section id="config" class="panel">
+    <p class="hint">These fields shape the CLI command preview below — the
+      running dashboard stays bound to the directory you launched
+      <code>advisor ui</code> with. Restart with a different argument to
+      change scope.</p>
     <form id="config-form">
       <label>Target directory
-        <input name="target" type="text" value=".">
+        <input name="target" type="text" value="." readonly aria-readonly="true">
       </label>
       <label>File types
         <input name="file_types" type="text" value="*.py">
@@ -293,6 +297,21 @@ form input {
   border-radius: 4px;
   font-family: inherit;
   font-size: 0.9rem;
+}
+form input[readonly] {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+.panel .hint {
+  margin: 0 0 0.8rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+.panel .hint code {
+  background: var(--bg);
+  padding: 0 0.25rem;
+  border-radius: 3px;
 }
 .cli-preview { margin-top: 1.2rem; }
 .cli-preview h3 { margin: 0 0 0.5rem; font-size: 0.95rem; }

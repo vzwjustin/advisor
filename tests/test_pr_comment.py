@@ -136,6 +136,11 @@ class TestFormatPrComment:
         assert "&lt;/details" in out
 
     def test_single_oversized_finding_is_truncated_under_body_limit(self) -> None:
+        """A single finding with a massive evidence block must not blow the GitHub
+        cap. The per-finding evidence cap fires first now, so the body lands well
+        under the limit and the finding renders in full (without the "Output
+        truncated" footer that fires for multi-finding overflows).
+        """
         finding = Finding(
             file_path="src/x.py:1",
             severity="HIGH",
@@ -145,4 +150,7 @@ class TestFormatPrComment:
         )
         out = format_pr_comment([finding])
         assert len(out) < _GITHUB_BODY_LIMIT
-        assert "Output truncated" in out
+        # Evidence is clipped with an ellipsis at the per-finding cap.
+        assert "…" in out
+        # No overflow footer — there was only one finding to render.
+        assert "Output truncated" not in out

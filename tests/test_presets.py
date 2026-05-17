@@ -15,8 +15,9 @@ from advisor.rank import rank_files
 
 
 class TestPresetCatalog:
-    def test_six_presets_registered(self) -> None:
+    def test_seven_presets_registered(self) -> None:
         expected = {
+            "general-python",
             "python-web",
             "python-cli",
             "node-api",

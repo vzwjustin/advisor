@@ -161,6 +161,17 @@ def default_team_config(
     stderr when either model name fails :func:`is_known_model`. The
     config is still constructed — the warning is advisory so callers
     aren't locked out when Anthropic ships a new model ID.
+
+    Note on model-string sentinel equality: when ``advisor_model`` or
+    ``runner_model`` equals its default string (``"claude-opus-4-7"`` /
+    ``"claude-sonnet-4-6"``) it is treated as "not set" and the
+    corresponding env var (``ADVISOR_MODEL`` / ``ADVISOR_RUNNER_MODEL``)
+    is still allowed to override. A Python caller that passes the
+    literal default to pin it must instead set the env var, pass a
+    different (still-supported) long-form ID, or mutate
+    :class:`TeamConfig` after construction. This is a deliberate
+    trade-off so env-var overrides work without forcing every caller to
+    thread an explicit flag.
     """
     # Capture "caller left this at the default sentinel" BEFORE any env
     # mutation — otherwise ADVISOR_FILE_TYPES / ADVISOR_MIN_PRIORITY could
