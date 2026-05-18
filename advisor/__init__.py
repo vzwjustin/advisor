@@ -96,6 +96,7 @@ from .install import (
     get_installed_skill_version,
     install,
     install_skill,
+    install_update_skill,
     parse_badge,
     remove_nudge,
     render_block,
@@ -103,6 +104,7 @@ from .install import (
     status,
     uninstall,
     uninstall_skill,
+    uninstall_update_skill,
 )
 from .orchestrate import (
     KNOWN_MODEL_SHORTCUTS,
@@ -159,7 +161,7 @@ from .sarif import (
     findings_to_sarif,
     synthesize_rule_id,
 )
-from .skill_asset import SKILL_MD
+from .skill_asset import SKILL_MD, SKILL_MD_UPDATE
 from .suppressions import Suppression, apply_suppressions, load_suppressions
 from .verify import (
     Finding,
@@ -223,6 +225,7 @@ __all__ = [
     "get_installed_skill_version",
     "install",
     "install_skill",
+    "install_update_skill",
     "parse_badge",
     "remove_nudge",
     "render_block",
@@ -230,6 +233,7 @@ __all__ = [
     "status",
     "uninstall",
     "uninstall_skill",
+    "uninstall_update_skill",
     # git scope
     "GitScopeError",
     "resolve_git_scope",
@@ -307,4 +311,5 @@ __all__ = [
     "update_budget",
     # skill asset
     "SKILL_MD",
+    "SKILL_MD_UPDATE",
 ]

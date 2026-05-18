@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -600,7 +601,7 @@ def _plan_to_dict(
     ]
     payload: dict[str, object] = {
         "schema_version": JSON_SCHEMA_VERSION,
-        "target": str(target),
+        "target": str(target.resolve()),
         "task_count": len(tasks),
         "tasks": task_data,
     }
@@ -1753,7 +1754,15 @@ def cmd_update(args: argparse.Namespace) -> int:
     if not quiet and latest is not None and latest != current:
         print()
         print(_style.banner(f"Updated: v{current} → v{latest}"))
-    install_cmd = [str(Path(sys.argv[0]).resolve()), "install"]
+    # Locate the advisor entry-point by name rather than trusting
+    # ``sys.argv[0]`` — under ``python -m advisor update`` that path
+    # resolves to the Python interpreter, which would re-exec as
+    # ``python install`` (a no-op or error) instead of ``advisor install``.
+    advisor_bin = shutil.which("advisor")
+    if advisor_bin:
+        install_cmd = [advisor_bin, "install"]
+    else:
+        install_cmd = [sys.executable, "-m", "advisor", "install"]
     if quiet:
         install_cmd.append("--quiet")
     try:
@@ -1871,7 +1880,7 @@ def cmd_history(args: argparse.Namespace) -> int:
     if getattr(args, "json", False):
         payload = {
             "schema_version": JSON_SCHEMA_VERSION,
-            "target": str(target),
+            "target": str(target.resolve()),
             "count": len(entries),
             "entries": [
                 {
@@ -2004,7 +2013,7 @@ def cmd_checkpoints(args: argparse.Namespace) -> int:
     if getattr(args, "json", False):
         payload = {
             "schema_version": JSON_SCHEMA_VERSION,
-            "target": str(target),
+            "target": str(target.resolve()),
             "count": len(ids),
             "run_ids": ids,
         }

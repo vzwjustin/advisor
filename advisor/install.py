@@ -528,10 +528,15 @@ def install(path: Path | None = None, body: str = NUDGE_BODY) -> InstallResult:
 
 
 def should_auto_nudge(env: dict[str, str] | None = None) -> bool:
-    """Return False if opt-out env var is set, else True."""
+    """Return False if opt-out env var is set to any non-empty value, else True.
+
+    Follows the GNU/Unix NO_X convention (``NO_COLOR``, ``NO_PROXY``): any
+    non-empty value disables the feature. ``ADVISOR_NO_NUDGE=false`` is read
+    as opt-out, not opt-in — callers who want to restore the nudge should
+    unset the variable rather than set it to ``false`` or ``0``.
+    """
     source = env if env is not None else os.environ
-    value = source.get(OPT_OUT_ENV, "").strip().lower()
-    return value not in {"1", "true", "yes", "on"}
+    return not source.get(OPT_OUT_ENV, "").strip()
 
 
 def ensure_nudge(

@@ -380,31 +380,57 @@ def _attribute_context_pressure_to_runner(transcript: str, match_start: int) -> 
     return "runner-?"
 
 
-def _audit_fix_assignments(transcript: str) -> tuple[dict[str, int], dict[str, list[int]]]:
-    """Count and attribute every ``## Fix assignment`` marker."""
+def _audit_fix_assignments(
+    transcript: str,
+) -> tuple[dict[str, int], dict[str, list[int]], dict[str, list[int]]]:
+    """Count and attribute every ``## Fix assignment`` marker.
+
+    Captures both the fix number (group 1) and the per-message effective
+    cap (group 2). The cap is recorded per-runner so a tightened large-file
+    cap embedded in the dispatch (``fix 3 of 3`` against a default of 5) is
+    not lost on its way to :func:`_audit_cap_overruns`.
+    """
     fix_counts: dict[str, int] = {}
     fix_numbers: dict[str, list[int]] = {}
+    per_message_caps: dict[str, list[int]] = {}
     for m in _FIX_ASSIGNMENT_RE.finditer(transcript):
         fix_num = int(m.group(1))
+        msg_cap = int(m.group(2))
         runner = _attribute_fix_to_runner(transcript, m.start())
         fix_counts[runner] = fix_counts.get(runner, 0) + 1
         fix_numbers.setdefault(runner, []).append(fix_num)
-    return fix_counts, fix_numbers
+        per_message_caps.setdefault(runner, []).append(msg_cap)
+    return fix_counts, fix_numbers, per_message_caps
 
 
-def _audit_cap_overruns(fix_counts: dict[str, int], cap: int) -> list[str]:
-    """Human-readable lines for runners whose observed count > cap."""
+def _audit_cap_overruns(
+    fix_counts: dict[str, int],
+    cap: int,
+    per_message_caps: dict[str, list[int]] | None = None,
+) -> list[str]:
+    """Human-readable lines for runners whose observed count > effective cap.
+
+    Each runner's ceiling is ``min(cap, min(per_message_caps[runner]))`` —
+    the tightest cap the advisor told the runner about in any dispatch
+    message wins. This catches the large-file rule (``large_file_max_fixes``
+    < ``max_fixes_per_runner`` when any batch file is ≥ the threshold) which
+    is otherwise invisible to a global-cap-only check.
+    """
     cap_overruns: list[str] = []
+    per_message_caps = per_message_caps or {}
     for runner, count in sorted(fix_counts.items(), key=lambda kv: _runner_sort_key(kv[0])):
-        if count > cap:
+        observed_caps = per_message_caps.get(runner) or []
+        effective_cap = min([cap, *observed_caps]) if observed_caps else cap
+        if count > effective_cap:
             if runner == "runner-?":
                 cap_overruns.append(
-                    f"runner-? (unattributed): {count} fix assignments detected (cap={cap}) "
-                    "— attribution failed; check transcript for dense dispatch blocks"
+                    f"runner-? (unattributed): {count} fix assignments detected "
+                    f"(cap={effective_cap}) — attribution failed; check transcript "
+                    "for dense dispatch blocks"
                 )
             else:
                 cap_overruns.append(
-                    f"{runner}: observed {count} fix assignments (cap={cap}) "
+                    f"{runner}: observed {count} fix assignments (cap={effective_cap}) "
                     "— rotation was late or missed"
                 )
     return cap_overruns
@@ -489,8 +515,10 @@ def audit_transcript(transcript: str, cp: Checkpoint) -> AuditReport:
     (anything the transcript doesn't mention) show up as zeros / empty lists
     — the absence of a signal is itself informative and is preserved.
     """
-    fix_counts, fix_numbers = _audit_fix_assignments(transcript)
-    cap_overruns = _audit_cap_overruns(fix_counts, cp.max_fixes_per_runner)
+    fix_counts, fix_numbers, per_message_caps = _audit_fix_assignments(transcript)
+    cap_overruns = _audit_cap_overruns(
+        fix_counts, cp.max_fixes_per_runner, per_message_caps
+    )
     cp_runners_ordered, cp_total = _audit_context_pressure(transcript)
     rotations = sum(1 for _ in _HANDOFF_RE.finditer(transcript))
     protocol_violations, protocol_violations_truncated = _audit_protocol_violations(transcript)

@@ -173,7 +173,7 @@ def _parse_file_path(raw: str) -> tuple[str, int | None]:
     # numeric (last popped) is the line number — everything to the
     # right is column / end-column / extra detail we don't track.
     line = int(trailing_numeric[-1])
-    path = ":".join(all_parts) or stripped
+    path = ":".join(all_parts) if any(all_parts) else ""
     return drive_prefix + path, line
 
 

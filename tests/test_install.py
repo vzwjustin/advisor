@@ -162,8 +162,13 @@ class TestShouldAutoNudge:
             assert should_auto_nudge({OPT_OUT_ENV: val}) is False, val
 
     def test_opt_out_falsy_values_still_nudge(self):
-        for val in ("", "0", "false", "no"):
-            assert should_auto_nudge({OPT_OUT_ENV: val}) is True, val
+        # Empty string does not opt out — unset vs. set-to-empty is different.
+        assert should_auto_nudge({OPT_OUT_ENV: ""}) is True
+
+    def test_opt_out_no_x_convention(self):
+        # NO_X convention: any non-empty value opts out, including "0"/"false"/"no".
+        for val in ("0", "false", "no", "off"):
+            assert should_auto_nudge({OPT_OUT_ENV: val}) is False, val
 
 
 class TestEnsureNudge:

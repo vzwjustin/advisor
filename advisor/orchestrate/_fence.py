@@ -18,7 +18,10 @@ def sanitize_inline(value: str) -> str:
     Also strips the three non-LF/CR characters that ``str.splitlines()``
     treats as line breaks — U+2028 (LINE SEPARATOR), U+2029 (PARAGRAPH
     SEPARATOR), and U+0085 (NEXT LINE) — so a payload containing those
-    cannot escape the inline span on renderers that honor them.
+    cannot escape the inline span on renderers that honor them. NUL
+    (U+0000) and the zero-width code points U+200B / U+200C / U+200D /
+    U+FEFF / U+00AD are dropped entirely so a payload using them to
+    smuggle invisible content past a downstream consumer leaves no trace.
 
     Single source of truth for inline-span sanitization across the
     orchestrate package — :func:`fence` handles the fenced-block case;
@@ -32,6 +35,12 @@ def sanitize_inline(value: str) -> str:
         .replace("\u2028", " ")
         .replace("\u2029", " ")
         .replace("\x85", " ")
+        .replace("\x00", "")
+        .replace("\u200b", "")
+        .replace("\u200c", "")
+        .replace("\u200d", "")
+        .replace("\ufeff", "")
+        .replace("\u00ad", "")
     )
 
 

@@ -672,7 +672,7 @@ def _compile_ignore_patterns(patterns: list[str]) -> tuple[_IgnorePatternMatcher
                 filename_re = re.compile(r"$.^")
 
         bare_re: re.Pattern[str] | None = None
-        if not any(c in pattern for c in "*?[."):
+        if not dir_re and not any(c in pattern for c in "*?[./"):
             try:
                 bare_re = re.compile(fnmatch.translate(pattern))
             except (re.error, TypeError):

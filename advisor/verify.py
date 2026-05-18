@@ -109,6 +109,9 @@ def _safe_inline(s: str) -> str:
     LLM consuming this block may render those code points as visual
     newlines and be confused about which severity to confirm. Defense in
     depth against verifier-LLM injection rather than against advisor's parser.
+    NUL (U+0000) and zero-width code points (U+200B / U+200C / U+200D /
+    U+FEFF / U+00AD) are dropped entirely so a runner cannot smuggle
+    invisible bytes into a finding field.
     """
     return (
         s.replace("`", "'")
@@ -117,6 +120,12 @@ def _safe_inline(s: str) -> str:
         .replace(" ", " ")
         .replace(" ", " ")
         .replace("", " ")
+        .replace("\x00", "")
+        .replace("\u200b", "")
+        .replace("\u200c", "")
+        .replace("\u200d", "")
+        .replace("\ufeff", "")
+        .replace("\u00ad", "")
     )
 
 
