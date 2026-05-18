@@ -97,7 +97,7 @@ class TestReadTextCapped:
         callers comparing the first line against a literal header don't
         get tripped up by the Windows-editor-emitted BOM byte."""
         target = tmp_path / "bom.txt"
-        target.write_bytes(b"\xef\xbb\xbf{\"schema\": 1}")
+        target.write_bytes(b'\xef\xbb\xbf{"schema": 1}')
         assert read_text_capped(target, max_bytes=100) == '{"schema": 1}'
 
     def test_exactly_at_cap_is_accepted(self, tmp_path: Path) -> None:

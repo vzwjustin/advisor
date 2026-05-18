@@ -6,7 +6,7 @@ import sys
 
 from .. import _style
 from ..focus import FocusBatch, FocusTask
-from ._fence import fence
+from ._fence import fence, sanitize_inline
 from ._schema import FINDING_SCHEMA
 from .config import POOL_SIZE_CEILING, TeamConfig
 
@@ -18,18 +18,12 @@ _POOL_SIZE_CEILING = POOL_SIZE_CEILING
 # ── Helpers ──────────────────────────────────────────────────────
 
 
-def _inline_path(file_path: str) -> str:
-    """Backtick-safe inline rendering of a filesystem path.
-
-    Filenames may contain backticks on POSIX. Embedding them raw inside
-    a single-backtick span breaks the span and lets the path inject
-    arbitrary markdown into the surrounding instruction text — which a
-    runner reads as advisor instructions. Replace any backtick with a
-    visually similar single quote so the inline span stays intact.
-    Newlines in a path likewise break out of the inline span; collapse
-    them to spaces so the rendered list stays on one line per entry.
-    """
-    return file_path.replace("`", "'").replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+# Re-exported as ``_inline_path`` for the legacy private name used by
+# tests and historical call sites. Shared with
+# ``advisor_prompt._sanitize_inline`` — both helpers were byte-identical
+# and have been collapsed into the single canonical
+# :func:`advisor.orchestrate._fence.sanitize_inline`.
+_inline_path = sanitize_inline
 
 
 def _format_batch_files(batch: FocusBatch, guidance: dict[str, str] | None = None) -> str:

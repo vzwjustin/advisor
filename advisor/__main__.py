@@ -2035,8 +2035,11 @@ def cmd_checkpoints(args: argparse.Namespace) -> int:
         id_cell = f"`{rid}`".ljust(id_col_width)
         age_cell = _style.dim(age.ljust(age_col_width))
         files_cell = _style.dim(
-            (f"{file_count} file{'' if file_count == 1 else 's'}" if file_count is not None else "")
-            .ljust(files_col_width)
+            (
+                f"{file_count} file{'' if file_count == 1 else 's'}"
+                if file_count is not None
+                else ""
+            ).ljust(files_col_width)
         )
         model_cell = _style.dim(model) if model else ""
         print(f"- {id_cell}  {age_cell}  {files_cell}  {model_cell}")

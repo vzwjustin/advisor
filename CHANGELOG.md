@@ -7,6 +7,102 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **DNS-rebinding defense in the local web dashboard.** Every request
+  through `advisor/web/server.py` now rejects with `403 forbidden` if
+  the `Host` header isn't one of `127.0.0.1:<port>`, `localhost:<port>`,
+  or `[::1]:<port>`. A remote page that rebinds `attacker.example` to
+  `127.0.0.1` can no longer read the dashboard's API endpoints — the
+  browser still sends `Host: attacker.example:<port>`, which the
+  handler rejects before routing. (HIGH — security)
+- **Pytest global `FutureWarning` promotion** (`pyproject.toml`
+  `[tool.pytest.ini_options]`). Any `FutureWarning` from any test or
+  any transitive dep is now treated as a hard failure. The hypothesis
+  property tests previously surfaced `FutureWarning: Possible nested set`
+  silently in the pytest warnings summary — promoting to error means a
+  future Python release that elevates the warning to a syntax error
+  fails the suite immediately rather than silently breaking
+  `.advisorignore` parsing in production.
+- **Two new property tests for `format_pr_comment`** (in
+  `tests/test_properties.py`):
+  - `test_pr_comment_severity_counts_sum_to_len` pins the invariant
+    that the per-severity summary table rows sum to `len(findings)`
+    for any input — including under body-cap truncation, since the
+    table is rendered before the details loop.
+  - `test_pr_comment_strips_c0_control_chars` pins that no C0 control
+    byte (`0x00`-`0x1F` minus `\t \n \r`, plus `0x7F`) survives from a
+    user finding field into the rendered output.
+
+### Fixed
+
+- **`format_pr_comment` no longer leaks C0 control bytes** (NUL, BEL,
+  BACKSPACE, etc.) from a user-supplied finding field into the PR
+  comment body. SARIF output has stripped these since v0.4 via
+  `_strip_controls`; the PR comment renderer was inconsistent and let
+  them through where they would render as replacement glyphs or trip
+  the GitHub API's body validator. `pr_comment.format_pr_comment` now
+  runs every field through the same `_strip_controls` helper
+  (`keep_block_whitespace=True` so multi-line evidence still renders).
+  Surfaced by the new property test above. (HIGH — injection / unsafe
+  untrusted-input handling)
+- **`rank.py` `_double_star_to_regex` / `_slash_pattern_to_regex` no
+  longer emit nested character-set patterns.** Char-class bodies
+  containing a literal `[` (legal in POSIX globs) were being passed
+  straight through to `re.compile`, which on Python 3.12+ emits a
+  `FutureWarning: Possible nested set …`. A future Python release may
+  promote that to a syntax error and break `.advisorignore` /
+  suppression compilation for any user-written pattern that includes
+  the byte. Both helpers now escape the inner `[` before emitting the
+  bracket expression. (MEDIUM)
+- **`rank.py` ReDoS quantifier-count guard is now shared across all
+  three glob translators.** `_double_star_to_regex` previously ran the
+  `_MAX_GLOB_QUANTIFIERS` rejection check inline; the parallel
+  `_slash_pattern_to_regex` and the `fnmatch.translate` path in
+  `_compile_ignore_patterns` did not. A hostile `.advisorignore` rule
+  routed through either of the latter two could compile and then hang
+  the scanner. Extracted `_check_quantifier_count` and applied it to
+  all three call sites. (MEDIUM — DOS defense)
+- **`history.py` `load_recent_findings` now skips oversized JSONL
+  lines** (per-line cap 64 KiB) with a `UserWarning` instead of
+  letting one malformed entry consume unbounded memory while the
+  deque buffers. (MEDIUM)
+- **`install.py` update-check cache** now uses
+  `read_text_capped(path, 4096)` for reads and `atomic_write_text`
+  for writes. The cache file lives at a predictable path and could
+  previously be replaced or grown by an unprivileged process between
+  the `mkdir`/`write_text` calls, leaving partial JSON or a stale
+  read on hot-reload. (LOW — robustness)
+- **`doctor.format_report` env-override values are now `!r`-quoted.**
+  A value containing control bytes or trailing whitespace would
+  previously render ambiguously in the doctor report (e.g. a `\r` at
+  the end of an env value visually overwrote the next column);
+  `repr()` makes the literal value unambiguous. (LOW — UX)
+- **CI lint job restored to green.** `ruff check advisor tests` had
+  been failing on every push to `main` since commit `5ce0fb4`
+  (2026-05-17 19:03 UTC) — three lint errors and five format-check
+  hits accumulated and the lint/typecheck job exited 1 on seven
+  consecutive runs. Applied the auto-fixes plus a small structural fix
+  in `advisor/suppressions.py` (`_MAX_SUPPRESSIONS_BYTES` was
+  introduced between two import statements, causing the I001 import
+  ordering to fail every time). All CI gates green again. (HIGH —
+  workflow break)
+
+### Changed
+
+- **Sanitize-inline helper consolidated into a single source of truth.**
+  `advisor/orchestrate/_fence.py` now exposes `sanitize_inline`, which
+  both `advisor_prompt._sanitize_inline` and `runner_prompts._inline_path`
+  alias. Beyond deduplication, the helper now also strips U+2028 (LINE
+  SEPARATOR), U+2029 (PARAGRAPH SEPARATOR), and U+0085 (NEXT LINE) —
+  three non-LF/CR characters that `str.splitlines()` and many markdown
+  renderers treat as line breaks. A user-controlled path or value
+  containing any of those can no longer escape an inline backtick
+  span. (`verify._safe_inline` independently got the same Unicode
+  coverage.) The private names (`_sanitize_inline`, `_inline_path`)
+  are preserved as aliases so internal callers and tests stay
+  source-stable.
+
 ## [0.7.1] - 2026-05-17
 
 Eight correctness fixes from a follow-up `/advisor` review wave. Patch

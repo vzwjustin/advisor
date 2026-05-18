@@ -331,7 +331,7 @@ class TestControlCharSanitization:
         rules = doc["runs"][0]["tool"]["driver"]["rules"]  # type: ignore[index]
         text = rules[0]["help"]["text"]
         assert "\x00" not in text
-        assert "use envvar" == text
+        assert text == "use envvar"
 
     def test_nul_stripped_from_message_text(self, tmp_path: Path) -> None:
         f = _make_finding(description="\x01\x02alert\x00here")

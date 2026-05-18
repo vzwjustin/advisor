@@ -83,10 +83,7 @@ def assert_snapshot(name: str, actual: str) -> None:
         path.write_text(actual, encoding="utf-8")
         return
     if not path.exists():
-        pytest.fail(
-            f"Snapshot missing: {path}. "
-            f"Run with ADVISOR_UPDATE_SNAPSHOTS=1 to create it."
-        )
+        pytest.fail(f"Snapshot missing: {path}. Run with ADVISOR_UPDATE_SNAPSHOTS=1 to create it.")
     expected = path.read_text(encoding="utf-8")
     assert actual == expected, (
         f"Snapshot mismatch for {name!r}. "

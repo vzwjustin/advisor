@@ -269,7 +269,7 @@ def format_report(report: DoctorReport) -> str:
         lines.append("")
         lines.append(_style.dim("  env overrides in effect:"))
         for k, v in report.env_overrides.items():
-            lines.append(_style.dim(f"    {k}={v}"))
+            lines.append(_style.dim(f"    {k}={v!r}"))
     lines.append("")
     footer = "healthy" if report.healthy else "unhealthy — fix the ✗ items above"
     color = "green" if report.healthy else "red"

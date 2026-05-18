@@ -16,7 +16,7 @@ import re
 from functools import lru_cache
 from importlib.resources import files
 
-from ._fence import fence
+from ._fence import fence, sanitize_inline
 from ._schema import FINDING_SCHEMA
 from .config import TeamConfig
 
@@ -57,18 +57,11 @@ def _render(template: str, mapping: dict[str, str]) -> str:
     return _PLACEHOLDER_RE.sub(lambda m: mapping.get(m.group(1), m.group(0)), template)
 
 
-def _sanitize_inline(value: str) -> str:
-    """Neutralize markdown-fence breakers in a value rendered inline.
-
-    The advisor template uses inline backtick spans like
-    ``Target: `{target_dir}` ({file_types})``. A literal backtick closes
-    the span early and leaks following text as instruction prose; an
-    embedded newline collapses the surrounding sentence and can dump
-    user-controlled content onto its own line where another `{placeholder}`
-    might be reinterpreted. Swap backticks for typographic single quotes
-    and replace newlines/CR with a space.
-    """
-    return value.replace("`", "'").replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+# Re-exported as ``_sanitize_inline`` for the legacy private name used by
+# tests and historical call sites. Shared with ``runner_prompts._inline_path``
+# — both helpers were byte-identical and have been collapsed into the single
+# canonical :func:`advisor.orchestrate._fence.sanitize_inline`.
+_sanitize_inline = sanitize_inline
 
 
 def build_advisor_prompt(config: TeamConfig, *, history_block: str = "") -> str:

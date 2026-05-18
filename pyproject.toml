@@ -116,3 +116,16 @@ ignore_errors = true
 # that has no bearing on the actual type-safety of the code.
 module = "shtab"
 ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+# Promote ``FutureWarning`` to a hard error globally. The hypothesis
+# property tests (notably ``test_compile_ignore_patterns_never_raises``)
+# previously surfaced ``FutureWarning: Possible nested set`` from
+# Python 3.12+ on inputs like ``[[/]`` — easy to miss in the pytest
+# warnings summary. Promoting to an error means a future Python release
+# that elevates these warnings to syntax errors fails the suite
+# immediately rather than silently breaking ``.advisorignore`` /
+# suppressions parsing in production.
+filterwarnings = [
+    "error::FutureWarning",
+]

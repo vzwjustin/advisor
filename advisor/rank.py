@@ -435,6 +435,40 @@ class GlobPatternError(ValueError):
     """Raised when a glob pattern is too complex to compile safely."""
 
 
+def _check_quantifier_count(pattern: str) -> None:
+    """Raise :class:`GlobPatternError` if *pattern* has too many wildcards.
+
+    Shared guard for :func:`_double_star_to_regex`, :func:`_slash_pattern_to_regex`,
+    and the ``fnmatch.translate`` path in :func:`_compile_ignore_patterns` — all
+    three translate user-supplied glob text into Python regex, and Python's ``re``
+    engine has no timeout.
+    """
+    quantifier_count = 0
+    j = 0
+    while j < len(pattern):
+        ch = pattern[j]
+        if ch == "[":
+            end = pattern.find("]", j)
+            if end == -1:
+                j += 1
+            else:
+                j = end + 1
+            continue
+        if ch == "*":
+            quantifier_count += 1
+            if j + 1 < len(pattern) and pattern[j + 1] == "*":
+                j += 1
+        elif ch == "?":
+            quantifier_count += 1
+        j += 1
+    if quantifier_count > _MAX_GLOB_QUANTIFIERS:
+        raise GlobPatternError(
+            f"glob pattern {pattern!r} has {quantifier_count} wildcards "
+            f"(>{_MAX_GLOB_QUANTIFIERS}); refusing to compile to avoid "
+            f"catastrophic-backtracking ReDoS"
+        )
+
+
 def _double_star_to_regex(pattern: str) -> re.Pattern[str]:
     """Translate a glob pattern with ``**`` into a regex that matches the
     whole path. ``**`` matches any number of path components (including
@@ -451,38 +485,7 @@ def _double_star_to_regex(pattern: str) -> re.Pattern[str]:
     a hostile ``.advisorignore`` could otherwise hang the scanner. The
     cap sits well above any real-world ignore rule.
     """
-    # Count quantifiers up front; reject before compile if pathological.
-    # Each ``*`` (single or doubled) and each ``?`` is one quantifier.
-    # Skip the body of ``[...]`` char classes so a literal ``*`` or ``?``
-    # inside a class doesn't inflate the count and silently disable a
-    # legitimate ignore rule via the never-match sentinel below.
-    quantifier_count = 0
-    j = 0
-    while j < len(pattern):
-        ch = pattern[j]
-        if ch == "[":
-            end = pattern.find("]", j)
-            if end == -1:
-                # Unterminated class — translator treats the ``[`` as literal,
-                # so do the same here and keep walking.
-                j += 1
-            else:
-                j = end + 1
-            continue
-        if ch == "*":
-            quantifier_count += 1
-            # consume both stars in ``**`` as a single quantifier
-            if j + 1 < len(pattern) and pattern[j + 1] == "*":
-                j += 1
-        elif ch == "?":
-            quantifier_count += 1
-        j += 1
-    if quantifier_count > _MAX_GLOB_QUANTIFIERS:
-        raise GlobPatternError(
-            f"glob pattern {pattern!r} has {quantifier_count} wildcards "
-            f"(>{_MAX_GLOB_QUANTIFIERS}); refusing to compile to avoid "
-            f"catastrophic-backtracking ReDoS"
-        )
+    _check_quantifier_count(pattern)
     parts: list[str] = []
     i = 0
     while i < len(pattern):
@@ -521,7 +524,12 @@ def _double_star_to_regex(pattern: str) -> re.Pattern[str]:
                         # to avoid compiling ``[^]`` (a regex error).
                         parts.append(re.escape(pattern[i : end + 1]))
                     else:
-                        parts.append("[" + body + "]")
+                        # Escape ``[`` inside the char-class body. Python 3.12+
+                        # warns on ``[[…]`` (possible nested set) and a future
+                        # release may make it fatal — escaping the inner ``[``
+                        # preserves POSIX glob semantics (a literal ``[`` is
+                        # valid inside a class) without tripping the warning.
+                        parts.append("[" + body.replace("[", r"\[") + "]")
                     i = end + 1
         else:
             parts.append(re.escape(c))
@@ -537,6 +545,7 @@ def _slash_pattern_to_regex(pattern: str) -> re.Pattern[str]:
     :func:`_double_star_to_regex` so a rule like ``src/[!_]*.py``
     matches ``src/foo.py`` instead of only the literal pattern text.
     """
+    _check_quantifier_count(pattern)
     inline_parts: list[str] = []
     j = 0
     while j < len(pattern):
@@ -563,7 +572,11 @@ def _slash_pattern_to_regex(pattern: str) -> re.Pattern[str]:
                     if body in ("^", ""):
                         inline_parts.append(re.escape(pattern[j : end + 1]))
                     else:
-                        inline_parts.append("[" + body + "]")
+                        # Escape ``[`` inside the char-class body (see
+                        # ``_double_star_to_regex`` for rationale — Python 3.12+
+                        # warns on ``[[…]`` and may make it fatal in a future
+                        # release).
+                        inline_parts.append("[" + body.replace("[", r"\[") + "]")
                     j = end + 1
         else:
             inline_parts.append(re.escape(pc))
@@ -624,7 +637,15 @@ def _compile_ignore_patterns(patterns: list[str]) -> tuple[_IgnorePatternMatcher
         dir_re: re.Pattern[str] | None = None
         if pattern.endswith("/") and "**" not in pattern:
             try:
+                _check_quantifier_count(pattern.rstrip("/"))
                 dir_re = re.compile(fnmatch.translate(pattern.rstrip("/")))
+            except GlobPatternError as exc:
+                warnings.warn(
+                    f"ignoring unsafe pattern {pattern!r}: {exc}",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                dir_re = re.compile(r"$.^")
             except (re.error, TypeError):
                 dir_re = re.compile(r"$.^")
 

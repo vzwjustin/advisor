@@ -2,13 +2,14 @@
 
 ![advisor demo](assets/demo.png)
 
-A one-command, Opus-led code review-and-fix pipeline for Claude Code. The
-advisor (Opus) goes first, does its own Glob+Grep discovery, ranks files
-P1–P5, decides how many Sonnet runners to spawn, and **writes a unique,
-file-aware prompt for every runner** based on what it just learned.
-Runners and the advisor stay in live two-way conversation throughout —
-runners ask questions, the advisor answers and verifies each output as
-it lands. Optional fix wave applies edits the same way.
+A one-command, Opus-led code review-and-fix pipeline for Claude Code. Opus
+goes first — does its own Glob+Grep discovery, ranks files P1–P5, and
+**writes a unique, file-aware prompt for every runner** based on what it
+just learned. Then it stays online and **actively steers the runners
+throughout**: redirecting drift, answering questions in real time, verifying
+each output the moment it lands, and adjusting the plan when a finding
+changes the picture. Opus is the strategist that never goes idle until the
+final report ships. Optional fix wave applies edits the same way.
 
 No external API calls. Runs entirely through Claude Code's native
 `TeamCreate` / `Agent` / `SendMessage` tools.
@@ -17,7 +18,7 @@ No external API calls. Runs entirely through Claude Code's native
 
 | Role | Model | Agent type | Job |
 |------|-------|------------|-----|
-| Advisor | Opus 4.7 (`claude-opus-4-7`) | `advisor-executor` | Glob+Grep discovery, P1–P5 ranking, sizes the pool, writes per-runner prompts, dispatches explore + fix waves, verifies each output as it lands |
+| Advisor | Opus 4.7 (`claude-opus-4-7`) | `advisor-executor` | Glob+Grep discovery, P1–P5 ranking, sizes the pool, writes per-runner prompts, dispatches explore + fix waves — then stays live: redirects runner drift, answers questions in real time, verifies each output as it lands, adjusts plan mid-wave |
 | Runner pool | Sonnet 4.6 (`claude-sonnet-4-6`) × N | `code-review` | Long-lived workers; each gets a custom prompt from the advisor; reports findings + diffs to team-lead, who relays to the advisor in live dialogue |
 
 Priority scale: **P5** auth/secrets · **P4** user input/parsing · **P3** handlers/DB/exec · **P2** config/crypto/logging · **P1** utils/tests.

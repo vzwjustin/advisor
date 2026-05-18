@@ -16,7 +16,32 @@ from __future__ import annotations
 import html
 import re
 
+from .sarif import _strip_controls
 from .verify import Finding
+
+
+def _sanitize(f: Finding) -> Finding:
+    """Strip C0 control bytes from each user-controlled field on a Finding.
+
+    Mirrors the SARIF emitter's invariant: NUL, BEL, BACKSPACE, and other
+    C0 controls do not survive into the rendered output. ``\\t``, ``\\n``,
+    ``\\r`` are preserved (``keep_block_whitespace=True``) because they're
+    meaningful inside the fenced evidence block and the inline helpers
+    already collapse them where needed for single-line contexts. Returns a
+    new frozen :class:`Finding` so callers see the sanitized values
+    without mutating their inputs.
+    """
+    return Finding(
+        file_path=_strip_controls(f.file_path, keep_block_whitespace=True),
+        severity=_strip_controls(f.severity, keep_block_whitespace=True),
+        description=_strip_controls(f.description, keep_block_whitespace=True),
+        evidence=_strip_controls(f.evidence, keep_block_whitespace=True),
+        fix=_strip_controls(f.fix, keep_block_whitespace=True),
+        rule_id=(
+            _strip_controls(f.rule_id, keep_block_whitespace=True) if f.rule_id else f.rule_id
+        ),
+    )
+
 
 # Defense-in-depth for evidence content: a stray ``</details>`` inside the
 # fenced evidence block could close our outer ``<details>`` early on a
@@ -99,6 +124,12 @@ def format_pr_comment(findings: list[Finding]) -> str:
     """
     if not findings:
         return "## Advisor review\n\n_No findings at the current threshold._\n"
+
+    # Strip C0 controls from every user field before any rendering. Matches
+    # the SARIF emitter's invariant — NUL/BEL/etc. cannot survive into the
+    # output, where they'd render as replacement glyphs and could trip the
+    # GitHub API's body validator.
+    findings = [_sanitize(f) for f in findings]
 
     # Unknown severities are clamped to LOW so the per-severity table rows
     # sum to ``len(findings)``. Without this, a finding tagged ``"INFO"``

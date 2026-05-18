@@ -17,6 +17,7 @@ from typing import IO
 
 from . import _style
 from ._fs import atomic_write_text as _shared_atomic_write
+from ._fs import read_text_capped as _read_text_capped
 from .skill_asset import SKILL_MD, SKILL_MD_UPDATE
 
 #: Matches ``<!-- advisor:0.4.0 -->``; used to extract installed skill version
@@ -181,7 +182,7 @@ def check_for_update_cached(
     cached_latest: str | None = None
     cached_at: float = 0.0
     try:
-        cached = _json.loads(path.read_text(encoding="utf-8"))
+        cached = _json.loads(_read_text_capped(path, 4096))
     except (OSError, UnicodeDecodeError, _json.JSONDecodeError, ValueError):
         cached = None
     if isinstance(cached, dict):
@@ -203,11 +204,7 @@ def check_for_update_cached(
         else:
             latest = fetched
             try:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(
-                    _json.dumps({"latest": latest, "checked_at": now}),
-                    encoding="utf-8",
-                )
+                _atomic_write_text(path, _json.dumps({"latest": latest, "checked_at": now}))
             except OSError:
                 pass  # Cache is best-effort.
 

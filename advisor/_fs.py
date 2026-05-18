@@ -95,9 +95,7 @@ def read_text_capped(
     with open(path, "rb") as f:
         raw = f.read(max_bytes + 1)
     if len(raw) > max_bytes:
-        raise ValueError(
-            f"{path}: file size exceeds {max_bytes} bytes — refusing to load"
-        )
+        raise ValueError(f"{path}: file size exceeds {max_bytes} bytes — refusing to load")
     return raw.decode(encoding)
 
 

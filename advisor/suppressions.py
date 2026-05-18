@@ -40,7 +40,10 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path, PurePath
 
-from ._fs import normalize_path, read_text_capped as _read_text_capped
+from ._fs import normalize_path
+from ._fs import read_text_capped as _read_text_capped
+from .rank import _double_star_to_regex
+from .verify import Finding
 
 # Hard byte cap on suppression files. 10 MiB matches the ceiling used by
 # ``checkpoint.py`` and ``baseline.py`` so the three user-controlled
@@ -48,8 +51,6 @@ from ._fs import normalize_path, read_text_capped as _read_text_capped
 # suppression entry that's 50k entries, well beyond any realistic
 # project's exception list.
 _MAX_SUPPRESSIONS_BYTES = 10 * 1024 * 1024
-from .rank import _double_star_to_regex
-from .verify import Finding
 
 SCHEMA_VERSION = "1.0"
 _HEADER_KEY = "__advisor_suppressions__"

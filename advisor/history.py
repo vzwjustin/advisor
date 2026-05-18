@@ -238,9 +238,7 @@ def format_history_block(entries: list[HistoryEntry]) -> str:
 
     lines = ["## Recent findings from prior runs", ""]
     for file_path, file_entries in grouped.items():
-        count_note = (
-            f" — {len(file_entries)} prior findings" if len(file_entries) > 1 else ""
-        )
+        count_note = f" — {len(file_entries)} prior findings" if len(file_entries) > 1 else ""
         # Severity glyphs ([HIGH], etc.) come from an allowlist so the
         # bullet label is safe to render unfenced; ``description`` and
         # ``file_path`` stay individually fenced as the injection guard.
@@ -293,7 +291,18 @@ def load_recent_findings(history_path: Path, *, limit: int = 500) -> list[Histor
         # JSONDecodeError and silently dropping what is typically the
         # newest entry after the reverse-on-read flip.
         with history_path.open("r", encoding="utf-8-sig") as f:
-            lines: deque[tuple[int, str]] = deque(enumerate(f, 1), maxlen=buffer_size)
+            _MAX_LINE = 65536
+            raw_lines: list[tuple[int, str]] = []
+            for _i, _line in enumerate(f, 1):
+                if len(_line) > _MAX_LINE:
+                    warnings.warn(
+                        f"{history_path}:{_i}: line exceeds {_MAX_LINE} bytes, skipping",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                    continue
+                raw_lines.append((_i, _line))
+            lines: deque[tuple[int, str]] = deque(raw_lines, maxlen=buffer_size)
     except (OSError, UnicodeDecodeError) as exc:
         warnings.warn(f"could not read {history_path}: {exc}", UserWarning, stacklevel=2)
         return []

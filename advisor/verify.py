@@ -104,7 +104,14 @@ def _safe_inline(s: str) -> str:
     (replace with ``'``) and collapse newlines/CRs to spaces so the rendered
     text stays on one line and can never inject another bullet.
     """
-    return s.replace("`", "'").replace("\n", " ").replace("\r", " ")
+    return (
+        s.replace("`", "'")
+        .replace("\n", " ")
+        .replace("\r", " ")
+        .replace(" ", " ")
+        .replace(" ", " ")
+        .replace("", " ")
+    )
 
 
 def format_findings_block(findings: list[Finding]) -> str:

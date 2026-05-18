@@ -138,6 +138,61 @@ def test_pr_comment_respects_github_body_cap(findings: list[Finding]) -> None:
     assert len(out) < _GITHUB_BODY_LIMIT, f"output {len(out)} chars >= cap {_GITHUB_BODY_LIMIT}"
 
 
+# Severity values the per-severity summary table renders rows for. Anything
+# else is clamped to ``LOW`` (see the comment in ``format_pr_comment``).
+_TABLE_SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
+
+
+@_FUZZ_SETTINGS
+@given(st.lists(_finding_strategy, min_size=0, max_size=20))
+def test_pr_comment_severity_counts_sum_to_len(findings: list[Finding]) -> None:
+    """The per-severity summary table must account for every input finding.
+
+    The four canonical-severity row counts must sum to ``len(findings)``.
+    Unknown severities (e.g. ``"INFO"`` from an out-of-spec runner) are
+    clamped to ``LOW`` so the table is exhaustive even if a future severity
+    sneaks in. The table is rendered BEFORE the truncation loop, so this
+    invariant holds even when the body cap drops some details blocks — the
+    table still reflects the full input.
+    """
+    if not findings:
+        return  # empty findings render the "no findings" branch, no table.
+    out = format_pr_comment(findings)
+    total = 0
+    for sev in _TABLE_SEVERITIES:
+        match = re.search(rf"^\| {sev} \| (\d+) \|$", out, re.MULTILINE)
+        assert match is not None, f"missing {sev} row in summary table"
+        total += int(match.group(1))
+    assert total == len(findings), (
+        f"severity row counts sum to {total} but input had {len(findings)} findings; "
+        f"input: {findings!r}"
+    )
+
+
+@_FUZZ_SETTINGS
+@given(st.lists(_finding_strategy, min_size=0, max_size=12))
+def test_pr_comment_strips_c0_control_chars(findings: list[Finding]) -> None:
+    """No C0 control byte (``0x00``-``0x1F`` minus ``\\t \\n \\r``) or ``0x7F``
+    survives from a user-controlled finding field into the rendered output.
+
+    NUL bytes and other C0 controls are a known PR-comment hazard: some
+    Markdown renderers display them as replacement characters, and the
+    GitHub API has historically returned 422 on bodies containing them.
+    ``advisor/sarif.py`` already strips C0 controls from SARIF output via
+    ``_strip_controls``; this test pins the same invariant on the PR
+    comment renderer so the two emitters stay consistent.
+
+    ``\\t``, ``\\n``, ``\\r`` are preserved because they're meaningful
+    inside the fenced evidence block (multi-line stack traces, tabular
+    snippets) and the inline helpers already collapse them where needed.
+    """
+    out = format_pr_comment(findings)
+    forbidden = set(range(0x00, 0x20)) | {0x7F}
+    forbidden -= {0x09, 0x0A, 0x0D}  # tab, LF, CR remain allowed.
+    leaks = sorted({hex(ord(c)) for c in out if ord(c) in forbidden})
+    assert not leaks, f"C0 control bytes leaked into output: {leaks}; input: {findings!r}"
+
+
 # ─────────────────────────────────────────────────────────────────────
 # parse_findings_from_text round-trip with format_findings_block
 # ─────────────────────────────────────────────────────────────────────
@@ -243,6 +298,12 @@ def test_compile_ignore_patterns_never_raises(patterns: list[str]) -> None:
     ``.advisorignore`` / suppressions glob without raising — malformed
     translations fall back to the inert ``r"$.^"`` matcher per the
     documented contract.
+
+    ``FutureWarning`` from ``re.compile`` (e.g. ``[[…]`` nested-set
+    warnings on Python 3.12+) is treated as a failure via the global
+    ``filterwarnings = ["error::FutureWarning"]`` in ``pyproject.toml``,
+    so a future Python release that elevates those warnings to syntax
+    errors will fail this test rather than silently break the path.
     """
     matchers = _compile_ignore_patterns(patterns)
     assert len(matchers) == len(patterns)

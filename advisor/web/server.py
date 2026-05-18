@@ -397,6 +397,24 @@ class DashboardHandler(BaseHTTPRequestHandler):
         # headers were flushed does not produce a second ``send_response``
         # and corrupt the HTTP stream.
         self._response_committed = False
+        # DNS-rebinding defense: reject any request whose Host header is not
+        # the loopback address this server bound to. A remote page cannot read
+        # our API endpoints after rebinding attacker.example→127.0.0.1 because
+        # the browser sends Host: attacker.example:<port>, which is rejected here.
+        # ``BaseServer.server_address`` is a typeshed union; for the TCP-based
+        # ``HTTPServer`` we use, it's always a ``(host, port)`` tuple.
+        _server_addr = self.server.server_address
+        assert isinstance(_server_addr, tuple), "TCPServer.server_address must be a tuple"
+        _bound_port = _server_addr[1]
+        _host_header = self.headers.get("Host", "")
+        _allowed_hosts = {
+            f"127.0.0.1:{_bound_port}",
+            f"localhost:{_bound_port}",
+            f"[::1]:{_bound_port}",
+        }
+        if _host_header not in _allowed_hosts:
+            self._send_error(HTTPStatus.FORBIDDEN, "forbidden")
+            return
         parsed = urlparse(self.path)
         route = parsed.path
         qs = parse_qs(parsed.query)

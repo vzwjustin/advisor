@@ -83,7 +83,7 @@ def _strip_controls(text: str, *, keep_block_whitespace: bool = False) -> str:
     if not text:
         return text
     keep = _BLOCK_KEEP if keep_block_whitespace else frozenset()
-    return "".join(c for c in text if ord(c) >= 0x20 and ord(c) != 0x7F or ord(c) in keep)
+    return "".join(c for c in text if (ord(c) >= 0x20 and ord(c) != 0x7F) or ord(c) in keep)
 
 
 def synthesize_rule_id(severity: str, description: str, *, prefix: str = "advisor") -> str:
