@@ -292,7 +292,10 @@ def load_recent_findings(history_path: Path, *, limit: int = 500) -> list[Histor
         # newest entry after the reverse-on-read flip.
         with history_path.open("r", encoding="utf-8-sig") as f:
             _MAX_LINE = 65536
-            raw_lines: list[tuple[int, str]] = []
+            # Stream lines directly into the bounded deque so a huge
+            # history file does not materialize an O(file-size) intermediate
+            # list just to truncate it on the next line.
+            lines: deque[tuple[int, str]] = deque(maxlen=buffer_size)
             for _i, _line in enumerate(f, 1):
                 if len(_line) > _MAX_LINE:
                     warnings.warn(
@@ -301,8 +304,7 @@ def load_recent_findings(history_path: Path, *, limit: int = 500) -> list[Histor
                         stacklevel=2,
                     )
                     continue
-                raw_lines.append((_i, _line))
-            lines: deque[tuple[int, str]] = deque(raw_lines, maxlen=buffer_size)
+                lines.append((_i, _line))
     except (OSError, UnicodeDecodeError) as exc:
         warnings.warn(f"could not read {history_path}: {exc}", UserWarning, stacklevel=2)
         return []

@@ -1756,7 +1756,16 @@ def cmd_update(args: argparse.Namespace) -> int:
     install_cmd = [str(Path(sys.argv[0]).resolve()), "install"]
     if quiet:
         install_cmd.append("--quiet")
-    return subprocess.run(install_cmd, check=False).returncode
+    try:
+        return subprocess.run(install_cmd, check=False).returncode
+    except (OSError, FileNotFoundError) as exc:
+        # ``sys.argv[0]`` can resolve to a path that no longer exists
+        # after the upgrade (e.g. the entry point was replaced and the
+        # shim got reaped, or the env var ``PATH`` shadowed it). The
+        # upgrade itself already succeeded — surface the post-upgrade
+        # re-exec failure without unwinding the success.
+        print(_style.error_box(f"post-upgrade install re-exec failed: {exc}", stream=sys.stderr))
+        return 1
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:

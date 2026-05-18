@@ -153,6 +153,15 @@ def default_team_config(
     * ``ADVISOR_MIN_PRIORITY`` → ``min_priority``
     * ``ADVISOR_TEST_COMMAND`` → ``test_command``
 
+    .. warning::
+
+       ``ADVISOR_TEST_COMMAND`` is surfaced verbatim by
+       ``advisor doctor`` (both the human-readable report and
+       ``--json``). Do NOT embed secrets, tokens, or credentials in
+       this env var (e.g. ``pytest --token=...``) — use a wrapper
+       script that reads sensitive material from a file or keychain
+       so diagnostic output stays free of secrets.
+
     Env vars are only consulted when the argument is the default sentinel.
     For ``max_runners``, pass ``None`` (the default) to read from env,
     or pass an explicit int to bypass env entirely — explicit always wins.

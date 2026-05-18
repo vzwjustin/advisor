@@ -112,7 +112,11 @@ PRIORITY_KEYWORDS: dict[int, tuple[str, ...]] = {
 LANGUAGE_EXTRA_KEYWORDS: dict[str, dict[int, tuple[str, ...]]] = {
     "python": {
         5: ("passlib", "pyjwt", "itsdangerous"),
-        4: ("pickle", "loads", "yaml.load", "yaml.load_all", "marshal", "pydantic"),
+        # Bare ``loads`` flagged every ``json.loads(...)``/``msgpack.loads``
+        # call — too noisy. The dangerous deserializers are already covered
+        # by ``pickle`` + ``marshal`` (which catch the imports), and
+        # ``yaml.load`` / ``yaml.load_all`` cover the unsafe YAML entries.
+        4: ("pickle", "yaml.load", "yaml.load_all", "marshal", "pydantic"),
         3: ("flask", "django", "fastapi", "sqlalchemy", "psycopg", "pymongo"),
         2: ("os.environ", "secrets"),
     },
@@ -630,6 +634,17 @@ def _compile_ignore_patterns(patterns: list[str]) -> tuple[_IgnorePatternMatcher
         ):
             try:
                 slash_re = _slash_pattern_to_regex(pattern)
+            except GlobPatternError as exc:
+                # ReDoS guard tripped — surface clearly so the user can
+                # see why their ``.advisorignore`` rule isn't taking
+                # effect (parallels the ``**`` branch above and the
+                # directory branch below).
+                warnings.warn(
+                    f"ignoring unsafe pattern {pattern!r}: {exc}",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                slash_re = re.compile(r"$.^")
             except re.error:
                 # Malformed translator output — fall back to never-match.
                 slash_re = re.compile(r"$.^")

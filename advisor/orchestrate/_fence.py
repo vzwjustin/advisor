@@ -29,9 +29,9 @@ def sanitize_inline(value: str) -> str:
         .replace("\r\n", " ")
         .replace("\n", " ")
         .replace("\r", " ")
-        .replace(" ", " ")
-        .replace(" ", " ")
-        .replace("", " ")
+        .replace("\u2028", " ")
+        .replace("\u2029", " ")
+        .replace("\x85", " ")
     )
 
 

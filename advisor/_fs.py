@@ -234,6 +234,16 @@ def normalize_path(path: str) -> str:
     operate on repo-relative POSIX paths as emitted by the explore
     phase and echoed back in findings.
 
+    Does NOT case-fold. On case-insensitive filesystems (macOS HFS+/
+    APFS default, Windows NTFS) ``src/Auth.py`` and ``src/auth.py``
+    refer to the same file, but this function treats them as distinct
+    keys. Runners MUST echo file paths with the exact casing they
+    received from the explore phase; the orchestrator emits the
+    repo's on-disk casing, so the contract is "round-trip the
+    explore-phase string unchanged". Case-folding here would silently
+    mask scope-drift on case-sensitive filesystems where two files
+    that differ only in case are genuinely distinct.
+
     ``..`` collapse is purely lexical (``posixpath.normpath``); a
     runner that anchors on ``src/../src/auth.py`` is the same file as
     ``src/auth.py`` for batch-membership purposes. Without this,

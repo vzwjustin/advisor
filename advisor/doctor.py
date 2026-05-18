@@ -201,7 +201,18 @@ def _check_install(
 
 
 def _collect_env_overrides() -> dict[str, str]:
-    """Return env-var overrides currently in effect (only keys set to non-empty values)."""
+    """Return env-var overrides currently in effect (only keys set to non-empty values).
+
+    .. warning::
+
+       Values are surfaced verbatim by :func:`format_report` (via
+       ``repr()``) and by ``advisor doctor --json``. ``ADVISOR_TEST_COMMAND``
+       in particular is a free-form shell string — do NOT embed secrets,
+       tokens, or credentials in it (e.g. ``pytest --token=...``). Use
+       a wrapper script that reads the secret from a file or keychain
+       instead, so the doctor report and any shared diagnostics stay
+       free of sensitive material.
+    """
     return {k: val for k in _KNOWN_ENV_VARS if (val := os.environ.get(k))}
 
 

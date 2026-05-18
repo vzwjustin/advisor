@@ -236,6 +236,10 @@ def _normalize_path(path: str) -> str:
     module-level name so callers that import ``verify._normalize_path``
     continue to work; the real implementation lives in ``_fs`` so
     :mod:`advisor.runner_budget` shares the identical definition.
+
+    Note: does NOT case-fold — runners must echo paths with the exact
+    casing they received in the explore phase. See
+    :func:`advisor._fs.normalize_path` for the full contract.
     """
     return _normalize_path_impl(path)
 

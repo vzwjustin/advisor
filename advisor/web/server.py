@@ -357,7 +357,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         # sniffs and renders the JSON as HTML despite the nosniff header.
         self.send_header(
             "Content-Security-Policy",
-            "default-src 'none'; base-uri 'none'; form-action 'none'",
+            "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
         )
         self.end_headers()
         # ``_response_committed`` flags that headers were flushed and any
@@ -374,7 +374,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.send_header(
             "Content-Security-Policy",
-            "default-src 'self'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'",
+            "default-src 'self'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
         )
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
