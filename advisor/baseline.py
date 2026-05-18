@@ -75,14 +75,21 @@ def _normalize_identity_path(path: str) -> str:
     import posixpath as _pp
 
     normalized = path.strip().strip("`").strip().replace("\\", "/")
-    while normalized.startswith("./"):
-        normalized = normalized[2:]
-    # Lexical collapse — agrees with ``_fs.normalize_path``. Empty input
-    # stays empty; ``posixpath.normpath('')`` returns ``'.'`` which we
-    # don't want as a sentinel.
+    # Collapse doubled slashes and lexical ``..`` / ``.`` segments FIRST,
+    # so a doubled-slash leader like ``.//foo.py`` (legal output of
+    # ``posixpath.join('.', '/foo.py')``) becomes ``foo.py`` instead of
+    # surviving as the absolute path ``/foo.py``. The prior shape stripped
+    # ``./`` literally one prefix at a time, which left ``.//foo.py`` ->
+    # ``/foo.py`` after one strip — ``normpath('/foo.py')`` is
+    # ``/foo.py`` (treats leading ``/`` as root), NOT ``foo.py``, so the
+    # identity key drifted away from the unprefixed spelling.
+    # Empty input stays empty; ``posixpath.normpath('')`` returns ``'.'``
+    # which we don't want as a sentinel.
     if normalized and normalized != ".":
         collapsed = _pp.normpath(normalized)
         normalized = "" if collapsed == "." else collapsed
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
     return normalized
 
 

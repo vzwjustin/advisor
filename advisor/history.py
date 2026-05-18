@@ -14,6 +14,7 @@ advisory, never fatal.
 
 from __future__ import annotations
 
+import errno
 import json
 import math
 import secrets
@@ -26,6 +27,8 @@ from pathlib import Path
 from typing import IO
 
 from advisor.orchestrate._fence import fence
+
+from ._fs import normalize_path as _normalize_path
 
 UTC = timezone.utc
 
@@ -55,6 +58,22 @@ _MAX_FILE_SCORE = 10.0
 # these fields would otherwise inject. Unknown values become "UNKNOWN".
 _ALLOWED_SEVERITIES = frozenset({"CRITICAL", "HIGH", "MEDIUM", "LOW"})
 _ALLOWED_STATUSES = frozenset({"CONFIRMED", "FIXED", "REJECTED"})
+
+# Process-wide latch so we warn at most once per session that the
+# advisory lock is unsupported on this filesystem. Otherwise every
+# ``append_entries`` call on an NFS-without-lockd mount would emit a
+# warning, which is itself noisy and would mask the real signal.
+_LOCK_UNSUPPORTED_WARNED = False
+
+# errno values that indicate the filesystem itself doesn't support
+# locking (rather than a transient lock-contention failure). On
+# lock-unsupported filesystems we want to surface the diagnostic once
+# so operators know history writes are unprotected.
+_LOCK_UNSUPPORTED_ERRNOS: frozenset[int] = frozenset(
+    getattr(errno, name)
+    for name in ("ENOLCK", "ENOSYS", "EOPNOTSUPP", "ENOTSUP")
+    if hasattr(errno, name)
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,9 +105,16 @@ def _lock_exclusive(fh: IO[str]) -> None:
     is Unix-only; on Windows we fall back to ``msvcrt.locking``. Any
     platform that exposes neither (or where the call fails — e.g. NFS
     without lock support) silently proceeds without a lock. Locking is
-    a best-effort nicety, not a correctness gate: Python's own buffered
-    ``.write`` typically flushes short records atomically, so the
-    unlocked path is still well-behaved in practice.
+    a best-effort nicety, not a correctness gate: on local filesystems
+    Python's buffered ``.write`` flushes short records atomically, so
+    the unlocked path is fine.
+
+    On lock-unsupported filesystems (NFS-without-lockd is the canonical
+    case), a multi-finding batch payload can exceed PIPE_BUF and split
+    across concurrent appenders. We emit a one-shot UserWarning on the
+    first lock-unsupported errno so operators know history writes are
+    unprotected — without it, the silent ``except OSError: pass`` swallows
+    the very signal that says "your distributed CI matrix is racing".
     """
     if not _IS_WINDOWS:
         try:
@@ -101,10 +127,34 @@ def _lock_exclusive(fh: IO[str]) -> None:
             return
         try:
             flock(fh.fileno(), lock_ex)
-        except OSError:
-            pass
+        except OSError as exc:
+            _maybe_warn_lock_unsupported(exc)
         return
     _lock_windows(fh)
+
+
+def _maybe_warn_lock_unsupported(exc: OSError) -> None:
+    """Emit a one-shot warning on lock-unsupported errno.
+
+    Idempotent across the process — once warned, subsequent calls are
+    no-ops so the warning doesn't spam every ``append_entries``. A
+    transient lock-contention failure (e.g. EAGAIN, EINTR) is silently
+    tolerated, matching the prior best-effort contract.
+    """
+    global _LOCK_UNSUPPORTED_WARNED
+    if _LOCK_UNSUPPORTED_WARNED:
+        return
+    if exc.errno not in _LOCK_UNSUPPORTED_ERRNOS:
+        return
+    _LOCK_UNSUPPORTED_WARNED = True
+    warnings.warn(
+        "advisor history file lock not supported on this filesystem "
+        f"(errno {exc.errno}); concurrent ``advisor`` processes may "
+        "interleave JSON lines on writes larger than PIPE_BUF (~4096 "
+        "bytes). Subsequent appends will proceed without locking.",
+        UserWarning,
+        stacklevel=2,
+    )
 
 
 def _unlock_exclusive(fh: IO[str]) -> None:
@@ -132,8 +182,8 @@ def _lock_windows(fh: IO[str]) -> None:
         return
     try:
         locking(fh.fileno(), lk_lock, 0x7FFFFFFF)
-    except OSError:
-        pass
+    except OSError as exc:
+        _maybe_warn_lock_unsupported(exc)
 
 
 def _unlock_windows(fh: IO[str]) -> None:
@@ -232,18 +282,34 @@ def format_history_block(entries: list[HistoryEntry]) -> str:
     # Group while preserving first-seen order so newest-first input
     # ordering (per ``load_recent_findings``) carries through to the
     # block — the file with the most recent finding stays at the top.
+    #
+    # Key by ``_normalize_path(e.file_path)`` rather than the raw path so
+    # two entries on the same file under different spellings (``./foo.py``
+    # vs ``foo.py``, BOM-prefixed paths, backslash-separated paths from
+    # Windows runners) cluster under one header instead of producing two
+    # ``### File`` sections. Read-side ``rank.py:_history_values_for`` already
+    # normalizes for boost lookups; this aligns the grouping output with it
+    # so the prompt block reads as one truth instead of two views.
     grouped: dict[str, list[HistoryEntry]] = {}
+    display_path: dict[str, str] = {}
     for e in entries:
-        grouped.setdefault(e.file_path, []).append(e)
+        key = _normalize_path(e.file_path) or e.file_path
+        grouped.setdefault(key, []).append(e)
+        display_path.setdefault(key, e.file_path)
 
     lines = ["## Recent findings from prior runs", ""]
-    for file_path, file_entries in grouped.items():
-        count_note = f" — {len(file_entries)} prior findings" if len(file_entries) > 1 else ""
+    for key, file_entries in grouped.items():
+        count_note = (
+            f" — {len(file_entries)} prior findings" if len(file_entries) > 1 else ""
+        )
         # Severity glyphs ([HIGH], etc.) come from an allowlist so the
         # bullet label is safe to render unfenced; ``description`` and
         # ``file_path`` stay individually fenced as the injection guard.
+        # ``display_path`` is the first-seen raw spelling (preserves
+        # what the user actually wrote into history); ``key`` is the
+        # normalized form used only for grouping.
         lines.append(f"### File{count_note}")
-        lines.append(fence(file_path))
+        lines.append(fence(display_path[key]))
         for e in file_entries:
             lines.append(f"- [{e.severity}] ({e.status}):")
             lines.append(fence(e.description))
@@ -403,7 +469,14 @@ def file_repeat_counts(
         age = _age_days(entry, now=now_dt)
         if age > window_days:
             continue
-        counts[entry.file_path] = counts.get(entry.file_path, 0) + 1
+        # Normalize the path key so ``./foo.py`` and ``foo.py`` (and
+        # BOM-prefixed or backslash-separated variants) accumulate into a
+        # single bucket. Without this, two confirmations on the same file
+        # under different spellings would each contribute 1 to separate
+        # buckets and ``rank.py:_history_count_for``'s ``max(...)`` of
+        # the matches would return 1, not 2.
+        key = _normalize_path(entry.file_path) or entry.file_path
+        counts[key] = counts.get(key, 0) + 1
     return counts
 
 
@@ -444,8 +517,11 @@ def file_repeat_scores(
         contribution = weight * math.exp(-decay_lambda * age)
         if contribution <= 0:
             continue
-        scores[entry.file_path] = min(
-            _MAX_FILE_SCORE, scores.get(entry.file_path, 0.0) + contribution
+        # See ``file_repeat_counts`` for the rationale on key
+        # normalization — same regression, same fix shape.
+        key = _normalize_path(entry.file_path) or entry.file_path
+        scores[key] = min(
+            _MAX_FILE_SCORE, scores.get(key, 0.0) + contribution
         )
     return scores
 

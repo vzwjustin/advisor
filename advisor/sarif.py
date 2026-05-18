@@ -141,12 +141,28 @@ def _parse_file_path(raw: str) -> tuple[str, int | None]:
     if len(stripped) >= 2 and stripped[1] == ":" and stripped[0].isalpha():
         drive_prefix = stripped[:2]
         body = stripped[2:]
-    # Scan from the right: peel off trailing numeric segments so an input
-    # with extra colons (e.g. ``src/foo.py:42:10:20`` — line:col:end-col)
-    # doesn't corrupt the path. The previous ``rsplit(":", 2)`` left
-    # ``["src/foo.py:42", "10", "20"]`` and returned
-    # ``("src/foo.py:42", 10)`` — wrong path, wrong line.
+    # Scan from the right: peel off trailing non-numeric column-label
+    # segments first, THEN trailing numeric segments. Linter / pytest-style
+    # runners emit ``src/foo.py:42:Error`` or ``src/foo.py:42:ColLabel:Detail``
+    # where the line number is followed by a textual annotation rather than
+    # a numeric column. Peeling digits only (the prior shape) left the
+    # whole ``:42:Error`` tail embedded in the returned path and dropped
+    # the line entirely — SARIF then emits a result with no startLine and
+    # a URI that percent-encodes the colons into a nonexistent file.
+    #
+    # The non-numeric peel is bounded: we only strip trailing non-numerics
+    # while there's still a leading numeric to recover as the line. If we
+    # strip a non-numeric and the new tail is NOT a digit, we stop —
+    # peeling further would corrupt a path that legitimately contains
+    # ``:label`` (e.g. ``host:port-style:path``).
     all_parts = body.split(":")
+    trailing_non_numeric: list[str] = []
+    while (
+        len(all_parts) > 2
+        and not all_parts[-1].isdigit()
+        and all_parts[-2].isdigit()
+    ):
+        trailing_non_numeric.append(all_parts.pop())
     trailing_numeric: list[str] = []
     while len(all_parts) > 1 and all_parts[-1].isdigit():
         trailing_numeric.append(all_parts.pop())

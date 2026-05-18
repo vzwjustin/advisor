@@ -103,6 +103,12 @@ def _safe_inline(s: str) -> str:
     or a stray backtick that closes an inline-code span. Strip backticks
     (replace with ``'``) and collapse newlines/CRs to spaces so the rendered
     text stays on one line and can never inject another bullet.
+
+    Also collapse Unicode line separators U+2028 / U+2029 — advisor's own
+    parser splits on ``\\n`` only and is safe, but the downstream verifier
+    LLM consuming this block may render those code points as visual
+    newlines and be confused about which severity to confirm. Defense in
+    depth against verifier-LLM injection rather than against advisor's parser.
     """
     return (
         s.replace("`", "'")

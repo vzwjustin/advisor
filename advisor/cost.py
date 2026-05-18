@@ -270,7 +270,12 @@ def load_pricing(path: str | Path) -> dict[str, tuple[int, int]]:
     """
     p = Path(path)
     try:
-        raw = json.loads(read_text_capped(p, _PRICING_MAX_BYTES, encoding="utf-8"))
+        # Use ``read_text_capped``'s default ``utf-8-sig`` encoding so a BOM
+        # prepended by Windows editors (Notepad, older VS Code variants) is
+        # silently stripped instead of surfacing as a misleading "not valid
+        # JSON" error — the file IS valid JSON, just BOM-prefixed, and the
+        # helper was designed with that default specifically to absorb this.
+        raw = json.loads(read_text_capped(p, _PRICING_MAX_BYTES))
     except ValueError as exc:
         # ``read_text_capped`` raises ValueError on oversize; ``json.loads``
         # raises ``JSONDecodeError`` which is a ValueError subclass. Both land

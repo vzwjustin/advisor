@@ -51,15 +51,46 @@ def parse_badge(text: str) -> str | None:
 def _semver_tuple(v: str) -> tuple[int, ...] | None:
     """Parse ``v`` as a dotted-int prefix; return ``None`` on parse failure.
 
-    Strips a trailing pre-release / build suffix (e.g. ``0.6.0-rc1``) so the
-    comparison stays focused on the X.Y.Z prefix that drives upgrade order.
+    Strips a trailing pre-release / build suffix so the comparison stays
+    focused on the X.Y.Z prefix that drives upgrade order. Handles both
+    SemVer-style ``0.6.0-rc1`` / ``0.6.0+build`` delimiters AND PEP 440
+    fused suffixes that lack a delimiter:
+
+    * ``0.6.0-rc1`` → ``(0, 6, 0)`` (SemVer, ``-`` strips the suffix)
+    * ``0.6.0+build`` → ``(0, 6, 0)`` (SemVer build metadata)
+    * ``0.8.0rc1`` → ``(0, 8, 0)`` (PEP 440 fused pre-release)
+    * ``0.7.2.dev0`` → ``(0, 7, 2)`` (PEP 440 dev release as extra segment)
+    * ``0.7.2.post1`` → ``(0, 7, 2)`` (PEP 440 post-release)
+
+    The prior implementation only split on ``[-+]`` and then did ``int(p)``
+    per dotted segment — fused suffixes survived into the segment and
+    triggered ``ValueError`` → ``None``, which suppressed the
+    downgrade-warning when ``advisor install`` overwrote a newer dev-build
+    SKILL.md with the bundled release.
     """
     head = re.split(r"[-+]", v, maxsplit=1)[0]
     parts = head.split(".")
-    try:
-        return tuple(int(p) for p in parts if p)
-    except ValueError:
+    numeric_parts: list[int] = []
+    for p in parts:
+        if not p:
+            continue
+        # Strip a PEP 440 fused suffix by matching the leading numeric run.
+        # A segment that is purely non-numeric (e.g. ``dev0``, ``post1``,
+        # ``rc1`` as its own segment) yields no leading digits — stop
+        # accumulating; the X.Y.Z prefix we already have is the version.
+        m = re.match(r"^(\d+)", p)
+        if m is None:
+            break
+        numeric_parts.append(int(m.group(1)))
+        # If the segment had any trailing non-numeric (e.g. ``0rc1`` →
+        # leading ``0`` + trailing ``rc1``), the rest is the pre-release
+        # tag and everything after this segment is irrelevant for the
+        # X.Y.Z comparison.
+        if m.end() != len(p):
+            break
+    if not numeric_parts:
         return None
+    return tuple(numeric_parts)
 
 
 def _is_semver_newer(installed: str, bundled: str) -> bool:
@@ -422,7 +453,21 @@ def apply_nudge(existing: str, body: str = NUDGE_BODY) -> tuple[str, str]:
     Idempotent: strips any existing sentinel blocks (including duplicates from
     prior buggy installs) and appends a clean one. Action is "installed",
     "updated", or "unchanged".
+
+    ``body`` must NOT contain ``START_MARKER`` or ``END_MARKER`` as literal
+    text. The non-greedy ``_BLOCK_RE`` used by ``_strip_all_blocks`` matches
+    the smallest ``START..END`` span, so a body containing an inner marker
+    would cause a second ``apply_nudge`` call to strip from the OUTER START
+    through the INNER END, mangling the body. The default ``NUDGE_BODY``
+    never contains these sentinels; programmatic callers passing a custom
+    body must respect the same invariant.
     """
+    if START_MARKER in body or END_MARKER in body:
+        raise ValueError(
+            f"body must not contain sentinel markers "
+            f"{START_MARKER!r} or {END_MARKER!r} — they delimit the "
+            "block boundary and would corrupt the wrap on re-apply"
+        )
     block = render_block(body)
     has_block = START_MARKER in existing and END_MARKER in existing
 

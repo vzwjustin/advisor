@@ -432,7 +432,7 @@ def _audit_context_pressure(transcript: str) -> tuple[list[str], int]:
 
 
 def _audit_protocol_violations(transcript: str) -> tuple[list[str], bool]:
-    """Top-level ``PROTOCOL_VIOLATION`` strings, capped for memory safety.
+    """Top-level ``PROTOCOL_VIOLATION`` strings, deduped and capped for memory safety.
 
     Strip fenced code blocks first — a runner quoting the sentinel inside an
     Evidence ``` block is documenting, not violating. The ^ anchor alone
@@ -440,15 +440,31 @@ def _audit_protocol_violations(transcript: str) -> tuple[list[str], bool]:
     a fenced region. The ``_truncated`` flag surfaces in the final report so
     a reader can tell "0 violations" from "we stopped at the cap" — silent
     truncation hides the very signal the audit exists to highlight.
+
+    Dedup by exact string preserves DIVERSITY under the cap: a transcript
+    with 1000 identical ``PROTOCOL_VIOLATION: foo`` entries used to fill the
+    cap with one repeated pattern, silently dropping a distinct
+    ``PROTOCOL_VIOLATION: bar`` that landed later. Dedup-then-cap keeps the
+    cap counting unique violation patterns instead. When the same violation
+    repeats, it appears once in the list and a ``(×N)`` suffix is appended
+    so frequency signal is preserved without growing the list.
     """
-    violations: list[str] = []
+    counts: dict[str, int] = {}
+    order: list[str] = []
     truncated = False
     transcript_unfenced = _strip_fenced_blocks(transcript)
     for m in _PROTOCOL_VIOLATION_RE.finditer(transcript_unfenced):
-        if len(violations) >= PROTOCOL_VIOLATION_CAP:
-            truncated = True
-            break
-        violations.append(m.group(0))
+        text = m.group(0)
+        if text not in counts:
+            if len(order) >= PROTOCOL_VIOLATION_CAP:
+                truncated = True
+                continue
+            order.append(text)
+        counts[text] = counts.get(text, 0) + 1
+    violations = [
+        text if counts[text] == 1 else f"{text} (×{counts[text]})"
+        for text in order
+    ]
     return violations, truncated
 
 

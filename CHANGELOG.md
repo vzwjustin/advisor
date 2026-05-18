@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-05-18
+
+Combined release of two `/advisor` correctness waves. The first wave
+(20 fixes, originally landed on `main` without a version bump) consolidated
+the inline-sanitizer, restored the `ruff check` baseline, and closed a
+NUL/C0 leak in `format_pr_comment` plus a DNS-rebinding hole in the web
+dashboard. The second wave (15 fixes from a focused bug-hunt against
+v0.7.1) targeted bug classes the prior 0.6.10 / 0.7.1 waves did not
+cover: off-by-one cap arithmetic, error-handling holes, contract
+violations between modules, edge cases on empty / BOM-prefixed /
+doubled-slash / non-numeric column inputs, and one regression from the
+0.7.0 history-grouping rewrite. Patch bump — no new flags, no behavior
+changes beyond the fixes themselves; zero-runtime-dep stance preserved.
+
 ### Added
 
 - **DNS-rebinding defense in the local web dashboard.** Every request
@@ -102,6 +116,124 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   coverage.) The private names (`_sanitize_inline`, `_inline_path`)
   are preserved as aliases so internal callers and tests stay
   source-stable.
+### Fixed — Parser & SARIF hardening
+
+- **`sarif.py` `_parse_file_path` (HIGH).** Now peels a trailing
+  non-numeric column-label segment (e.g. `src/auth.py:42:Error` from
+  linter / pytest-style runners) BEFORE the existing digit-peel loop,
+  so the line number is recovered as `42` instead of dropped. The
+  prior shape stopped at the first non-digit suffix with zero pops,
+  retained the whole `:42:Error` tail in the path, and emitted a SARIF
+  result with no `startLine` pointing at a percent-encoded nonexistent
+  file. GitHub Code Scanning silently lost the anchor.
+- **`verify.py` `_safe_inline` (LOW).** Now also collapses Unicode line
+  separators U+2028 / U+2029 to spaces. Advisor's own `_parse_blocks`
+  splits on `\n` only and is safe, but the downstream verifier LLM
+  consuming the formatted findings block may render those code points
+  as visual newlines and be confused about which severity to confirm —
+  defense in depth against verifier-LLM injection rather than against
+  advisor's parser.
+- **`pr_comment.py` `_cap_evidence` (LOW).** Now reserves the full
+  3-byte UTF-8 width of the `…` ellipsis (U+2026 = `0xE2 0x80 0xA6`)
+  before slicing, so the result respects its own `_EVIDENCE_BYTE_CAP =
+  500` bytes contract. The prior slice `CAP - 1` left only 1 byte for
+  the ellipsis and overshot by up to 2 bytes per call.
+
+### Fixed — Checkpoint & history correctness
+
+- **`checkpoint.py` `list_checkpoints` (HIGH).** Now re-validates the
+  extracted run_id against `_RUN_ID_RE` before appending to the result
+  list, mirroring the JSON-sniff filter above. Editor temp files or
+  dot-prefixed names matching the `run-*.json` shape with valid-JSON
+  bodies (e.g. `run-.hidden.json`) used to appear in `advisor
+  checkpoints` listings, then fail `--resume` with an opaque
+  `ValueError: invalid run_id` and no context about why the listing
+  showed it.
+- **`checkpoint.py` `load_checkpoint` non-list tasks/batches (MEDIUM).**
+  Now raises `ValueError` at load time when `tasks` or `batches` is
+  present but not a JSON array. The prior `list(obj.get("tasks", []))`
+  silently degraded a dict-shaped `tasks` field to its keys
+  (strings), which the resume path's `isinstance(t, dict)` guard then
+  skipped — failure mode silent-and-wrong instead of loud-and-clear.
+- **`checkpoint.py` schema_version empty bypass (LOW).** Distinguishes
+  "key absent" (silent default — legacy checkpoints predate the
+  field) from "key present but empty string" (warn — corruption
+  signal). The prior `if version and ...` guard collapsed
+  empty-string into the absent case and lost the diagnostic.
+- **`history.py` repeat-offender grouping/scoring (MEDIUM, v0.7.0
+  regression).** `format_history_block` (grouping), `file_repeat_counts`,
+  and `file_repeat_scores` now key by `_fs.normalize_path(entry.file_path)`
+  rather than the raw path. Two entries on the same file under different
+  spellings (`./foo.py` vs `foo.py`, BOM-prefixed paths, backslash-separated
+  Windows paths) used to produce duplicate `### File` sections in the
+  advisor prompt and split into separate score buckets — the v0.7.0
+  grouping rewrite added the cluster header but didn't normalize the
+  key. Display still shows the first-seen raw spelling so user-facing
+  paths are unchanged.
+- **`history.py` flock unsupported-errno diagnostic (MEDIUM).**
+  `_lock_exclusive` and `_lock_windows` now emit a one-shot
+  `UserWarning` when `flock` / `msvcrt.locking` raises with an errno
+  indicating the filesystem doesn't support advisory locks (ENOLCK,
+  ENOSYS, EOPNOTSUPP, ENOTSUP — typically NFS-without-lockd). The prior
+  bare `except OSError: pass` swallowed the very signal that says
+  "concurrent appenders may interleave JSON lines on writes > PIPE_BUF".
+
+### Fixed — Path & encoding normalization
+
+- **`baseline.py` `_normalize_identity_path` `.//foo.py` regression
+  (LOW).** Now runs `posixpath.normpath` BEFORE stripping `./` prefixes,
+  so a doubled-slash leader like `.//foo.py` (legal output of
+  `posixpath.join('.', '/foo.py')`) collapses to `foo.py` instead of
+  surviving as the absolute path `/foo.py`. The prior shape stripped
+  `./` one prefix at a time and left `/foo.py` after one strip —
+  `normpath` then preserved the leading slash and identity keys drifted
+  away from the unprefixed spelling.
+- **`rank.py` `_normalize_history_key` BOM strip (LOW).** Now strips
+  a leading U+FEFF first, mirroring `_fs.normalize_path:255`. Asymmetric
+  normalization meant a history entry with a BOM-prefixed `file_path`
+  (Windows runners or `utf-8-sig` round-trips) silently got zero
+  repeat-offender boost because neither exact-match nor suffix-match
+  fired.
+- **`cost.py` `load_pricing` BOM tolerance (LOW).** Dropped the
+  `encoding="utf-8"` override on the `read_text_capped` call so the
+  helper's default `utf-8-sig` runs and silently strips a BOM. A
+  Windows-edited pricing JSON used to raise a misleading "not valid
+  JSON" error even though the file IS valid JSON.
+
+### Fixed — Audit & install hardening
+
+- **`audit.py` `_audit_protocol_violations` dedup-then-cap (MEDIUM).**
+  Now deduplicates exact violation strings before applying
+  `PROTOCOL_VIOLATION_CAP`, with a `(×N)` suffix when the same line
+  repeats. The prior raw-then-cap shape let 1000 identical
+  `PROTOCOL_VIOLATION: foo` entries fill the cap with one repeated
+  pattern, silently dropping a distinct `PROTOCOL_VIOLATION: bar`
+  while `truncated=True` fired without context about what was lost.
+- **`suppressions.py` `_severity_from_rule_id` empty-severity reject
+  (MEDIUM).** Now raises `ValueError` when an `advisor/<sev>/<hash>`
+  rule_id has an empty or unrecognized severity segment (e.g.
+  `advisor//abc`). The prior `_SEVERITY_RANK.get('', 2)` silently
+  defaulted to MEDIUM (rank 2), then the `> 2` gate evaluated False,
+  bypassing the `until`-required guard for HIGH/CRITICAL suppressions.
+  Foreign-namespace and short-form rule_ids (`HIGH/abc`) continue to
+  use the MEDIUM fallback for unknown severities — only the advisor
+  namespace is treated as authoritative.
+- **`install.py` `apply_nudge` body marker rejection (MEDIUM).** Now
+  raises `ValueError` if `body` contains `START_MARKER` or `END_MARKER`
+  as literal text. The non-greedy `_BLOCK_RE` used to strip existing
+  blocks matches the smallest `START..END` span, so a body containing
+  an inner marker would cause a second `apply_nudge` call to strip the
+  outer wrap incorrectly and mangle the body. The default `NUDGE_BODY`
+  never contains the sentinels and the CLI path is safe — guard
+  protects programmatic API callers.
+- **`install.py` `_semver_tuple` PEP 440 fused suffixes (LOW).** Now
+  strips a leading numeric run per dotted segment before integer
+  parsing, so `0.8.0rc1` → `(0, 8, 0)` and `0.7.2.dev0` → `(0, 7, 2)`.
+  The prior shape only split on `[-+]` and then did `int(p)` per
+  segment, so PEP 440 fused pre-release / dev / post tags survived into
+  the segment and `_is_semver_newer` returned `False`, suppressing the
+  downgrade-warning when `advisor install` overwrote a newer dev-build
+  SKILL.md with the bundled release.
 
 ## [0.7.1] - 2026-05-17
 

@@ -233,8 +233,15 @@ def load_suppressions(path: Path) -> tuple[Suppression, ...]:
 
         until_norm, expired = _parse_until(until_raw, context=ctx)
 
-        # Above-MEDIUM requires both until and reason.
-        if _severity_from_rule_id(rule_id) > _REQUIRES_EXPIRY_ABOVE:
+        # Above-MEDIUM requires both until and reason. ``_severity_from_rule_id``
+        # raises ``ValueError`` for malformed ``advisor/<sev>/<hash>`` ids
+        # whose severity segment is empty or unknown — wrap with the file:line
+        # context so the user sees where the bad entry lives.
+        try:
+            sev_rank = _severity_from_rule_id(rule_id)
+        except ValueError as exc:
+            raise ValueError(f"{ctx}: {exc}") from exc
+        if sev_rank > _REQUIRES_EXPIRY_ABOVE:
             if not until_norm:
                 raise ValueError(
                     f"{ctx}: rule {rule_id!r} is above MEDIUM — 'until' date is required"
@@ -273,7 +280,12 @@ def _severity_from_rule_id(rule_id: str) -> int:
     Forms recognized as authoritative-severity (subject to the
     ``until``/``reason`` gate above MEDIUM):
 
-    * ``advisor/<sev>/<hash>`` — first segment is the namespace marker
+    * ``advisor/<sev>/<hash>`` — first segment is the namespace marker.
+      An empty or unrecognized severity slot raises :class:`ValueError`
+      because the advisor namespace is ours — ``synthesize_rule_id``
+      only ever emits a valid severity slug, so an empty value here
+      means the rule id is corrupted (or was hand-crafted to bypass
+      the expiry gate by leveraging the MEDIUM fallback).
     * ``<SEV>/<anything>`` — short form, e.g. ``HIGH/abc``; first
       segment IS the severity. Without this branch, ``HIGH/abc`` would
       decay to MEDIUM and bypass the expiry requirement.
@@ -281,7 +293,13 @@ def _severity_from_rule_id(rule_id: str) -> int:
     """
     parts = rule_id.split("/")
     if parts and parts[0].upper() == "ADVISOR" and len(parts) >= 2:
-        return _SEVERITY_RANK.get(parts[1].upper(), _REQUIRES_EXPIRY_ABOVE)
+        sev_segment = parts[1].upper()
+        if sev_segment not in _SEVERITY_RANK:
+            raise ValueError(
+                f"rule_id {rule_id!r} has malformed advisor-namespace severity "
+                f"segment {parts[1]!r}; expected one of {sorted(_SEVERITY_RANK)}"
+            )
+        return _SEVERITY_RANK[sev_segment]
     if parts and parts[0].upper() in _SEVERITY_RANK:
         return _SEVERITY_RANK[parts[0].upper()]
     return _REQUIRES_EXPIRY_ABOVE

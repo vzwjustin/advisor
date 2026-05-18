@@ -166,8 +166,14 @@ def load_checkpoint(target: str | Path, run_id: str) -> Checkpoint:
     except json.JSONDecodeError as exc:
         raise ValueError(f"could not read checkpoint {path}: {exc}") from exc
 
+    # Distinguish three states: key absent (silent default — legacy
+    # checkpoints predate the field), key present but empty string (warn
+    # — corruption signal worth surfacing), key present and mismatched
+    # (warn — schema drift). The prior ``if version`` guard collapsed
+    # empty-string into the absent case and lost the diagnostic.
+    schema_present = "schema_version" in obj
     version = str(obj.get("schema_version", ""))
-    if version and version != CHECKPOINT_SCHEMA_VERSION:
+    if schema_present and version != CHECKPOINT_SCHEMA_VERSION:
         warnings.warn(
             f"{path}: schema_version {version!r} does not match "
             f"expected {CHECKPOINT_SCHEMA_VERSION!r}; parsing anyway",
@@ -175,6 +181,24 @@ def load_checkpoint(target: str | Path, run_id: str) -> Checkpoint:
             stacklevel=2,
         )
 
+    # Reject non-list ``tasks`` / ``batches`` at load time. Without this,
+    # a corrupted checkpoint where ``tasks`` is a dict would silently
+    # degrade via ``list(dict) → list of keys`` (strings, not task dicts);
+    # the resume path's ``isinstance(t, dict)`` guard would then skip
+    # every entry and the user would see an empty resumed plan with
+    # NO error — failure mode silent-and-wrong instead of loud-and-clear.
+    raw_tasks = obj.get("tasks", [])
+    raw_batches = obj.get("batches", [])
+    if not isinstance(raw_tasks, list):
+        raise ValueError(
+            f"checkpoint {path}: 'tasks' must be a JSON array, "
+            f"got {type(raw_tasks).__name__}"
+        )
+    if not isinstance(raw_batches, list):
+        raise ValueError(
+            f"checkpoint {path}: 'batches' must be a JSON array, "
+            f"got {type(raw_batches).__name__}"
+        )
     try:
         return Checkpoint(
             run_id=str(obj["run_id"]),
@@ -191,8 +215,8 @@ def load_checkpoint(target: str | Path, run_id: str) -> Checkpoint:
             large_file_max_fixes=int(obj.get("large_file_max_fixes", 3)),
             test_command=str(obj.get("test_command", "")),
             context=str(obj.get("context", "")),
-            tasks=list(obj.get("tasks", [])),
-            batches=list(obj.get("batches", [])),
+            tasks=list(raw_tasks),
+            batches=list(raw_batches),
             # An older checkpoint that omitted ``schema_version`` would
             # otherwise load with ``""`` instead of the dataclass default,
             # quietly defeating any future code that keys off the sentinel.
@@ -240,5 +264,14 @@ def list_checkpoints(target: str | Path) -> list[str]:
             continue
         if not first or not first.startswith(b"{"):
             continue
-        ids.append(name[len(CHECKPOINT_PREFIX) : -len(CHECKPOINT_SUFFIX)])
+        extracted = name[len(CHECKPOINT_PREFIX) : -len(CHECKPOINT_SUFFIX)]
+        # Re-validate against the same regex ``checkpoint_path`` enforces
+        # so the listing never includes ids that ``load_checkpoint`` will
+        # later reject with an opaque ``ValueError: invalid run_id``.
+        # Without this, editor temp files / dot-prefixed names matching
+        # the prefix/suffix shape with JSON-headed bodies (e.g.
+        # ``run-.hidden.json``) get listed but cannot be resumed.
+        if not _RUN_ID_RE.fullmatch(extracted):
+            continue
+        ids.append(extracted)
     return sorted(ids, reverse=True)

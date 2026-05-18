@@ -102,7 +102,18 @@ def _cap_evidence(evidence: str) -> str:
         return evidence
     # ``errors="ignore"`` drops any trailing partial code point left by
     # slicing mid-character so the result is always valid UTF-8.
-    return encoded[: _EVIDENCE_BYTE_CAP - 1].decode("utf-8", errors="ignore").rstrip() + "…"
+    # Reserve the full UTF-8 byte width of the ``…`` ellipsis (U+2026 is
+    # 3 bytes: 0xE2 0x80 0xA6). The prior slice ``CAP - 1`` left only 1
+    # byte for the ellipsis and overshot the cap by up to 2 bytes — a
+    # contract violation against the docstring promise even if upstream
+    # body-limit accounting absorbs it.
+    ellipsis_bytes = len("…".encode("utf-8"))
+    return (
+        encoded[: _EVIDENCE_BYTE_CAP - ellipsis_bytes]
+        .decode("utf-8", errors="ignore")
+        .rstrip()
+        + "…"
+    )
 
 
 def _escape_inline_code(text: str) -> str:

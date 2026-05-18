@@ -1051,8 +1051,14 @@ def _normalize_history_key(path: str) -> str:
     History entries are commonly repo-relative POSIX paths, while the
     scanner often ranks absolute OS-native paths. Keep normalization
     lexical only: no resolving, no filesystem access, no basename fallback.
+
+    Strips a leading BOM (U+FEFF) first, mirroring ``_fs.normalize_path``:
+    Windows runners or pipelines round-tripping through ``utf-8-sig`` can
+    prepend a BOM to the file-path field. Without this, a history entry
+    with a BOM-prefixed path silently gets zero repeat-offender boost
+    because neither the exact-match nor the suffix-match would fire.
     """
-    normalized = path.strip().strip("`").replace("\\", "/")
+    normalized = path.lstrip("﻿").strip().strip("`").replace("\\", "/")
     while normalized.startswith("./"):
         normalized = normalized[2:]
     return normalized
