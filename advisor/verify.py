@@ -47,6 +47,16 @@ class Finding:
 # gates parsing — blocks without it still produce a Finding.
 _REQUIRED_FIELDS = ("file_path", "severity", "description", "evidence", "fix")
 
+# Severity allowlist — kept symmetric with ``history._ALLOWED_SEVERITIES``
+# so that the parse-time gate matches what the history loader and SARIF
+# emitter expect. A runner emitting a mixed-case (``"High"``) or invented
+# (``"INVENTED"``) severity flows through ``_dict_to_finding``, which
+# upper-cases and validates against this set before constructing the
+# ``Finding``. Unknown values are coerced to ``"UNKNOWN"`` with a logged
+# warning so downstream consumers (baseline rule_id keying, history
+# ingestion, SARIF level mapping) see a single canonical form.
+_ALLOWED_SEVERITIES = frozenset({"CRITICAL", "HIGH", "MEDIUM", "LOW"})
+
 # Accept both ``-`` and ``*`` list markers; some agents (especially those
 # that also emit Markdown prose) prefer ``*`` bullets. Without this, a
 # runner returning ``* **File**: ...`` blocks would parse as zero findings.
@@ -465,9 +475,19 @@ def _dict_to_finding(d: dict[str, str]) -> Finding | None:
                 missing,
             )
         return None
+    sev_raw = d["severity"].strip().upper()
+    if sev_raw in _ALLOWED_SEVERITIES:
+        sev = sev_raw
+    else:
+        _log.warning(
+            "verify: coercing unknown severity %r to 'UNKNOWN' for %s",
+            d["severity"],
+            d["file_path"],
+        )
+        sev = "UNKNOWN"
     return Finding(
         file_path=d["file_path"],
-        severity=d["severity"],
+        severity=sev,
         description=d["description"],
         evidence=d["evidence"],
         fix=d["fix"],

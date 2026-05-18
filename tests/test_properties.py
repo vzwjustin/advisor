@@ -241,10 +241,16 @@ _safe_text = st.text(
 )
 
 
+# Severity round-trips only when it is one of the four canonical values —
+# the parser coerces anything else to "UNKNOWN" via the allowlist in
+# ``_dict_to_finding``, which is by design. Constrain the strategy here
+# to the allowed set so the round-trip invariant remains meaningful.
+_canonical_severity = st.sampled_from(("CRITICAL", "HIGH", "MEDIUM", "LOW"))
+
 _round_trip_finding = st.builds(
     Finding,
     file_path=_safe_text,
-    severity=_safe_text,
+    severity=_canonical_severity,
     description=_safe_text,
     evidence=_safe_text,
     fix=_safe_text,

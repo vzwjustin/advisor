@@ -1099,7 +1099,7 @@ def _emit_plan(
     # Budget warnings print on stderr (so they don't pollute pipes) but
     # are also included in --json output for programmatic consumers.
     for warning in _budget_warnings():
-        print(_style.warning_box(f"budget: {warning}"), file=sys.stderr)
+        print(_style.warning_box(f"budget: {warning}", stream=sys.stderr), file=sys.stderr)
 
     if getattr(args, "estimate", False):
         cfg = _cfg()

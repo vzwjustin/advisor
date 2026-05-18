@@ -248,6 +248,42 @@ class TestParseFindingsFromText:
         assert findings[0].fix == "Read it from configuration"
 
 
+class TestSeverityAllowlist:
+    """The parser must canonicalize severity to the four allowed values
+    (or ``"UNKNOWN"``), so downstream SARIF / baseline / history consumers
+    all see one form. Mixed-case input upper-cases; invented values coerce.
+    """
+
+    _BASE_BLOCK = (
+        "- **File**: src/a.py:1\n"
+        "- **Severity**: {sev}\n"
+        "- **Description**: x\n"
+        "- **Evidence**: y\n"
+        "- **Fix**: z\n"
+    )
+
+    @pytest.mark.parametrize("sev", ["CRITICAL", "HIGH", "MEDIUM", "LOW"])
+    def test_canonical_severity_passes_through(self, sev):
+        findings = parse_findings_from_text(self._BASE_BLOCK.format(sev=sev))
+        assert len(findings) == 1
+        assert findings[0].severity == sev
+
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [("High", "HIGH"), ("low", "LOW"), ("  Medium  ", "MEDIUM")],
+    )
+    def test_mixed_case_severity_canonicalizes(self, raw, expected):
+        findings = parse_findings_from_text(self._BASE_BLOCK.format(sev=raw))
+        assert len(findings) == 1
+        assert findings[0].severity == expected
+
+    @pytest.mark.parametrize("sev", ["INVENTED", "WARNING", "info", "P0"])
+    def test_unknown_severity_coerces_to_unknown(self, sev):
+        findings = parse_findings_from_text(self._BASE_BLOCK.format(sev=sev))
+        assert len(findings) == 1
+        assert findings[0].severity == "UNKNOWN"
+
+
 class TestRoundTrip:
     """``format_findings_block`` and ``parse_findings_from_text`` must be
     inverse operations for well-formed Finding lists.

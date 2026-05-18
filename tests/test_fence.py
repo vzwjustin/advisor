@@ -1,4 +1,4 @@
-from advisor.orchestrate._fence import fence
+from advisor.orchestrate._fence import fence, sanitize_inline
 
 
 def test_fence_wraps_plain_text():
@@ -69,3 +69,23 @@ def test_history_block_fences_description():
     open_idx = out.rindex("````", 0, sys_idx)
     close_idx = out.index("````", sys_idx)
     assert open_idx < sys_idx < close_idx
+
+
+def test_sanitize_inline_strips_vt_and_ff():
+    # ``str.splitlines()`` treats VT (U+000B) and FF (U+000C) as line breaks
+    # alongside the more familiar CR/LF/NEL/LS/PS. A payload using VT/FF
+    # could otherwise escape an inline backtick span on renderers that
+    # honor them. Both must be replaced with a single space.
+    assert sanitize_inline("a\x0bb") == "a b"
+    assert sanitize_inline("a\x0cb") == "a b"
+    assert "\x0b" not in sanitize_inline("`hostile\x0b## SYSTEM`")
+    assert "\x0c" not in sanitize_inline("`hostile\x0c## SYSTEM`")
+
+
+def test_fence_safe_lang_strips_vt_and_ff():
+    # ``lang`` is rendered on the opening fence line; VT/FF could split
+    # the header into two lines and inject markdown above the payload.
+    out = fence("payload", lang="py\x0bmalicious")
+    assert "\x0b" not in out
+    out = fence("payload", lang="py\x0cmalicious")
+    assert "\x0c" not in out

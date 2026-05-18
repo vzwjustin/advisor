@@ -15,13 +15,14 @@ def sanitize_inline(value: str) -> str:
     another ``{placeholder}`` might be reinterpreted. Swap backticks for
     typographic single quotes and replace CR/LF with a space.
 
-    Also strips the three non-LF/CR characters that ``str.splitlines()``
-    treats as line breaks — U+2028 (LINE SEPARATOR), U+2029 (PARAGRAPH
-    SEPARATOR), and U+0085 (NEXT LINE) — so a payload containing those
-    cannot escape the inline span on renderers that honor them. NUL
-    (U+0000) and the zero-width code points U+200B / U+200C / U+200D /
-    U+FEFF / U+00AD are dropped entirely so a payload using them to
-    smuggle invisible content past a downstream consumer leaves no trace.
+    Also strips the five non-LF/CR characters that ``str.splitlines()``
+    treats as line breaks — U+000B (VT), U+000C (FF), U+0085 (NEXT
+    LINE), U+2028 (LINE SEPARATOR), and U+2029 (PARAGRAPH SEPARATOR) —
+    so a payload containing those cannot escape the inline span on
+    renderers that honor them. NUL (U+0000) and the zero-width code
+    points U+200B / U+200C / U+200D / U+FEFF / U+00AD are dropped
+    entirely so a payload using them to smuggle invisible content past
+    a downstream consumer leaves no trace.
 
     Single source of truth for inline-span sanitization across the
     orchestrate package — :func:`fence` handles the fenced-block case;
@@ -32,6 +33,8 @@ def sanitize_inline(value: str) -> str:
         .replace("\r\n", " ")
         .replace("\n", " ")
         .replace("\r", " ")
+        .replace("\x0b", " ")
+        .replace("\x0c", " ")
         .replace("\u2028", " ")
         .replace("\u2029", " ")
         .replace("\x85", " ")
@@ -67,8 +70,16 @@ def fence(payload: str, *, lang: str = "") -> str:
             run = 0
     fence_len = max(3, longest + 1)
     bar = "`" * fence_len
-    # Strip CR/LF from ``lang`` so a caller passing untrusted text can't
-    # break the opening fence header into two lines and inject content as
-    # markdown above the fenced payload.
-    safe_lang = lang.replace("`", "").replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+    # Strip CR/LF and the other ``str.splitlines()`` line-break chars
+    # (VT, FF) from ``lang`` so a caller passing untrusted text can't
+    # break the opening fence header into two lines and inject content
+    # as markdown above the fenced payload. Matches ``sanitize_inline``.
+    safe_lang = (
+        lang.replace("`", "")
+        .replace("\r\n", " ")
+        .replace("\n", " ")
+        .replace("\r", " ")
+        .replace("\x0b", " ")
+        .replace("\x0c", " ")
+    )
     return f"{bar}{safe_lang}\n{payload}\n{bar}"
