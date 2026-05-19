@@ -115,9 +115,7 @@ class TestPartialFingerprints:
     def _fp(self, result: dict) -> str:
         return result["partialFingerprints"]["primaryLocationLineHash"]
 
-    def test_distinct_files_same_desc_get_distinct_fingerprints(
-        self, tmp_path: Path
-    ) -> None:
+    def test_distinct_files_same_desc_get_distinct_fingerprints(self, tmp_path: Path) -> None:
         # Same severity + description (=> same synthesized rule_id) but
         # different files must NOT collapse into one Code Scanning alert.
         findings = [
@@ -129,9 +127,7 @@ class TestPartialFingerprints:
         assert results[0]["ruleId"] == results[1]["ruleId"]
         assert self._fp(results[0]) != self._fp(results[1])
 
-    def test_distinct_lines_same_file_get_distinct_fingerprints(
-        self, tmp_path: Path
-    ) -> None:
+    def test_distinct_lines_same_file_get_distinct_fingerprints(self, tmp_path: Path) -> None:
         findings = [
             _make_finding(file_path="src/a.py:10", description="missing input validation"),
             _make_finding(file_path="src/a.py:99", description="missing input validation"),
@@ -145,9 +141,7 @@ class TestPartialFingerprints:
         f = _make_finding(file_path="src/a.py:10", description="missing input validation")
         doc1 = findings_to_sarif([f], tool_version="0.5.0", target_dir=tmp_path)
         doc2 = findings_to_sarif([f], tool_version="0.5.0", target_dir=tmp_path)
-        assert self._fp(doc1["runs"][0]["results"][0]) == self._fp(
-            doc2["runs"][0]["results"][0]
-        )
+        assert self._fp(doc1["runs"][0]["results"][0]) == self._fp(doc2["runs"][0]["results"][0])
 
 
 class TestPathHandling:

@@ -487,10 +487,7 @@ def _audit_protocol_violations(transcript: str) -> tuple[list[str], bool]:
                 continue
             order.append(text)
         counts[text] = counts.get(text, 0) + 1
-    violations = [
-        text if counts[text] == 1 else f"{text} (×{counts[text]})"
-        for text in order
-    ]
+    violations = [text if counts[text] == 1 else f"{text} (×{counts[text]})" for text in order]
     return violations, truncated
 
 
@@ -516,9 +513,7 @@ def audit_transcript(transcript: str, cp: Checkpoint) -> AuditReport:
     — the absence of a signal is itself informative and is preserved.
     """
     fix_counts, fix_numbers, per_message_caps = _audit_fix_assignments(transcript)
-    cap_overruns = _audit_cap_overruns(
-        fix_counts, cp.max_fixes_per_runner, per_message_caps
-    )
+    cap_overruns = _audit_cap_overruns(fix_counts, cp.max_fixes_per_runner, per_message_caps)
     cp_runners_ordered, cp_total = _audit_context_pressure(transcript)
     rotations = sum(1 for _ in _HANDOFF_RE.finditer(transcript))
     protocol_violations, protocol_violations_truncated = _audit_protocol_violations(transcript)

@@ -299,9 +299,7 @@ def format_history_block(entries: list[HistoryEntry]) -> str:
 
     lines = ["## Recent findings from prior runs", ""]
     for key, file_entries in grouped.items():
-        count_note = (
-            f" — {len(file_entries)} prior findings" if len(file_entries) > 1 else ""
-        )
+        count_note = f" — {len(file_entries)} prior findings" if len(file_entries) > 1 else ""
         # Severity glyphs ([HIGH], etc.) come from an allowlist so the
         # bullet label is safe to render unfenced; ``description`` and
         # ``file_path`` stay individually fenced as the injection guard.
@@ -520,9 +518,7 @@ def file_repeat_scores(
         # See ``file_repeat_counts`` for the rationale on key
         # normalization — same regression, same fix shape.
         key = _normalize_path(entry.file_path) or entry.file_path
-        scores[key] = min(
-            _MAX_FILE_SCORE, scores.get(key, 0.0) + contribution
-        )
+        scores[key] = min(_MAX_FILE_SCORE, scores.get(key, 0.0) + contribution)
     return scores
 
 

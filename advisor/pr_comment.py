@@ -109,9 +109,7 @@ def _cap_evidence(evidence: str) -> str:
     # body-limit accounting absorbs it.
     ellipsis_bytes = len("…".encode())
     return (
-        encoded[: _EVIDENCE_BYTE_CAP - ellipsis_bytes]
-        .decode("utf-8", errors="ignore")
-        .rstrip()
+        encoded[: _EVIDENCE_BYTE_CAP - ellipsis_bytes].decode("utf-8", errors="ignore").rstrip()
         + "…"
     )
 

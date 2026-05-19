@@ -157,11 +157,7 @@ def _parse_file_path(raw: str) -> tuple[str, int | None]:
     # ``:label`` (e.g. ``host:port-style:path``).
     all_parts = body.split(":")
     trailing_non_numeric: list[str] = []
-    while (
-        len(all_parts) > 2
-        and not all_parts[-1].isdigit()
-        and all_parts[-2].isdigit()
-    ):
+    while len(all_parts) > 2 and not all_parts[-1].isdigit() and all_parts[-2].isdigit():
         trailing_non_numeric.append(all_parts.pop())
     trailing_numeric: list[str] = []
     while len(all_parts) > 1 and all_parts[-1].isdigit():
@@ -316,9 +312,7 @@ def findings_to_sarif(
                 # is stable across re-scans yet unique per location.
                 "partialFingerprints": {
                     "primaryLocationLineHash": hashlib.sha1(
-                        "\0".join(
-                            (rule_id, rel, str(region.get("startLine", "")))
-                        ).encode("utf-8")
+                        "\0".join((rule_id, rel, str(region.get("startLine", "")))).encode("utf-8")
                     ).hexdigest(),
                 },
                 "properties": {
