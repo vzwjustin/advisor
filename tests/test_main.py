@@ -395,6 +395,20 @@ class TestCmdStatusStrict:
         )
         assert cmd_status(args) == 0
 
+    def test_strict_returns_3_when_update_skill_missing(self, tmp_path, monkeypatch):
+        """The /advisor-update skill is part of install health."""
+        from advisor import __main__ as cli
+        from advisor.install import install, install_skill
+
+        from .conftest import isolate_home
+
+        isolate_home(monkeypatch, tmp_path)
+        monkeypatch.setenv("ADVISOR_NO_NUDGE", "1")
+        install()
+        install_skill()
+
+        assert cli.main(["status", "--strict"]) == 3
+
 
 class TestCmdInstallUninstall:
     """End-to-end install/uninstall with overridden paths (safe tmp_path)."""
@@ -465,6 +479,49 @@ class TestCmdInstallUninstall:
             ]
         )
         assert cmd_install(args_second) == 3
+
+
+class TestCmdAuditFormat:
+    """``advisor audit --format`` aliases must select real output modes."""
+
+    def test_format_json_emits_json(self, tmp_path, capsys):
+        import json
+
+        from advisor import __main__ as cli
+        from advisor.checkpoint import save_checkpoint
+        from advisor.focus import FocusTask
+
+        save_checkpoint(
+            tmp_path,
+            run_id="format-json",
+            tasks=[FocusTask(file_path="auth.py", priority=3, prompt="")],
+            batches=None,
+            team_name="review",
+            file_types="*.py",
+            min_priority=3,
+            max_runners=5,
+            advisor_model="opus",
+            runner_model="sonnet",
+        )
+        transcript = tmp_path / "transcript.txt"
+        transcript.write_text("PROTOCOL_VIOLATION: test\n", encoding="utf-8")
+
+        rc = cli.main(
+            [
+                "audit",
+                "format-json",
+                str(tmp_path),
+                "--transcript",
+                str(transcript),
+                "--format",
+                "json",
+            ]
+        )
+
+        assert rc == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["run_id"] == "format-json"
+        assert len(payload["protocol_violations"]) == 1
 
 
 class TestFormatStatusOptOut:

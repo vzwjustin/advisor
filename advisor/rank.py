@@ -938,6 +938,27 @@ def _score_file(
     return best_priority, winning_reasons
 
 
+def _is_test_path(path: str) -> bool:
+    """True for conventional test files/dirs that should not outrank source.
+
+    Test code often contains high-risk words (``password``, ``token``,
+    ``auth``) as fixtures. Those are useful review targets but should not
+    dominate the default plan over production files.
+    """
+    p = Path(path)
+    parts = {part.lower() for part in p.parts}
+    name = p.name.lower()
+    return bool(
+        parts & {"tests", "test", "__tests__"}
+        or name.startswith("test_")
+        or name.endswith("_test.py")
+        or name.endswith(".test.js")
+        or name.endswith(".test.ts")
+        or name.endswith(".spec.js")
+        or name.endswith(".spec.ts")
+    )
+
+
 def rank_files(
     file_paths: list[str],
     read_fn: Callable[[str], str] | None = None,
@@ -1011,6 +1032,9 @@ def rank_files(
     ranked: list[RankedFile] = []
     for fp, content in zip(kept_paths, contents, strict=True):
         priority, reasons = _score_file(fp, content, extra_keywords=extra_keywords)
+        if _is_test_path(fp):
+            priority = min(priority, 1)
+            reasons = ("test file",)
         if history_scores is not None:
             boost = _history_boost(fp, history_scores)
             if boost > 0:

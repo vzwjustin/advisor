@@ -4,8 +4,8 @@ Goes beyond ``advisor status`` by also checking the surrounding environment:
 
 * Python version (3.10+ required)
 * ``git`` availability (needed for ``--since`` / ``--staged`` / ``--branch``)
-* ``claude`` CLI availability (needed to actually run the pipeline)
-* ``~/.claude`` directory health (exists, is a real directory, not a symlink)
+* ``claude`` / ``codex`` CLI availability (needed to actually run the pipeline)
+* ``~/.claude`` / ``~/.codex`` directory health
 * Advisor install status (nudge + skill present, current)
 * Env-var detection (prints any ``ADVISOR_*`` overrides currently in effect)
 
@@ -105,26 +105,68 @@ def _check_git() -> Check:
     )
 
 
+def _check_codex_cli() -> Check:
+    if shutil.which("codex"):
+        return Check("codex-cli", "ok", "`codex` CLI available on PATH")
+    return Check(
+        "codex-cli",
+        "warn",
+        "`codex` CLI not on PATH; you cannot run the live pipeline from this shell",
+    )
+
+
 def _check_claude_cli() -> Check:
     if shutil.which("claude"):
         return Check("claude-cli", "ok", "`claude` CLI available on PATH")
     return Check(
         "claude-cli",
         "warn",
-        "`claude` CLI not on PATH; you cannot run the live pipeline from this "
-        "shell — install Claude Code from https://claude.ai/code",
+        "`claude` CLI not on PATH; Claude Code pipeline runs will be unavailable "
+        "from this shell — install Claude Code from https://claude.ai/code",
     )
 
 
-def _check_claude_home() -> Check:
-    claude_dir = Path.home() / ".claude"
-    if claude_dir.is_symlink():
+def _check_codex_home() -> Check:
+    codex_dir = Path.home() / ".codex"
+    if codex_dir.is_symlink():
         # ``install.py`` resolves the symlink and accepts the target as
         # long as it stays under ``$HOME`` (dotfiles managers like
         # stow/chezmoi are a common legitimate use). Warn only when the
         # resolved target escapes $HOME — that's the actual condition
         # that breaks the install. ``resolve(strict=False)`` doesn't
         # raise on broken targets, mirroring ``install.py``'s behavior.
+        try:
+            resolved = codex_dir.resolve()
+            home_resolved = Path.home().resolve()
+            if not resolved.is_relative_to(home_resolved):
+                return Check(
+                    "codex-home",
+                    "warn",
+                    f"{codex_dir} resolves to {resolved} (outside $HOME); "
+                    "advisor install refuses to write outside $HOME",
+                )
+        except OSError as exc:
+            return Check(
+                "codex-home",
+                "warn",
+                f"{codex_dir} is a symlink that could not be resolved: {exc}",
+            )
+        # Fall through to the directory checks below — a within-$HOME
+        # symlink to a regular dir is healthy.
+    if not codex_dir.exists():
+        return Check(
+            "codex-home",
+            "warn",
+            f"{codex_dir} does not exist (will be created on first `advisor install`)",
+        )
+    if not codex_dir.is_dir():
+        return Check("codex-home", "fail", f"{codex_dir} exists but is not a directory")
+    return Check("codex-home", "ok", f"{codex_dir} is a regular directory")
+
+
+def _check_claude_home() -> Check:
+    claude_dir = Path.home() / ".claude"
+    if claude_dir.is_symlink():
         try:
             resolved = claude_dir.resolve()
             home_resolved = Path.home().resolve()
@@ -171,7 +213,10 @@ def _check_install(
     status: Status, installed_version: str | None, current_version: str
 ) -> list[Check]:
     checks: list[Check] = []
-    for component in (status.nudge, status.skill):
+    components = [status.nudge, status.skill]
+    if status.update_skill is not None:
+        components.append(status.update_skill)
+    for component in components:
         name = component.name
         if not component.present:
             checks.append(
@@ -258,7 +303,9 @@ def run_doctor(
         _check_python_version(),
         _check_git(),
         _check_claude_cli(),
+        _check_codex_cli(),
         _check_claude_home(),
+        _check_codex_home(),
         *_check_install(status, installed, version),
     ]
     if not quiet and sys.stderr.isatty():

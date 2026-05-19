@@ -9,11 +9,12 @@ from dataclasses import dataclass
 
 from .. import _style
 
-# Known Claude Code model shortcuts. Per the Agent() tool, only the
-# bare-family aliases below and full ``claude-<family>-<version>`` IDs
-# (e.g. ``claude-opus-4-7``) are accepted. Mid-form strings like
+# Known Claude Code / Codex model shortcuts. Per the Agent() tool, only the
+# bare-family aliases below and full ``claude-<family>-<version>`` or
+# ``Codex-<family>-<version>`` IDs (e.g. ``claude-opus-4-7`` /
+# ``Codex-opus-4-7``) are accepted. Mid-form strings like
 # ``opus-4-5`` are NOT accepted — they were in earlier versions of this
-# whitelist but never verified, and Claude Code rejects them. Use a
+# whitelist but never verified, and Codex rejects them. Use a
 # bare alias for "always-latest" or a long-form ID to pin a specific
 # version. The regex below covers the long-form path.
 KNOWN_MODEL_SHORTCUTS = frozenset(
@@ -32,7 +33,8 @@ KNOWN_MODEL_SHORTCUTS = frozenset(
 # the pass-Q audit.
 POOL_SIZE_CEILING: int = 20
 
-# Long-form Claude model IDs follow ``claude-<family>-<version>-YYYYMMDD``.
+# Long-form model IDs follow ``claude-<family>-<version>-YYYYMMDD`` or
+# ``Codex-<family>-<version>-YYYYMMDD``.
 # ``<version>`` is one or more dot/dash-separated digit groups (e.g. ``4``,
 # ``4-5``, ``4.5``); the trailing ``-YYYYMMDD`` date stamp is optional.
 # Anchored to reject leading/trailing dots/dashes and double separators
@@ -44,15 +46,18 @@ POOL_SIZE_CEILING: int = 20
 # Code's canonical model strings are lowercase, mirroring the
 # short-alias exact-match check.
 _LONG_FORM_MODEL_RE = re.compile(
-    r"^claude-(opus|sonnet|haiku)-\d+(?:[.-]\d+){0,3}(?:-\d{8})?$",
+    r"^(?:Codex|claude)-(opus|sonnet|haiku)-\d+(?:[.-]\d+){0,3}(?:-\d{8})?$",
 )
+
+DEFAULT_ADVISOR_MODEL = "claude-opus-4-7"
+DEFAULT_RUNNER_MODEL = "claude-sonnet-4-6"
 
 
 def is_known_model(name: str) -> bool:
-    """Return True if ``name`` looks like a valid Claude Code model string.
+    """Return True if ``name`` looks like a valid Claude Code / Codex model string.
 
     Accepts both the short aliases (``opus``, ``sonnet``, …) and the
-    long-form ``claude-<family>-<version>-YYYYMMDD`` IDs Anthropic ships
+    long-form ``claude-`` / ``Codex-`` family IDs the native agent tools support
     for API calls. Unknown names are not fatal — the caller decides
     whether to warn.
     """
@@ -136,8 +141,8 @@ def default_team_config(
     max_runners: int | None = None,
     min_priority: int = 3,
     context: str = "",
-    advisor_model: str = "claude-opus-4-7",
-    runner_model: str = "claude-sonnet-4-6",
+    advisor_model: str = DEFAULT_ADVISOR_MODEL,
+    runner_model: str = DEFAULT_RUNNER_MODEL,
     max_fixes_per_runner: int = 5,
     large_file_line_threshold: int = 800,
     large_file_max_fixes: int = 3,
@@ -205,15 +210,15 @@ def default_team_config(
     # lets ``ADVISOR_MODEL`` work without forcing every test/caller to
     # thread a ``warn_unknown_model=False``.
     #
-    # Long-form IDs are used as defaults because Claude Code's Agent()
+    # Long-form IDs are used as defaults because the native Agent()
     # tool accepts only bare-family aliases (``opus``, ``sonnet``,
-    # ``haiku``) and full ``claude-<family>-<version>`` IDs. Short forms
+    # ``haiku``) and full ``claude-`` / ``Codex-`` family IDs. Short forms
     # like ``opus-4-7`` are NOT accepted by the live tool — pinning the
     # long form guarantees the spawn works on the current CC version
     # and stays at this exact model until someone bumps it.
-    if advisor_model == "claude-opus-4-7":
+    if advisor_model == DEFAULT_ADVISOR_MODEL:
         advisor_model = _env_or("ADVISOR_MODEL", advisor_model)
-    if runner_model == "claude-sonnet-4-6":
+    if runner_model == DEFAULT_RUNNER_MODEL:
         runner_model = _env_or("ADVISOR_RUNNER_MODEL", runner_model)
     if max_runners is None:
         raw = _env_int_or("ADVISOR_MAX_RUNNERS", 5)
@@ -294,8 +299,8 @@ def default_team_config(
         for label, model in (("advisor_model", advisor_model), ("runner_model", runner_model)):
             if not is_known_model(model):
                 msg = (
-                    f"{label}={model!r} does not look like a known Claude Code model "
-                    f"shortcut or long-form ID; Claude Code may reject it"
+                    f"{label}={model!r} does not look like a known native agent model "
+                    f"shortcut or long-form ID; the agent tool may reject it"
                 )
                 print(_style.warning_box(msg), file=sys.stderr)
 

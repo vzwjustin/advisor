@@ -68,3 +68,20 @@ class TestRunDoctor:
             assert r.env_overrides.get(OPT_OUT_ENV) == "1"
         finally:
             os.environ.pop(OPT_OUT_ENV, None)
+
+    def test_update_skill_is_checked(self, tmp_path: Path, monkeypatch) -> None:
+        """Doctor must surface missing /advisor-update install state."""
+        from advisor.install import install, install_skill
+
+        from .conftest import isolate_home
+
+        isolate_home(monkeypatch, tmp_path)
+        nudge = tmp_path / ".claude" / "CLAUDE.md"
+        skill = tmp_path / ".claude" / "skills" / "advisor" / "SKILL.md"
+        install(path=nudge)
+        install_skill(path=skill)
+
+        r = run_doctor(nudge_path=nudge, skill_path=skill)
+        update_checks = [c for c in r.checks if c.name == "install-update-skill"]
+        assert len(update_checks) == 1
+        assert update_checks[0].level == "warn"
