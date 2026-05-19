@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+from advisor.__main__ import build_parser
 from advisor.history import (
     HISTORY_SCHEMA_VERSION,
     HistoryEntry,
@@ -13,6 +15,7 @@ from advisor.history import (
     history_path,
     load_recent,
     new_run_id,
+    summarize,
 )
 
 
@@ -115,3 +118,82 @@ class TestRunIdAndEntryNow:
         )
         assert e.timestamp  # non-empty ISO-8601
         assert e.schema_version == HISTORY_SCHEMA_VERSION
+
+
+class TestSummarize:
+    def test_empty_history_is_all_zeros(self) -> None:
+        s = summarize([])
+        assert s["total"] == 0
+        assert s["confirm_rate"] == 0.0  # no ZeroDivision
+        assert s["by_status"] == {}
+        assert s["by_severity"] == {}
+        assert s["run_count"] == 0
+        assert s["top_files"] == []
+
+    def test_counts_rate_and_top_files(self) -> None:
+        entries = [
+            _entry(file_path="auth.py", severity="HIGH", status="CONFIRMED", run_id="r1"),
+            _entry(file_path="auth.py", severity="LOW", status="CONFIRMED", run_id="r1"),
+            _entry(file_path="db.py", severity="LOW", status="REJECTED", run_id="r2"),
+            _entry(file_path="db.py", severity="HIGH", status="CONFIRMED", run_id="r2"),
+        ]
+        s = summarize(entries)
+        assert s["total"] == 4
+        assert s["by_status"] == {"CONFIRMED": 3, "REJECTED": 1}
+        assert s["by_severity"] == {"HIGH": 2, "LOW": 2}
+        assert s["confirm_rate"] == 0.75
+        assert s["run_count"] == 2
+        # auth.py has 2 CONFIRMED, db.py has 1 CONFIRMED → auth first.
+        assert s["top_files"] == [
+            {"file_path": "auth.py", "count": 2},
+            {"file_path": "db.py", "count": 1},
+        ]
+
+    def test_top_files_tiebreak_is_path_sorted(self) -> None:
+        entries = [
+            _entry(file_path="z.py", status="CONFIRMED"),
+            _entry(file_path="a.py", status="CONFIRMED"),
+        ]
+        s = summarize(entries)
+        assert [tf["file_path"] for tf in s["top_files"]] == ["a.py", "z.py"]
+
+    def test_top_n_caps_results(self) -> None:
+        entries = [_entry(file_path=f"f{i}.py", status="CONFIRMED") for i in range(15)]
+        assert len(summarize(entries, top_n=5)["top_files"]) == 5
+
+
+class TestHistoryStatsCLI:
+    def _run(self, capsys, argv: list[str]) -> str:
+        args = build_parser().parse_args(argv)
+        rc = args.func(args)
+        assert rc == 0
+        return capsys.readouterr().out
+
+    def test_stats_json_payload_shape(self, tmp_path: Path, capsys) -> None:
+        append_entries(
+            tmp_path,
+            [
+                _entry(file_path="a.py", status="CONFIRMED"),
+                _entry(file_path="a.py", status="REJECTED"),
+            ],
+        )
+        out = self._run(capsys, ["history", str(tmp_path), "--stats", "--json"])
+        payload = json.loads(out)
+        assert payload["schema_version"]
+        assert payload["target"].endswith(str(tmp_path.name))
+        assert payload["stats"]["total"] == 2
+        assert payload["stats"]["confirm_rate"] == 0.5
+
+    def test_stats_ignores_limit(self, tmp_path: Path, capsys) -> None:
+        append_entries(
+            tmp_path,
+            [_entry(file_path=f"f{i}.py", status="CONFIRMED") for i in range(30)],
+        )
+        out = self._run(capsys, ["history", str(tmp_path), "--stats", "--json", "--limit", "1"])
+        # --limit caps the recent-list view only; --stats aggregates the
+        # full window, so all 30 entries are counted despite --limit 1.
+        assert json.loads(out)["stats"]["total"] == 30
+
+    def test_stats_empty_history_friendly_message(self, tmp_path: Path, capsys) -> None:
+        out = self._run(capsys, ["history", str(tmp_path), "--stats"])
+        assert "no history yet" in out

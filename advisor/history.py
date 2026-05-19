@@ -478,6 +478,44 @@ def file_repeat_counts(
     return counts
 
 
+def summarize(
+    entries: list[HistoryEntry],
+    *,
+    top_n: int = 10,
+    now: datetime | None = None,
+) -> dict[str, object]:
+    """Aggregate history entries into a JSON-friendly stats summary.
+
+    Pure function — no I/O. ``confirm_rate`` is ``CONFIRMED / total`` and
+    is ``0.0`` for an empty history (no ZeroDivision). ``top_files`` reuses
+    :func:`file_repeat_counts` (CONFIRMED-only, all-time window) so the
+    most-flagged ranking matches the repeat-offender bucketing the ranker
+    uses, deterministically tie-broken by path.
+    """
+    total = len(entries)
+    by_status: dict[str, int] = {}
+    by_severity: dict[str, int] = {}
+    run_ids: set[str] = set()
+    for e in entries:
+        st = e.status.upper()
+        by_status[st] = by_status.get(st, 0) + 1
+        sv = e.severity.upper()
+        by_severity[sv] = by_severity.get(sv, 0) + 1
+        if e.run_id:
+            run_ids.add(e.run_id)
+    confirmed = by_status.get("CONFIRMED", 0)
+    counts = file_repeat_counts(entries, window_days=float("inf"), now=now)
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:top_n]
+    return {
+        "total": total,
+        "by_status": by_status,
+        "by_severity": by_severity,
+        "confirm_rate": (confirmed / total) if total else 0.0,
+        "run_count": len(run_ids),
+        "top_files": [{"file_path": p, "count": c} for p, c in ranked],
+    }
+
+
 def file_repeat_scores(
     findings: list[HistoryEntry],
     *,

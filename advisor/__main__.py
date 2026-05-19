@@ -48,6 +48,7 @@ from .history import (
     load_recent,
     load_recent_findings,
     new_run_id,
+    summarize,
 )
 from .install import (
     OPT_OUT_ENV,
@@ -417,6 +418,19 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
             "presets`."
         ),
     )
+
+
+def _resolve_json_output(args: argparse.Namespace) -> bool:
+    """Resolve whether JSON output is requested from ``--format`` / ``--json``.
+
+    ``--format`` is the explicit selector; the legacy ``--json`` flag is
+    honored only when ``--format`` is unset. ``--format pretty`` therefore
+    overrides a stray ``--json``, and ``--format json`` works even without
+    ``--json``. Shared by ``plan`` and ``audit`` so the precedence rule
+    lives in exactly one place.
+    """
+    fmt = getattr(args, "format", None)
+    return fmt == "json" or (fmt != "pretty" and getattr(args, "json", False))
 
 
 def cmd_pipeline(args: argparse.Namespace) -> int:
@@ -1016,8 +1030,9 @@ def _emit_plan(
             print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
             return 2
 
+    as_json = _resolve_json_output(args)
     output_arg = getattr(args, "output", None)
-    if output_arg is not None and not getattr(args, "json", False):
+    if output_arg is not None and not as_json:
         # Catch the empty-string case too — a falsy ``output_arg`` previously
         # bypassed the warning, leaving the user without feedback that
         # --output was ignored AND nothing was written.
@@ -1028,7 +1043,7 @@ def _emit_plan(
             ),
             file=sys.stderr,
         )
-    elif output_arg == "" and getattr(args, "json", False):
+    elif output_arg == "" and as_json:
         # ``--output ""`` with ``--json`` previously fell through to stdout
         # silently — the falsy empty string passed the ``output_arg is not
         # None`` guard above but tripped the ``if output_file:`` falsy check
@@ -1041,7 +1056,7 @@ def _emit_plan(
             file=sys.stderr,
         )
 
-    if getattr(args, "json", False):
+    if as_json:
         estimate = None
         if getattr(args, "estimate", False):
             cfg = _cfg()
@@ -1873,9 +1888,63 @@ def cmd_ui(args: argparse.Namespace) -> int:
     return 0
 
 
+def _format_history_stats(target: Path, stats: dict[str, object]) -> str:
+    """Render a :func:`advisor.history.summarize` payload as a header block."""
+
+    def _dist(d: object) -> str:
+        if not isinstance(d, dict) or not d:
+            return "—"
+        return ", ".join(f"{k} {v}" for k, v in sorted(d.items()))
+
+    confirm_rate = stats.get("confirm_rate", 0.0)
+    rate_str = (
+        f"{float(confirm_rate) * 100:.0f}%" if isinstance(confirm_rate, (int, float)) else "—"
+    )
+    rows = [
+        ("entries", str(stats.get("total", 0))),
+        ("runs", str(stats.get("run_count", 0))),
+        ("confirm rate", rate_str),
+        ("by status", _dist(stats.get("by_status"))),
+        ("by severity", _dist(stats.get("by_severity"))),
+    ]
+    top = stats.get("top_files")
+    if isinstance(top, list):
+        for i, tf in enumerate(top[:10]):
+            if isinstance(tf, dict):
+                label = "top files" if i == 0 else ""
+                rows.append((label, f"{tf.get('count')}× {tf.get('file_path')}"))
+    return _style.header_block(f"history stats — {target}", rows, width=64)
+
+
 def cmd_history(args: argparse.Namespace) -> int:
     """Show recent CONFIRMED findings from ``.advisor/history.jsonl``."""
     target = Path(args.target)
+    if getattr(args, "stats", False):
+        # --stats aggregates a fuller window than --limit (which only caps
+        # the recent-list view), so it loads via load_recent_findings.
+        all_entries = load_recent_findings(history_path(target), limit=500)
+        summary = summarize(all_entries)
+        if getattr(args, "json", False):
+            print(
+                json.dumps(
+                    {
+                        "schema_version": JSON_SCHEMA_VERSION,
+                        "target": str(target.resolve()),
+                        "stats": summary,
+                    },
+                    indent=2,
+                )
+            )
+            return 0
+        if not all_entries:
+            print(_style.dim(f"no history yet at {target}/.advisor/history.jsonl"))
+            print(_style.tip("findings are logged when you confirm them during a run"))
+            return 0
+        print(_format_history_stats(target, summary))
+        if not getattr(args, "quiet", False):
+            print()
+            print(_style.cta("next", "advisor history ."))
+        return 0
     entries = load_recent(target, limit=args.limit)
     if getattr(args, "json", False):
         payload = {
@@ -2667,12 +2736,7 @@ def cmd_audit(args: argparse.Namespace) -> int:
 
     fail_on_rc = _fail_on_findings(getattr(args, "fail_on", None), report.findings_in_batch)
 
-    # ``--format`` is the explicit selector; the legacy ``--json`` flag is
-    # honored only when ``--format`` is unset. ``--format pretty`` therefore
-    # overrides a stray ``--json``, and ``--format json`` works even without
-    # ``--json`` (previously ``json``/``pretty`` were accepted by argparse
-    # but silently ignored — only ``pr-comment`` was wired up).
-    as_json = fmt == "json" or (fmt != "pretty" and getattr(args, "json", False))
+    as_json = _resolve_json_output(args)
 
     if as_json:
         payload: dict[str, object] = {
@@ -2757,9 +2821,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Group tasks into batches of this size (0 = flat dispatch plan, try 5 to start)",
     )
     p_plan.add_argument(
+        "--format",
+        choices=("pretty", "json"),
+        default=None,
+        help=(
+            "Output format. `json` is scriptable (no colors, no CTA); "
+            "`pretty` is the default human view. Overrides --json when both "
+            "are given."
+        ),
+    )
+    p_plan.add_argument(
         "--json",
         action="store_true",
-        help="Emit the ranked plan as JSON for scripting (no colors, no CTA)",
+        help="Alias for --format json (kept for back-compat)",
     )
     p_plan.add_argument(
         "--output",
@@ -3116,6 +3190,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=_pos_int,
         default=20,
         help="Maximum number of recent entries to show (default: %(default)s)",
+    )
+    p_history.add_argument(
+        "--stats",
+        action="store_true",
+        help=(
+            "Show aggregate stats (confirm rate, status/severity breakdown, "
+            "most-flagged files) instead of the recent-entry list. Aggregates "
+            "the full window — ignores --limit. Composes with --json."
+        ),
     )
     p_history.add_argument(
         "--json",

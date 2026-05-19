@@ -93,6 +93,7 @@ advisor pipeline src/                  # full pipeline reference
 advisor protocol                       # print the strict team-lifecycle protocol
 advisor plan src/                      # rank local files, print dispatch plan
 advisor plan src/ --json               # same, machine-readable for `jq` etc.
+advisor plan src/ --format json        # explicit selector (alias of --json; pretty overrides)
 advisor plan src/ --sarif out.sarif    # SARIF 2.1.0 output for Code Scanning
 advisor audit RUN_ID [TARGET]          # post-hoc diagnostic for a completed run
 advisor prompt advisor src/            # the advisor's prompt body
@@ -107,6 +108,7 @@ advisor changelog [VERSION]            # print bundled CHANGELOG section(s); --s
 advisor uninstall                      # remove nudge + /advisor skill
 advisor ui                             # launch local web dashboard on 127.0.0.1:8765
 advisor history                        # recent findings from .advisor/history.jsonl
+advisor history --stats                # aggregate: confirm rate, breakdowns, top files
 advisor baseline create                # snapshot current findings as baseline
 advisor baseline diff                  # compare current run vs. baseline
 advisor checkpoints                    # list saved plan checkpoints
@@ -309,7 +311,7 @@ no-op or unhealthy install · `2` argparse / user error · `1` unexpected.
 
 ## Findings lifecycle
 
-- **`advisor history`** — recent confirmed findings from `.advisor/history.jsonl`
+- **`advisor history`** — recent confirmed findings from `.advisor/history.jsonl` (`--stats` for an aggregate view)
 - **`advisor baseline create`** — snapshot current findings as an accepted baseline
 - **`advisor baseline diff`** — compare current run vs. baseline
 - **`.advisor/suppressions.jsonl`** — per-rule, per-file suppressions with

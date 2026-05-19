@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `advisor plan --format {pretty,json}` — explicit output selector, bringing
+  `plan` to parity with `audit`. The legacy `--json` flag is kept as an alias;
+  `--format pretty` overrides a stray `--json`. Precedence now lives in one
+  shared `_resolve_json_output` helper used by both commands.
+- `advisor history --stats` — aggregate view (confirm rate, status/severity
+  breakdown, run count, most-flagged files) over the full history window.
+  Composes with `--json`; ignores `--limit` (which only caps the recent list).
+
+### Changed
+
+- Stronger scope-drift deterrent. Runner prompts now state the mechanical
+  consequence — out-of-batch findings are discarded by the verifier before
+  the advisor reads them — and the advisor enforces a two-strikes rule: first
+  off-batch anchor → REDIRECT, second on the same assignment → named
+  `PROTOCOL_VIOLATION` + rotation, replacing the prior unbounded-REDIRECT loop.
+
 ## [0.7.2] - 2026-05-18
 
 Combined release of two `/advisor` correctness waves. The first wave
