@@ -470,6 +470,50 @@ class TestAuditCLI:
         assert payload["fix_counts"]["runner-1"] == 1
         assert len(payload["protocol_violations"]) == 1
 
+    def test_cli_format_json_emits_json(self, tmp_path, capsys):
+        # `--format json` must produce JSON even without the legacy
+        # `--json` flag (argparse accepted it but cmd_audit ignored it,
+        # only wiring up `pr-comment`).
+        from advisor.__main__ import main
+
+        target = tmp_path
+        save_checkpoint(
+            target,
+            run_id="test-run",
+            tasks=[FocusTask(file_path="auth.py", priority=3, prompt="")],
+            batches=[
+                FocusBatch(
+                    batch_id=1,
+                    tasks=(FocusTask(file_path="auth.py", priority=3, prompt=""),),
+                    complexity="medium",
+                )
+            ],
+            team_name="review",
+            file_types="*.py",
+            min_priority=3,
+            max_runners=5,
+            advisor_model="opus",
+            runner_model="sonnet",
+        )
+        transcript_file = tmp_path / "log.txt"
+        transcript_file.write_text("PROTOCOL_VIOLATION: test\n", encoding="utf-8")
+
+        rc = main(
+            [
+                "audit",
+                "test-run",
+                str(target),
+                "--transcript",
+                str(transcript_file),
+                "--format",
+                "json",
+            ]
+        )
+        assert rc == 0
+        captured = capsys.readouterr()
+        payload = json.loads(captured.out)
+        assert payload["run_id"] == "test-run"
+
     def test_cli_missing_checkpoint_returns_2(self, tmp_path, capsys):
         from advisor.__main__ import main
 
