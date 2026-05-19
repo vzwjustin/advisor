@@ -19,6 +19,7 @@ import json
 import os
 import warnings
 from dataclasses import dataclass
+from datetime import date
 from functools import cache, lru_cache
 from pathlib import Path
 
@@ -31,16 +32,28 @@ from .focus import FocusBatch, FocusTask
 #: buffers fully into memory before :func:`json.loads` ever sees it.
 _PRICING_MAX_BYTES = 1_048_576
 
-# Default published pricing (USD per million tokens) snapshotted 2025-04.
-# Verify at https://www.anthropic.com/pricing before relying on the estimate.
-# Intentionally encoded as cents to avoid float drift during aggregation.
-# Override via ``price_override=`` if Anthropic changes list price.
+#: Snapshot date of :data:`DEFAULT_PRICING_CENTS_PER_MTOK`. Surfaced in
+#: :func:`format_estimate` output and used to gate the stale-pricing
+#: advisory in :func:`estimate_cost` (fires once per process when the
+#: default table is more than 180 days old).
+PRICING_AS_OF = date(2025, 4, 1)
+
+# Default published pricing (USD per million tokens) snapshotted at
+# :data:`PRICING_AS_OF`. Verify at https://www.anthropic.com/pricing before
+# relying on the estimate. Intentionally encoded as cents to avoid float
+# drift during aggregation. Override via ``pricing=`` if Anthropic changes
+# list price.
 DEFAULT_PRICING_CENTS_PER_MTOK: dict[str, tuple[int, int]] = {
     # family → (input_cents_per_mtok, output_cents_per_mtok)
     "opus": (1500, 7500),
     "sonnet": (300, 1500),
     "haiku": (100, 500),
 }
+
+#: Stale threshold (days) — defaults older than this trigger a one-shot
+#: :class:`UserWarning` from :func:`estimate_cost` so users know to
+#: refresh via ``advisor plan --pricing FILE`` or update the package.
+_PRICING_STALE_DAYS = 180
 
 # Fixed prompt overhead per dispatch (advisor prompt + runner prompt +
 # message framing). Empirically ~3-6k tokens each; use a conservative middle.
@@ -88,6 +101,38 @@ def _warn_unknown_family(model: str) -> None:
         # Frames: warn → _warn_unknown_family → _family_of → estimate_cost
         # → user code. stacklevel=4 blames the user's estimate_cost(...) call.
         stacklevel=4,
+    )
+
+
+_stale_pricing_warned = False
+
+
+def _maybe_warn_stale_default_pricing() -> None:
+    """Emit a one-shot :class:`UserWarning` if the default pricing snapshot
+    is older than :data:`_PRICING_STALE_DAYS`.
+
+    Only called when ``pricing`` was left at its default in
+    :func:`estimate_cost`. Mirrors the once-per-process suppression
+    pattern of :func:`_warn_unknown_family` so a plan with many runners
+    doesn't spam stderr. ``warnings.warn`` is used rather than direct
+    stderr so callers can filter via ``-W`` or ``warnings.simplefilter``.
+    """
+    global _stale_pricing_warned
+    if _stale_pricing_warned:
+        return
+    age_days = (date.today() - PRICING_AS_OF).days
+    if age_days <= _PRICING_STALE_DAYS:
+        return
+    _stale_pricing_warned = True
+    warnings.warn(
+        f"cost: default pricing table is stale "
+        f"(snapshot {PRICING_AS_OF.isoformat()}, {age_days} days old); "
+        f"verify rates at https://www.anthropic.com/pricing and override "
+        f"with `advisor plan --pricing FILE`",
+        UserWarning,
+        # Frames: warn → _maybe_warn_stale_default_pricing → estimate_cost
+        # → user code. stacklevel=3 blames the user's estimate_cost(...) call.
+        stacklevel=3,
     )
 
 
@@ -160,7 +205,12 @@ def estimate_cost(
     * **max** scenario — every runner consumes its full ``max_fixes_per_runner``
       budget; each fix is a full read + write round trip.
     """
-    pricing = pricing or DEFAULT_PRICING_CENTS_PER_MTOK
+    if pricing is None:
+        # Default table in use — surface staleness if the snapshot has aged
+        # past the threshold. Skipped entirely when the caller supplied a
+        # ``pricing=`` override (they're already opted out of the default).
+        _maybe_warn_stale_default_pricing()
+        pricing = DEFAULT_PRICING_CENTS_PER_MTOK
     # Validate required keys before any KeyError-prone lookups below.
     # Custom ``pricing=`` dicts must cover the families we fall back to —
     # without this, a partial dict (e.g. {"opus": (...)} with no "sonnet")
@@ -172,6 +222,29 @@ def estimate_cost(
             f"pricing= is missing required keys {missing!r}; "
             "supply entries for sonnet/opus/haiku or omit pricing= to use defaults"
         )
+    # Validate value shape symmetrically with ``load_pricing``. Without
+    # this, a malformed entry (e.g. ``{"opus": (1500,)}`` or
+    # ``{"opus": "1500/7500"}``) would raise a cryptic ``ValueError: not
+    # enough values to unpack`` deep inside the pricing lookup below
+    # instead of a clear message at the input boundary.
+    for fam, value in pricing.items():
+        if not isinstance(value, tuple) or len(value) != 2:
+            raise ValueError(
+                f"pricing= entry for {fam!r} must be a 2-tuple "
+                f"(input_cents_per_mtok, output_cents_per_mtok); got {value!r}"
+            )
+        in_c, out_c = value
+        for label, cents in (("input", in_c), ("output", out_c)):
+            if isinstance(cents, bool) or not isinstance(cents, int):
+                raise ValueError(
+                    f"pricing= entry for {fam!r} {label} cents must be an integer "
+                    f"(got {cents!r})"
+                )
+            if cents < 0:
+                raise ValueError(
+                    f"pricing= entry for {fam!r} {label} cents must be non-negative "
+                    f"(got {cents})"
+                )
     # Reject negative caps explicitly. The CLI argparse and
     # ``default_team_config`` both floor at >=1 before reaching here, so
     # this guard only catches direct-API misuse — but a negative cap
@@ -355,5 +428,7 @@ def format_estimate(est: CostEstimate) -> str:
         f"- Output tokens: {est.output_tokens_min:,} – {est.output_tokens_max:,}\n"
         f"- **Est. cost: ${est.cost_usd_min:.2f} – ${est.cost_usd_max:.2f}**\n"
         f"\n_Range covers review-only (min) to full fix waves (max). "
-        f"Actual cost depends on dialogue depth and fix count._"
+        f"Actual cost depends on dialogue depth and fix count. "
+        f"Pricing as of {PRICING_AS_OF.isoformat()} — "
+        f"verify at https://www.anthropic.com/pricing._"
     )

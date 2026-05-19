@@ -23,6 +23,11 @@ the same fields a YAML entry would have.
 - ``reason`` is required whenever ``until`` is required. Non-empty.
 - An expired ``until`` logs a warning at load time and the entry is
   *not* silently re-activated — it must be renewed explicitly.
+- An ``until`` within 14 days of today (and not yet expired) logs an
+  expire-soon warning at load so the user can renew before findings
+  resurface.
+- ``until`` dates are compared against **UTC** date, not local — set the
+  date one day later than your local intent if near midnight.
 - ``file`` (exact path) and ``file_glob`` (fnmatch-style) are mutually
   exclusive. ``file_glob`` supports ``**``.
 
@@ -148,6 +153,31 @@ def _parse_until(raw: str | None, *, context: str) -> tuple[str | None, bool]:
     return d.isoformat(), expired
 
 
+_EXPIRE_SOON_DAYS = 14
+
+
+def _warn_expire_soon(rule_id: str, until_norm: str, *, context: str) -> None:
+    """Emit a UserWarning when ``until_norm`` is within the soon-window.
+
+    Called once per parsed suppression that has a non-expired ``until``.
+    Gives the user lead time to renew before the suppression flips to
+    expired and findings resurface.
+    """
+    try:
+        d = date.fromisoformat(until_norm)
+    except ValueError:
+        return
+    today = datetime.now(timezone.utc).date()
+    delta = (d - today).days
+    if 0 <= delta < _EXPIRE_SOON_DAYS:
+        warnings.warn(
+            f"{context}: suppression {rule_id!r} expires in {delta} days "
+            f"({until_norm}); renew or remove",
+            UserWarning,
+            stacklevel=3,
+        )
+
+
 def load_suppressions(path: Path) -> tuple[Suppression, ...]:
     """Load suppressions from a JSONL file.
 
@@ -191,6 +221,17 @@ def load_suppressions(path: Path) -> tuple[Suppression, ...]:
                 stacklevel=2,
             )
             continue
+        # ``json.loads`` accepts bare scalars (``42``, ``null``, ``"foo"``)
+        # and arrays — only objects carry suppression fields. Without this
+        # guard ``obj.get(...)`` below raises AttributeError and aborts the
+        # entire load, silently disabling every suppression in the file.
+        if not isinstance(obj, dict):
+            warnings.warn(
+                f"skipping non-dict suppression entry at {path}:{line_no}",
+                UserWarning,
+                stacklevel=2,
+            )
+            continue
         if obj.get(_HEADER_KEY):
             version = str(obj.get("schema_version", ""))
             if version and version != SCHEMA_VERSION:
@@ -208,7 +249,7 @@ def load_suppressions(path: Path) -> tuple[Suppression, ...]:
         file_glob = obj.get("file_glob")
         until_raw = obj.get("until")
 
-        if not rule_id or not isinstance(rule_id, str):
+        if not isinstance(rule_id, str) or not rule_id.strip():
             raise ValueError(f"{ctx}: missing required 'rule_id'")
         if file_ and file_glob:
             raise ValueError(f"{ctx}: 'file' and 'file_glob' are mutually exclusive")
@@ -257,6 +298,8 @@ def load_suppressions(path: Path) -> tuple[Suppression, ...]:
                 UserWarning,
                 stacklevel=2,
             )
+        elif until_norm:
+            _warn_expire_soon(str(rule_id), until_norm, context=ctx)
 
         entries.append(
             Suppression(

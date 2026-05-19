@@ -297,3 +297,161 @@ class TestLoadPricing:
             pricing=loaded,
         )
         assert cheap.cost_usd_max == same.cost_usd_max
+
+
+class TestPricingFreshness:
+    """B2 — surface snapshot date + warn on stale defaults."""
+
+    def test_pricing_as_of_exported(self) -> None:
+        """``PRICING_AS_OF`` is part of the public surface so embedders can
+        display the snapshot date in their own UI without reaching into
+        ``advisor.cost``."""
+        import advisor
+
+        assert advisor.PRICING_AS_OF == cost.PRICING_AS_OF
+        assert "PRICING_AS_OF" in advisor.__all__
+
+    def test_format_estimate_surfaces_pricing_as_of(self, tmp_path: Path) -> None:
+        (tmp_path / "f.py").write_text("x" * 500)
+        e = estimate_cost(
+            [_task(str(tmp_path / "f.py"))],
+            None,
+            advisor_model="opus",
+            runner_model="sonnet",
+            max_fixes_per_runner=5,
+        )
+        rendered = format_estimate(e)
+        assert cost.PRICING_AS_OF.isoformat() in rendered
+        assert "anthropic.com/pricing" in rendered
+
+    def test_stale_pricing_warning_emitted(self, tmp_path: Path, monkeypatch) -> None:
+        """Default pricing older than the stale threshold triggers a one-shot
+        ``UserWarning``. Resets the module-level dedup flag so the test
+        doesn't depend on test-order side effects from earlier estimates."""
+        import datetime as _dt
+
+        import pytest as _pytest
+
+        (tmp_path / "f.py").write_text("x" * 200)
+        monkeypatch.setattr(cost, "PRICING_AS_OF", _dt.date(2000, 1, 1))
+        monkeypatch.setattr(cost, "_stale_pricing_warned", False)
+
+        with _pytest.warns(UserWarning, match="default pricing table is stale"):
+            estimate_cost(
+                [_task(str(tmp_path / "f.py"))],
+                None,
+                advisor_model="opus",
+                runner_model="sonnet",
+                max_fixes_per_runner=1,
+            )
+
+    def test_stale_pricing_warning_silenced_when_pricing_override(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """A caller-supplied ``pricing=`` is an explicit opt-out from the
+        default table — staleness of the default is irrelevant and the
+        advisory must not fire."""
+        import datetime as _dt
+        import warnings as _warnings
+
+        (tmp_path / "f.py").write_text("x" * 200)
+        monkeypatch.setattr(cost, "PRICING_AS_OF", _dt.date(2000, 1, 1))
+        monkeypatch.setattr(cost, "_stale_pricing_warned", False)
+
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter("always")
+            estimate_cost(
+                [_task(str(tmp_path / "f.py"))],
+                None,
+                advisor_model="opus",
+                runner_model="sonnet",
+                max_fixes_per_runner=1,
+                pricing={"opus": (1, 1), "sonnet": (1, 1), "haiku": (1, 1)},
+            )
+        stale = [w for w in caught if "stale" in str(w.message)]
+        assert not stale, f"unexpected stale-pricing warning when pricing= override supplied: {stale}"
+
+
+class TestPricingValueShapeValidation:
+    """B3 — ``estimate_cost`` validates ``pricing=`` value shapes
+    symmetrically with ``load_pricing``, so direct-API callers get a
+    clear ValueError at the boundary instead of a cryptic unpack error
+    deep inside the pricing lookup."""
+
+    def _good_other_two(self) -> dict[str, tuple[int, int]]:
+        return {"sonnet": (1, 1), "haiku": (1, 1)}
+
+    def test_short_tuple_rejected(self, tmp_path: Path) -> None:
+        import pytest as _pytest
+
+        (tmp_path / "f.py").write_text("x")
+        bad = {"opus": (1500,), **self._good_other_two()}
+        with _pytest.raises(ValueError, match="must be a 2-tuple"):
+            estimate_cost(
+                [_task(str(tmp_path / "f.py"))],
+                None,
+                advisor_model="opus",
+                runner_model="sonnet",
+                max_fixes_per_runner=1,
+                pricing=bad,  # type: ignore[arg-type]
+            )
+
+    def test_string_value_rejected(self, tmp_path: Path) -> None:
+        import pytest as _pytest
+
+        (tmp_path / "f.py").write_text("x")
+        bad = {"opus": "1500/7500", **self._good_other_two()}
+        with _pytest.raises(ValueError, match="must be a 2-tuple"):
+            estimate_cost(
+                [_task(str(tmp_path / "f.py"))],
+                None,
+                advisor_model="opus",
+                runner_model="sonnet",
+                max_fixes_per_runner=1,
+                pricing=bad,  # type: ignore[arg-type]
+            )
+
+    def test_three_tuple_rejected(self, tmp_path: Path) -> None:
+        import pytest as _pytest
+
+        (tmp_path / "f.py").write_text("x")
+        bad = {"opus": (1500, 7500, 0), **self._good_other_two()}
+        with _pytest.raises(ValueError, match="must be a 2-tuple"):
+            estimate_cost(
+                [_task(str(tmp_path / "f.py"))],
+                None,
+                advisor_model="opus",
+                runner_model="sonnet",
+                max_fixes_per_runner=1,
+                pricing=bad,  # type: ignore[arg-type]
+            )
+
+    def test_non_integer_cents_rejected(self, tmp_path: Path) -> None:
+        import pytest as _pytest
+
+        (tmp_path / "f.py").write_text("x")
+        bad = {"opus": (1500.5, 7500), **self._good_other_two()}
+        with _pytest.raises(ValueError, match="must be an integer"):
+            estimate_cost(
+                [_task(str(tmp_path / "f.py"))],
+                None,
+                advisor_model="opus",
+                runner_model="sonnet",
+                max_fixes_per_runner=1,
+                pricing=bad,  # type: ignore[arg-type]
+            )
+
+    def test_negative_cents_rejected(self, tmp_path: Path) -> None:
+        import pytest as _pytest
+
+        (tmp_path / "f.py").write_text("x")
+        bad = {"opus": (-1, 7500), **self._good_other_two()}
+        with _pytest.raises(ValueError, match="non-negative"):
+            estimate_cost(
+                [_task(str(tmp_path / "f.py"))],
+                None,
+                advisor_model="opus",
+                runner_model="sonnet",
+                max_fixes_per_runner=1,
+                pricing=bad,
+            )

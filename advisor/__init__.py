@@ -35,6 +35,7 @@ Modules prefixed with ``_`` (``_fs``, ``_style``, ``_version``) are
 internal helpers and are not exported.
 """
 
+from ._style import strip_ansi
 from ._version import resolve_version as _resolve_version
 
 __version__ = _resolve_version()
@@ -62,7 +63,7 @@ from .checkpoint import (
     load_checkpoint,
     save_checkpoint,
 )
-from .cost import CostEstimate, estimate_cost, format_estimate, load_pricing
+from .cost import PRICING_AS_OF, CostEstimate, estimate_cost, format_estimate, load_pricing
 from .doctor import DoctorReport, run_doctor
 from .focus import (
     FocusBatch,
@@ -239,6 +240,7 @@ __all__ = [
     "resolve_git_scope",
     # cost
     "CostEstimate",
+    "PRICING_AS_OF",
     "estimate_cost",
     "format_estimate",
     "load_pricing",
@@ -312,4 +314,6 @@ __all__ = [
     # skill asset
     "SKILL_MD",
     "SKILL_MD_UPDATE",
+    # style helpers (terminal output sanitization)
+    "strip_ansi",
 ]

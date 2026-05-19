@@ -50,12 +50,43 @@ _REQUIRED_FIELDS = ("file_path", "severity", "description", "evidence", "fix")
 # Severity allowlist — kept symmetric with ``history._ALLOWED_SEVERITIES``
 # so that the parse-time gate matches what the history loader and SARIF
 # emitter expect. A runner emitting a mixed-case (``"High"``) or invented
-# (``"INVENTED"``) severity flows through ``_dict_to_finding``, which
+# (``"INVENTED"``) severity flows through ``_canonical_severity``, which
 # upper-cases and validates against this set before constructing the
 # ``Finding``. Unknown values are coerced to ``"UNKNOWN"`` with a logged
 # warning so downstream consumers (baseline rule_id keying, history
 # ingestion, SARIF level mapping) see a single canonical form.
 _ALLOWED_SEVERITIES = frozenset({"CRITICAL", "HIGH", "MEDIUM", "LOW"})
+
+
+def _canonical_severity(raw: str, *, context: str = "") -> str:
+    """Canonicalize a runner-supplied severity string against the allowlist.
+
+    Returns one of ``CRITICAL`` / ``HIGH`` / ``MEDIUM`` / ``LOW``, or
+    ``"UNKNOWN"`` for any input that does not match after strip + upper.
+    Logs a warning on coercion so operators can see drift in runner output.
+
+    Centralized here so all three ``Finding`` construction sites (the parser
+    at ``_dict_to_finding``, the JSON-import path at
+    ``__main__._load_findings_from_input``, and ``pr_comment.sanitize_finding``)
+    see the same canonical form. Without this, two of the three paths
+    previously emitted un-canonicalized severities like ``"Critical"`` or
+    ``"INVENTED"`` straight through to SARIF / baseline / PR rendering — the
+    docstring guarantee on ``_ALLOWED_SEVERITIES`` was materially false.
+
+    ``context`` is a free-form identifier (file path, ``"<json-import>"``,
+    etc.) included in the coercion warning so a noisy run can be traced to
+    its source. Empty by default — callers that have no useful context can
+    omit.
+    """
+    sev_raw = raw.strip().upper()
+    if sev_raw in _ALLOWED_SEVERITIES:
+        return sev_raw
+    _log.warning(
+        "verify: coercing unknown severity %r to 'UNKNOWN'%s",
+        raw,
+        f" (context: {context})" if context else "",
+    )
+    return "UNKNOWN"
 
 # Accept both ``-`` and ``*`` list markers; some agents (especially those
 # that also emit Markdown prose) prefer ``*`` bullets. Without this, a
@@ -475,19 +506,9 @@ def _dict_to_finding(d: dict[str, str]) -> Finding | None:
                 missing,
             )
         return None
-    sev_raw = d["severity"].strip().upper()
-    if sev_raw in _ALLOWED_SEVERITIES:
-        sev = sev_raw
-    else:
-        _log.warning(
-            "verify: coercing unknown severity %r to 'UNKNOWN' for %s",
-            d["severity"],
-            d["file_path"],
-        )
-        sev = "UNKNOWN"
     return Finding(
         file_path=d["file_path"],
-        severity=sev,
+        severity=_canonical_severity(d["severity"], context=d["file_path"]),
         description=d["description"],
         evidence=d["evidence"],
         fix=d["fix"],

@@ -1489,3 +1489,368 @@ class TestStdinReadCap:
         from advisor import __main__ as cli
 
         assert cli._STDIN_LIMIT == 50 * 1024 * 1024
+
+
+class TestCmdChangelogStreamsAndExit:
+    """Regression: error_box was printing to stdout despite stream=stderr arg.
+
+    ``advisor changelog`` callers piping ``--json | jq`` got garbled output
+    when the version did not exist; CI wrappers grepping stderr also missed
+    the failure. Exit code 3 (``_STRICT_NOOP_EXIT``) was returned in the
+    not-found case even though cmd_changelog has no ``--strict`` flag.
+    """
+
+    def test_missing_version_json_keeps_stdout_clean(self, capsys):
+        """``--json`` produces parseable JSON on stdout, error_box on stderr."""
+        from advisor.__main__ import main
+
+        rc = main(["changelog", "99.99.99", "--json"])
+        captured = capsys.readouterr()
+        # JSON consumers must be able to ``json.loads(captured.out)``
+        # without an error_box prefix corrupting the document.
+        import json as _json
+
+        payload = _json.loads(captured.out)
+        assert payload["version"] == "99.99.99"
+        assert payload["body"] in (None, "")
+        # Error decoration belongs on stderr, not stdout.
+        assert "changelog section" not in captured.out
+        # JSON path emits no error_box at all — the null body is the signal.
+        assert rc == 1
+
+    def test_missing_version_pretty_routes_error_to_stderr(self, capsys):
+        """Pretty path: error_box must land on stderr (not stdout)."""
+        from advisor.__main__ import main
+
+        rc = main(["changelog", "99.99.99"])
+        captured = capsys.readouterr()
+        assert "no changelog section for 99.99.99" in captured.err
+        assert "no changelog section for 99.99.99" not in captured.out
+        # Exit 1 (plain error), not 3 (reserved for --strict no-op).
+        assert rc == 1
+
+    def test_missing_sections_since_routes_error_to_stderr(self, capsys):
+        """``--since`` newer-than-everything path also routes via stderr."""
+        from advisor.__main__ import main
+
+        rc = main(["changelog", "--since", "99.99.99"])
+        captured = capsys.readouterr()
+        assert "no changelog sections" in captured.err
+        assert "no changelog sections" not in captured.out
+        assert rc == 1
+
+
+class TestCmdAuditSuppressionQuietJson:
+    """Regression: per-finding ``_log_info`` ignored ``--quiet`` and ``--json``.
+
+    The totals line at the bottom of the suppression block correctly gated
+    on both flags, but the loop emitting one info: line per dropped finding
+    did not — so JSON consumers reading both fds saw noise even with
+    ``--quiet --json`` set.
+    """
+
+    def _build_audit_inputs(self, tmp_path):
+        """Set up a checkpoint + suppression that will fire on a transcript."""
+        from advisor.checkpoint import save_checkpoint
+        from advisor.focus import FocusBatch, FocusTask
+
+        save_checkpoint(
+            tmp_path,
+            run_id="suppr-run",
+            tasks=[FocusTask(file_path="auth.py", priority=3, prompt="")],
+            batches=[
+                FocusBatch(
+                    batch_id=1,
+                    tasks=(FocusTask(file_path="auth.py", priority=3, prompt=""),),
+                    complexity="medium",
+                )
+            ],
+            team_name="review",
+            file_types="*.py",
+            min_priority=3,
+            max_runners=5,
+            advisor_model="opus",
+            runner_model="sonnet",
+        )
+
+        # Transcript with one finding on a file in the batch.
+        transcript_path = tmp_path / "log.txt"
+        transcript_path.write_text(
+            "### Finding 1\n"
+            "- **File**: auth.py\n"
+            "- **Severity**: LOW\n"
+            "- **Description**: example issue\n"
+            "- **Evidence**: line 10\n"
+            "- **Fix**: do thing\n",
+            encoding="utf-8",
+        )
+
+        # Suppression matching that finding's synthesized rule_id.
+        from advisor.sarif import synthesize_rule_id
+
+        rule_id = synthesize_rule_id("LOW", "example issue")
+        suppr_dir = tmp_path / ".advisor"
+        suppr_dir.mkdir(exist_ok=True)
+        (suppr_dir / "suppressions.jsonl").write_text(
+            '{"rule_id": "%s", "file": "auth.py", "reason": "known-test"}\n' % rule_id,
+            encoding="utf-8",
+        )
+        return transcript_path
+
+    def test_per_finding_info_suppressed_under_quiet(self, tmp_path, capsys):
+        from advisor.__main__ import main
+
+        transcript = self._build_audit_inputs(tmp_path)
+        rc = main(
+            [
+                "audit",
+                "suppr-run",
+                str(tmp_path),
+                "--transcript",
+                str(transcript),
+                "--quiet",
+            ]
+        )
+        captured = capsys.readouterr()
+        assert rc == 0
+        # The per-finding `info: suppressed …` line must NOT appear on stderr
+        # when --quiet is set. The totals line is also suppressed by --quiet.
+        assert "info: suppressed" not in captured.err
+
+    def test_per_finding_info_suppressed_under_json(self, tmp_path, capsys):
+        from advisor.__main__ import main
+
+        transcript = self._build_audit_inputs(tmp_path)
+        rc = main(
+            [
+                "audit",
+                "suppr-run",
+                str(tmp_path),
+                "--transcript",
+                str(transcript),
+                "--json",
+            ]
+        )
+        captured = capsys.readouterr()
+        assert rc == 0
+        # JSON consumers reading stderr should not get info: chatter.
+        assert "info: suppressed" not in captured.err
+        # And the JSON body on stdout must still parse.
+        import json as _json
+
+        _json.loads(captured.out)
+
+    def test_per_finding_info_still_shown_in_default_pretty_mode(
+        self, tmp_path, capsys
+    ):
+        """Sanity guard: the info line is only suppressed by --quiet/--json,
+        not deleted outright."""
+        from advisor.__main__ import main
+
+        transcript = self._build_audit_inputs(tmp_path)
+        rc = main(
+            [
+                "audit",
+                "suppr-run",
+                str(tmp_path),
+                "--transcript",
+                str(transcript),
+            ]
+        )
+        captured = capsys.readouterr()
+        assert rc == 0
+        assert "info: suppressed" in captured.err
+
+
+class TestCmdUpdate:
+    """Self-upgrade flow correctness — covers the three Tier-2 fixes:
+
+    1. PyPI shows newer version, GitHub raw changelog 504s → proceed
+       (don't refuse on empty ``new_sections``).
+    2. After a successful upgrade, the PyPI version cache is invalidated
+       so a follow-up ``advisor status`` doesn't report the stale value.
+    3. ``--quiet`` suppresses preview/banner output only; it does NOT
+       skip the confirmation gate (only ``-y`` / non-TTY stdin does).
+    """
+
+    def _make_args(self, **overrides):
+        import argparse
+
+        ns = argparse.Namespace(quiet=False, yes=False, no_preview=False)
+        for k, v in overrides.items():
+            setattr(ns, k, v)
+        return ns
+
+    def test_proceeds_when_pypi_newer_but_changelog_unavailable(
+        self, monkeypatch, capsys
+    ):
+        from advisor import __main__ as cli
+
+        monkeypatch.setattr(
+            cli, "_detect_install_method", lambda: ("uv tool", ["true"])
+        )
+        monkeypatch.setattr(cli, "_get_version", lambda: "0.1.0")
+        monkeypatch.setattr(cli, "fetch_pypi_latest_version", lambda: "0.99.0")
+        monkeypatch.setattr(cli, "fetch_remote_changelog", lambda: None)
+
+        upgrade_calls: list[list[str]] = []
+
+        class _Completed:
+            returncode = 0
+
+        def _fake_run(cmd, check=False, **_kwargs):
+            upgrade_calls.append(list(cmd))
+            return _Completed()
+
+        monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+        monkeypatch.setattr(cli, "invalidate_update_check_cache", lambda: None)
+        monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
+        monkeypatch.setattr(cli.shutil, "which", lambda _name: None)
+
+        rc = cli.cmd_update(self._make_args(quiet=True, yes=True))
+        assert rc == 0
+        assert any(c == ["true"] for c in upgrade_calls), upgrade_calls
+        assert any("install" in c for c in upgrade_calls), upgrade_calls
+
+    def test_already_latest_when_pypi_equals_current(self, monkeypatch, capsys):
+        from advisor import __main__ as cli
+
+        monkeypatch.setattr(
+            cli, "_detect_install_method", lambda: ("uv tool", ["true"])
+        )
+        monkeypatch.setattr(cli, "_get_version", lambda: "0.7.2")
+        monkeypatch.setattr(cli, "fetch_pypi_latest_version", lambda: "0.7.2")
+        monkeypatch.setattr(cli, "fetch_remote_changelog", lambda: None)
+
+        ran: list[list[str]] = []
+
+        def _fake_run(cmd, check=False, **_kwargs):
+            ran.append(list(cmd))
+
+            class _C:
+                returncode = 0
+
+            return _C()
+
+        monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+        rc = cli.cmd_update(self._make_args(quiet=True, yes=True))
+        assert rc == 0
+        assert ran == []
+
+    def test_invalidates_cache_after_successful_upgrade(
+        self, monkeypatch, tmp_path
+    ):
+        import importlib
+
+        from advisor import __main__ as cli
+
+        install_mod = importlib.import_module("advisor.install")
+
+        cache = tmp_path / "update-check.json"
+        cache.write_text('{"latest": "0.7.1", "checked_at": 1700000000.0}')
+        assert cache.exists()
+
+        monkeypatch.setattr(
+            install_mod, "_update_check_cache_path", lambda: cache
+        )
+        monkeypatch.setattr(
+            cli, "_detect_install_method", lambda: ("uv tool", ["true"])
+        )
+        monkeypatch.setattr(cli, "_get_version", lambda: "0.7.1")
+        monkeypatch.setattr(cli, "fetch_pypi_latest_version", lambda: "0.7.2")
+        monkeypatch.setattr(cli, "fetch_remote_changelog", lambda: None)
+        monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
+        monkeypatch.setattr(cli.shutil, "which", lambda _name: None)
+
+        class _C:
+            returncode = 0
+
+        monkeypatch.setattr(cli.subprocess, "run", lambda *_a, **_kw: _C())
+        rc = cli.cmd_update(self._make_args(quiet=True, yes=True))
+        assert rc == 0
+        assert not cache.exists()
+
+    def test_invalidate_helper_is_idempotent_on_missing_cache(self, tmp_path):
+        from advisor.install import invalidate_update_check_cache
+
+        missing = tmp_path / "nonexistent.json"
+        invalidate_update_check_cache(missing)
+        assert not missing.exists()
+
+    def test_quiet_does_not_skip_confirmation_on_tty(self, monkeypatch, capsys):
+        from advisor import __main__ as cli
+
+        monkeypatch.setattr(
+            cli, "_detect_install_method", lambda: ("uv tool", ["true"])
+        )
+        monkeypatch.setattr(cli, "_get_version", lambda: "0.1.0")
+        monkeypatch.setattr(cli, "fetch_pypi_latest_version", lambda: "0.99.0")
+        monkeypatch.setattr(
+            cli,
+            "fetch_remote_changelog",
+            lambda: "## v0.99.0\n\nshiny new things\n",
+        )
+        monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+
+        prompted: list[str] = []
+
+        def _fake_input(prompt: str) -> str:
+            prompted.append(prompt)
+            return "n"
+
+        monkeypatch.setattr("builtins.input", _fake_input)
+
+        ran: list[list[str]] = []
+
+        def _fake_run(cmd, check=False, **_kwargs):
+            ran.append(list(cmd))
+
+            class _C:
+                returncode = 0
+
+            return _C()
+
+        monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+
+        rc = cli.cmd_update(self._make_args(quiet=True, yes=False))
+        assert rc == 0
+        assert prompted, "expected confirmation prompt under --quiet on TTY"
+        assert ran == []
+
+    def test_quiet_non_tty_skips_prompt_and_proceeds(self, monkeypatch):
+        from advisor import __main__ as cli
+
+        monkeypatch.setattr(
+            cli, "_detect_install_method", lambda: ("uv tool", ["true"])
+        )
+        monkeypatch.setattr(cli, "_get_version", lambda: "0.1.0")
+        monkeypatch.setattr(cli, "fetch_pypi_latest_version", lambda: "0.99.0")
+        monkeypatch.setattr(
+            cli,
+            "fetch_remote_changelog",
+            lambda: "## v0.99.0\n\nshiny\n",
+        )
+        monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
+        monkeypatch.setattr(cli, "invalidate_update_check_cache", lambda: None)
+        monkeypatch.setattr(cli.shutil, "which", lambda _name: None)
+
+        def _boom(prompt: str) -> str:
+            raise AssertionError(f"unexpected prompt: {prompt!r}")
+
+        monkeypatch.setattr("builtins.input", _boom)
+
+        ran: list[list[str]] = []
+
+        def _fake_run(cmd, check=False, **_kwargs):
+            ran.append(list(cmd))
+
+            class _C:
+                returncode = 0
+
+            return _C()
+
+        monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+
+        rc = cli.cmd_update(self._make_args(quiet=True, yes=False))
+        assert rc == 0
+        assert any(c == ["true"] for c in ran), ran

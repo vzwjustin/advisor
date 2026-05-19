@@ -63,6 +63,7 @@ from .install import (
     get_installed_skill_version,
     install_skill,
     install_update_skill,
+    invalidate_update_check_cache,
     load_changelog_sections,
     load_release_notes,
     parse_changelog_sections,
@@ -256,8 +257,19 @@ def _resolve_max_runners(raw: int | None) -> int:
     can't spawn an unbounded runner pool — ceiling overruns surface a
     one-line stderr warning so silent clamping doesn't fool the user.
     """
-    if raw is not None and raw >= 1:
-        return _clamp_max_runners(raw, source="--max-runners")
+    if raw is not None:
+        if raw >= 1:
+            return _clamp_max_runners(raw, source="--max-runners")
+        # Mirror the ADVISOR_MAX_RUNNERS non-positive warning so a CLI
+        # value of 0 or negative gets the same visible feedback instead
+        # of silently falling through to the env-var path / default 5.
+        print(
+            _style.warning_box(
+                f"--max-runners={raw} must be a positive integer; using default 5",
+                stream=sys.stderr,
+            ),
+            file=sys.stderr,
+        )
     env_raw = os.environ.get("ADVISOR_MAX_RUNNERS", "").strip()
     if env_raw:
         try:
@@ -636,7 +648,11 @@ def _resolve_plan_files(
     Git-returned paths are filtered against ``--file-types`` using the same
     fnmatch semantics the recursive scan applies, so
     ``advisor plan --since main --file-types '*.py'`` does not surface
-    unrelated markdown/yaml changes that happen to share the diff.
+    unrelated markdown/yaml changes that happen to share the diff. The
+    result is additionally intersected with ``target`` so a git-scoped run
+    against a subdirectory respects the positional argument — without that
+    intersection git diff output is repo-wide and would silently widen the
+    scan.
     """
     since = getattr(args, "since", None)
     staged = getattr(args, "staged", False)
@@ -654,6 +670,16 @@ def _resolve_plan_files(
 
             pats = [p.strip() for p in pattern.split(",") if p.strip()]
             files = [p for p in files if any(fnmatch.fnmatch(Path(p).name, pat) for pat in pats)]
+        # Intersect with target dir so a git-scoped run respects the
+        # ``target`` positional just like ``_safe_rglob`` does. Resolve
+        # both sides so symlinked paths compare cleanly. Git diff output
+        # is repo-wide (``rev-parse --show-toplevel`` returns repo root,
+        # not ``target``), so without this an ``advisor plan ./subdir
+        # --since main`` would silently widen to the whole repo.
+        target_resolved = target.resolve()
+        files = [
+            p for p in files if Path(p).resolve().is_relative_to(target_resolved)
+        ]
         return files, None
     return _safe_rglob(target, args.file_types)
 
@@ -1580,10 +1606,16 @@ def cmd_changelog(args: argparse.Namespace) -> int:
                     }
                 )
             )
-            return 0 if notes else _STRICT_NOOP_EXIT
+            # _STRICT_NOOP_EXIT (3) is reserved for genuine --strict no-op
+            # signaling on install/status/doctor. cmd_changelog has no
+            # --strict flag, so a missing version is a plain error: exit 1.
+            return 0 if notes else 1
         if notes is None:
-            print(_style.error_box(f"no changelog section for {requested}", stream=sys.stderr))
-            return _STRICT_NOOP_EXIT
+            print(
+                _style.error_box(f"no changelog section for {requested}", stream=sys.stderr),
+                file=sys.stderr,
+            )
+            return 1
         print(_style.banner(f"v{requested}"))
         print(notes)
         return 0
@@ -1599,11 +1631,17 @@ def cmd_changelog(args: argparse.Namespace) -> int:
                 }
             )
         )
-        return 0 if sections else _STRICT_NOOP_EXIT
+        # _STRICT_NOOP_EXIT (3) is reserved for genuine --strict no-op
+        # signaling — cmd_changelog has no --strict flag, so empty
+        # results are a plain error: exit 1.
+        return 0 if sections else 1
     if not sections:
         target = f"newer than {since}" if since else "available"
-        print(_style.error_box(f"no changelog sections {target}", stream=sys.stderr))
-        return _STRICT_NOOP_EXIT
+        print(
+            _style.error_box(f"no changelog sections {target}", stream=sys.stderr),
+            file=sys.stderr,
+        )
+        return 1
     for i, (version, _heading, body) in enumerate(sections):
         if i:
             print()
@@ -1671,7 +1709,8 @@ def cmd_update(args: argparse.Namespace) -> int:
                 "  # or:\n"
                 "  pip install -U advisor-agent",
                 stream=sys.stderr,
-            )
+            ),
+            file=sys.stderr,
         )
         return 1
     label, cmd = method
@@ -1695,26 +1734,49 @@ def cmd_update(args: argparse.Namespace) -> int:
                 print(_style.dim("  (offline — preview unavailable, will run upgrade anyway)"))
         elif not new_sections:
             # No changelog sections strictly newer than current. Detect whether
-            # we're at parity with PyPI or actually ahead of it (dev / unreleased).
-            ahead = False
-            if latest is not None:
-                cur_t = _semver_tuple(current)
-                lat_t = _semver_tuple(latest)
-                ahead = cur_t is not None and lat_t is not None and cur_t > lat_t
-            if not quiet:
-                check = _style.glyph("✓", "[OK]")
-                if ahead:
-                    msg = (
-                        f"  {check} ahead of published v{latest} "
-                        f"(current: v{current} — dev or unreleased)"
+            # we're at parity with PyPI, actually ahead of it (dev / unreleased),
+            # or behind PyPI but missing changelog (GitHub raw 504 / rate limit).
+            cur_t = _semver_tuple(current)
+            lat_t = _semver_tuple(latest) if latest is not None else None
+            ahead = (
+                latest is not None
+                and cur_t is not None
+                and lat_t is not None
+                and cur_t > lat_t
+            )
+            # If PyPI shows a strictly-newer version but remote changelog
+            # failed, don't refuse the upgrade — fall through with a degraded
+            # preview so the user can still upgrade through a GitHub outage.
+            pypi_newer = (
+                latest is not None
+                and cur_t is not None
+                and lat_t is not None
+                and lat_t > cur_t
+            )
+            if pypi_newer:
+                if not quiet:
+                    print()
+                    print(
+                        _style.dim(
+                            f"  (changelog preview unavailable — PyPI shows v{latest} "
+                            f"newer than v{current})"
+                        )
                     )
-                elif latest is not None:
-                    msg = f"  {check} already on the latest published version (v{latest})"
-                else:
-                    msg = f"  {check} already on the latest version (v{current})"
-                print()
-                print(_style.ok(msg))
-            nothing_to_upgrade = True
+            else:
+                if not quiet:
+                    check = _style.glyph("✓", "[OK]")
+                    if ahead:
+                        msg = (
+                            f"  {check} ahead of published v{latest} "
+                            f"(current: v{current} — dev or unreleased)"
+                        )
+                    elif latest is not None:
+                        msg = f"  {check} already on the latest published version (v{latest})"
+                    else:
+                        msg = f"  {check} already on the latest version (v{current})"
+                    print()
+                    print(_style.ok(msg))
+                nothing_to_upgrade = True
         else:
             _render_upgrade_preview(current, latest or new_sections[0][0], new_sections)
 
@@ -1723,8 +1785,11 @@ def cmd_update(args: argparse.Namespace) -> int:
         # confirmation prompt; it does not force a downgrade.
         return 0
 
-    # Phase 3 — confirm.
-    if not auto_yes and not quiet and sys.stdin.isatty() and new_sections:
+    # Phase 3 — confirm. ``--quiet`` suppresses preview/banner output but does
+    # NOT skip the confirmation gate; only ``--yes`` (or a non-TTY stdin) does.
+    # The prompt is still issued under ``--quiet`` so scripted callers don't
+    # accidentally trigger an upgrade by passing ``--quiet`` alone.
+    if not auto_yes and sys.stdin.isatty():
         try:
             answer = input(f"\n  Proceed with `{label}` upgrade? [Y/n] ").strip().lower()
         except (EOFError, KeyboardInterrupt):
@@ -1741,11 +1806,21 @@ def cmd_update(args: argparse.Namespace) -> int:
         print(_style.cta(label, " ".join(cmd)))
     try:
         completed = subprocess.run(cmd, check=False)
+    except KeyboardInterrupt:
+        print()
+        print(_style.dim("  aborted"))
+        return 130
     except (OSError, FileNotFoundError) as exc:
-        print(_style.error_box(f"upgrade failed: {exc}", stream=sys.stderr))
+        print(_style.error_box(f"upgrade failed: {exc}", stream=sys.stderr), file=sys.stderr)
         return 1
     if completed.returncode != 0:
-        return completed.returncode
+        rc = completed.returncode
+        return rc if rc >= 0 else 128 + (-rc)
+
+    # Drop the cached PyPI version so a follow-up ``advisor status`` /
+    # ``advisor doctor`` re-fetches instead of reporting the pre-upgrade
+    # value (which would say "update available: vY-1" to a user already on vY).
+    invalidate_update_check_cache()
 
     # Phase 5 — GSD-style boxed "Updated: vX → vY" banner once the upgrade
     # subprocess has succeeded, then re-exec ``advisor install`` in a fresh
@@ -1766,15 +1841,23 @@ def cmd_update(args: argparse.Namespace) -> int:
     if quiet:
         install_cmd.append("--quiet")
     try:
-        return subprocess.run(install_cmd, check=False).returncode
+        rc = subprocess.run(install_cmd, check=False).returncode
+    except KeyboardInterrupt:
+        print()
+        print(_style.dim("  aborted"))
+        return 130
     except (OSError, FileNotFoundError) as exc:
         # ``sys.argv[0]`` can resolve to a path that no longer exists
         # after the upgrade (e.g. the entry point was replaced and the
         # shim got reaped, or the env var ``PATH`` shadowed it). The
         # upgrade itself already succeeded — surface the post-upgrade
         # re-exec failure without unwinding the success.
-        print(_style.error_box(f"post-upgrade install re-exec failed: {exc}", stream=sys.stderr))
+        print(
+            _style.error_box(f"post-upgrade install re-exec failed: {exc}", stream=sys.stderr),
+            file=sys.stderr,
+        )
         return 1
+    return rc if rc >= 0 else 128 + (-rc)
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
@@ -1835,8 +1918,17 @@ def cmd_ui(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 2
-        url = f"http://{args.host}:{args.port}"
-        print(json.dumps({"schema_version": JSON_SCHEMA_VERSION, "url": url}))
+        host = f"[{args.host}]" if ":" in args.host else args.host
+        url = f"http://{host}:{args.port}"
+        print(
+            json.dumps(
+                {
+                    "schema_version": JSON_SCHEMA_VERSION,
+                    "url": url,
+                    "server_running": False,
+                }
+            )
+        )
         return 0
 
     try:
@@ -2630,11 +2722,15 @@ def cmd_audit(args: argparse.Namespace) -> int:
             return 2
         kept, dropped = apply_suppressions(list(report.findings_in_batch), entries)
         if dropped:
-            for f, s in dropped:
-                _log_info(
-                    f"suppressed {f.severity} {f.file_path!r} — "
-                    f"rule {s.rule_id!r} ({s.reason or 'no reason'})"
-                )
+            # Per-finding chatter respects --quiet / --json the same way
+            # the totals line below does — otherwise JSON consumers reading
+            # both fds see noise on stderr that --quiet was supposed to silence.
+            if not (getattr(args, "quiet", False) or getattr(args, "json", False)):
+                for f, s in dropped:
+                    _log_info(
+                        f"suppressed {f.severity} {f.file_path!r} — "
+                        f"rule {s.rule_id!r} ({s.reason or 'no reason'})"
+                    )
             # One-line totals so the user sees something fired even when
             # ``--quiet`` silences the per-finding info lines above.
             # Without this, suppressions look like the findings were never
@@ -2794,18 +2890,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--since",
         default=None,
         metavar="REF",
-        help="Scope to files changed since git REF (e.g. HEAD~5, main)",
+        help="Scope to files changed since git REF (e.g. HEAD~5, main) "
+        "(intersected with target dir)",
     )
     p_plan.add_argument(
         "--staged",
         action="store_true",
-        help="Scope to files currently staged for commit",
+        help="Scope to files currently staged for commit "
+        "(intersected with target dir)",
     )
     p_plan.add_argument(
         "--branch",
         default=None,
         metavar="BASE",
-        help="Scope to files changed vs BASE ref (PR-style: BASE...HEAD)",
+        help="Scope to files changed vs BASE ref (PR-style: BASE...HEAD) "
+        "(intersected with target dir)",
     )
     # Checkpoint + resume — for expensive runs that may be interrupted.
     p_plan.add_argument(
@@ -2885,7 +2984,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common(p_prompt)
     p_prompt.add_argument(
         "--file-count",
-        type=int,
+        type=_nonneg_int,
         default=0,
         help="Actual file count for verify prompt (default: use --max-runners)",
     )

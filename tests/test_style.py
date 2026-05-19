@@ -358,3 +358,97 @@ def test_header_block_no_color_plain_output(monkeypatch):
     assert "advisor 1.0" in out
     assert "python" in out
     assert "3.12" in out
+
+
+def test_colorize_markdown_backtick_in_header_no_premature_reset():
+    """Regression for the backtick-in-header bug.
+
+    A header with an inline ``code`` span previously got its style closed
+    early by the backtick painter's ``\\x1b[0m``, leaving the tail of the
+    header line unstyled. The ``_color_path`` substitution now skips
+    matches that fall inside an already-open SGR span, mirroring the
+    same guard used by ``_color_priority``.
+    """
+    out = _style.colorize_markdown("## Use the `config.py` file in your project")
+    # Tail of header must NOT appear right after a reset:
+    assert "\x1b[0m file in your project" not in out
+    # Exactly one outer reset closes the whole header line.
+    assert out.count("\x1b[0m") == 1
+    # The backtick path is NOT separately painted (would inject \x1b[32m).
+    assert "\x1b[32m" not in out
+    # Header body remains intact for paste-ability.
+    assert "`config.py`" in out
+    assert "file in your project" in out
+
+
+def test_colorize_markdown_backtick_outside_header_still_painted():
+    """A backtick path NOT inside a header still gets the green path color.
+
+    The guard added for the header case must not regress the plain-text
+    backtick path coloring.
+    """
+    out = _style.colorize_markdown("see `config.py` for details")
+    assert "\x1b[32mconfig.py\x1b[0m" in out
+
+
+def test_banner_cjk_text_border_matches_display_width():
+    """Regression for the CJK width bug.
+
+    CJK characters render at 2 display columns each. The banner must size
+    its top/bottom border by display width, not ``len()``, so the border
+    encloses the text cleanly in a real terminal.
+    """
+    text = "Hello 中文"  # display width 10 (Hello=5, space=1, 中=2, 文=2)
+    out = _style.banner(text, width=20)
+    lines = out.split("\n")
+    assert len(lines) == 3
+    top_plain = _style._ANSI_SGR_RE.sub("", lines[0])
+    mid_plain = _style._ANSI_SGR_RE.sub("", lines[1])
+    bot_plain = _style._ANSI_SGR_RE.sub("", lines[2])
+    # Top/bottom borders are ━ chars between corner glyphs ┏┓ / ┗┛.
+    top_bars = top_plain.count("━")
+    bot_bars = bot_plain.count("━")
+    assert top_bars == bot_bars
+    # Middle line's display width (Hello + space + 2 CJK + padding) must
+    # equal top border's display width (corners + bars). With width=20 and
+    # display-width 10, effective_width = max(20, 14) = 20. Border = 20 ━.
+    assert top_bars == 20
+    # Middle display width = 2 (┃) + 2 (pad) + 10 (text) + 2 (pad) + 2 (┃)
+    # but ┃ is single-width box-drawing. Spaces=2+2=4. Text disp=10.
+    # So inner area is 16 display cols; total line = 2 + 16 + 2 = no... wait,
+    # box-drawing ┃ is 1 col each. Total = 1 + 2 + 10 + (pad-right) + 1.
+    # Compute middle line's display width directly via _disp_width:
+    assert _style._disp_width(mid_plain) == _style._disp_width(top_plain)
+
+
+def test_strip_ansi_removes_sgr_csi_and_osc():
+    """``strip_ansi`` covers SGR color codes, cursor-control CSIs, and OSC.
+
+    OSC clipboard-write (``\\x1b]52;c;<base64>\\x07``) is the high-impact
+    case: a finding description sourced from a target-repo file must not
+    be able to smuggle clipboard hijacking through the renderer.
+    """
+    # SGR
+    assert _style.strip_ansi("\x1b[31mred\x1b[0m") == "red"
+    # Cursor-control CSI (clear screen + home)
+    assert _style.strip_ansi("\x1b[2J\x1b[Hpayload") == "payload"
+    # OSC with BEL terminator (set window title)
+    assert _style.strip_ansi("\x1b]0;evil\x07ok") == "ok"
+    # OSC clipboard-write with BEL terminator
+    assert _style.strip_ansi("safe\x1b]52;c;cGF5bG9hZA==\x07 text") == "safe text"
+    # OSC with ESC-backslash terminator
+    assert _style.strip_ansi("a\x1b]2;title\x1b\\b") == "ab"
+    # Plain text passes through unchanged
+    assert _style.strip_ansi("nothing to strip") == "nothing to strip"
+
+
+def test_colorize_markdown_strips_osc_clipboard_payload():
+    """End-to-end: an OSC clipboard-write embedded in markdown is stripped
+    before colorization, so the rendered output cannot inject the escape."""
+    src = "## Header with \x1b]52;c;ZXZpbA==\x07payload"
+    out = _style.colorize_markdown(src)
+    assert "\x1b]52" not in out
+    # The header marker survives; the literal text after the stripped OSC
+    # survives too.
+    assert "Header with" in out
+    assert "payload" in out

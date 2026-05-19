@@ -87,20 +87,27 @@ def _strip_controls(text: str, *, keep_block_whitespace: bool = False) -> str:
 
 
 def synthesize_rule_id(severity: str, description: str, *, prefix: str = "advisor") -> str:
-    """Stable rule-id for a finding that lacks one.
+    """Stable **rule key** for a finding that lacks one.
 
-    Uses severity + a hash of the first 80 chars of the description so
-    repeated findings (same description text, same severity) group under
-    the same rule on GitHub Code Scanning. The severity is lowercased so
+    NOTE: this returns a *rule identifier* (used for SARIF
+    ``results[].ruleId`` and rule grouping in the Code Scanning UI), NOT
+    a per-result fingerprint. Two findings of the same rule in different
+    files SHOULD share this id; that's what makes them group as one rule.
+    For result-level dedup, see ``partialFingerprints`` in
+    :func:`findings_to_sarif`, which mixes this rule_id with file + line.
+
+    Uses severity + a hash of the full description so repeated findings
+    (same description text, same severity) group under the same rule on
+    GitHub Code Scanning. The severity is lowercased so
     ``CRITICAL``/``critical`` collapse to one id.
 
     The slug is the first 16 hex chars of SHA-1 (64 bits) — at that width
     the birthday-bound collision probability stays under 1 in 2^32 even
     for ~65k distinct rule keys per run, which exceeds any realistic
     finding count by orders of magnitude. SHA-1 is used for stability,
-    not security; the input is severity-bucketed description prefix.
+    not security; the input is severity-bucketed description text.
     """
-    slug = hashlib.sha1(description[:80].encode("utf-8")).hexdigest()[:16]
+    slug = hashlib.sha1(description.encode("utf-8")).hexdigest()[:16]
     return f"{prefix}/{severity.lower()}/{slug}"
 
 
@@ -116,11 +123,19 @@ def _level_for(severity: str) -> str:
     return _LEVEL_MAP.get(severity.upper(), _DEFAULT_LEVEL)
 
 
-def _parse_file_path(raw: str) -> tuple[str, int | None]:
-    """Split ``path:line`` / ``path:line:col`` into (path, line_number_or_None).
+def _parse_file_path(
+    raw: str,
+) -> tuple[str, int | None, int | None, int | None]:
+    """Split ``path:line[:col[:end_col]]`` into (path, line, start_col, end_col).
 
     Findings emitted by runners conventionally append a line number as
-    ``src/auth.py:42``. SARIF wants the two fields separate.
+    ``src/auth.py:42``; some also append column / end-column information
+    as ``src/auth.py:42:5`` or ``src/auth.py:42:5:15``. SARIF wants each
+    field separate so the Code Scanning UI can highlight the precise
+    span rather than the whole line.
+
+    Returns ``(path, line_or_None, start_col_or_None, end_col_or_None)``.
+    Each numeric field is ``None`` when not present in the input.
     """
     stripped = raw.strip().strip("`").rstrip()
     # Detect a Windows drive-letter prefix (``C:`` / ``c:``) and peel it
@@ -155,33 +170,52 @@ def _parse_file_path(raw: str) -> tuple[str, int | None]:
     # strip a non-numeric and the new tail is NOT a digit, we stop —
     # peeling further would corrupt a path that legitimately contains
     # ``:label`` (e.g. ``host:port-style:path``).
+    # ``_is_int_token`` accepts optional leading ``-`` so paths like
+    # ``foo.py:-5`` (runner emitted a malformed negative line) get the
+    # ``-5`` peeled off as a numeric token rather than left embedded in
+    # the URI as ``%3A-5``. Downstream clamps negative values to 1.
+    def _is_int_token(s: str) -> bool:
+        return s.lstrip("-").isdigit() and s != "-"
+
     all_parts = body.split(":")
     trailing_non_numeric: list[str] = []
-    while len(all_parts) > 2 and not all_parts[-1].isdigit() and all_parts[-2].isdigit():
+    while (
+        len(all_parts) > 2
+        and not _is_int_token(all_parts[-1])
+        and _is_int_token(all_parts[-2])
+    ):
         trailing_non_numeric.append(all_parts.pop())
     trailing_numeric: list[str] = []
-    while len(all_parts) > 1 and all_parts[-1].isdigit():
+    while len(all_parts) > 1 and _is_int_token(all_parts[-1]):
         trailing_numeric.append(all_parts.pop())
     if not trailing_numeric:
-        return stripped, None
+        return stripped, None, None, None
     # Conventional shape is ``path:line[:col[:end-col[...]]]``. Trailing
     # numerics were popped right-to-left, so the leftmost trailing
-    # numeric (last popped) is the line number — everything to the
-    # right is column / end-column / extra detail we don't track.
-    line = int(trailing_numeric[-1])
+    # numeric (last popped) is the line number, next is start column,
+    # next is end column. Anything beyond is extra detail we discard.
+    nums = [int(t) for t in reversed(trailing_numeric)]
+    line = nums[0]
+    start_col = nums[1] if len(nums) > 1 else None
+    end_col = nums[2] if len(nums) > 2 else None
     path = ":".join(all_parts) if any(all_parts) else ""
-    return drive_prefix + path, line
+    return drive_prefix + path, line, start_col, end_col
 
 
-def _resolve_relative(path: str, target_dir: Path) -> str:
+def _resolve_relative(path: str, target_dir: Path, target_resolved: Path | None = None) -> str:
     """Return ``path`` as a POSIX path relative to ``target_dir``.
 
     Relative paths are treated as already rooted at ``target_dir``.
     Absolute paths must resolve to a location inside ``target_dir`` or
     :class:`ValueError` is raised — SARIF's ``%SRCROOT%`` semantics
     require every URI to be below the source-root.
+
+    ``target_resolved`` lets callers pre-compute ``target_dir.resolve()``
+    once and reuse it across many findings, avoiding O(N) filesystem
+    syscalls. When ``None``, the resolve happens here (single-call path).
     """
-    target_resolved = target_dir.resolve()
+    if target_resolved is None:
+        target_resolved = target_dir.resolve()
     p = Path(path)
     if p.is_absolute():
         try:
@@ -236,12 +270,25 @@ def findings_to_sarif(
     rule_index_by_id: dict[str, int] = {}
     results: list[dict[str, Any]] = []
 
+    # Resolve target_dir once up-front and reuse across every finding.
+    # Avoids O(N) syscalls inside the loop AND prevents the inconsistency
+    # that would arise if a symlinked target_dir changed mid-run.
+    target_resolved = target_dir.resolve()
+
     for f in findings:
         # Skip findings with no file_path — an empty path would produce a
         # SARIF result pointing at the source root, which is misleading.
         # _dict_to_finding already drops these upstream; this guard covers
         # directly-constructed Finding objects.
         if not f.file_path or not f.file_path.strip():
+            continue
+        file_path, line, start_col, end_col = _parse_file_path(f.file_path)
+        # Post-parse skip: a finding like ``":42"`` survives the pre-parse
+        # check (its strip is non-empty) but ``_parse_file_path`` strips
+        # the leading colon and returns an empty path — emitting that as
+        # SARIF produces ``artifactLocation.uri = "."`` which points at
+        # %SRCROOT% itself. Skip rather than emit a misleading result.
+        if not file_path or file_path == ".":
             continue
         rule_id = _rule_id_for(f, prefix=rule_id_fallback_prefix)
         if rule_id not in rules_seen:
@@ -262,16 +309,29 @@ def findings_to_sarif(
                         keep_block_whitespace=True,
                     )
                 },
+                # ``properties.tags`` enables Code Scanning UI filtering
+                # by severity bucket without parsing custom result fields.
+                "properties": {
+                    "tags": [f"severity:{f.severity.lower()}"],
+                },
             }
-        file_path, line = _parse_file_path(f.file_path)
-        rel = _resolve_relative(file_path, target_dir)
+        rel = _resolve_relative(file_path, target_dir, target_resolved=target_resolved)
 
         region: dict[str, Any] = {}
         if line is not None:
             # SARIF 2.1.0 requires startLine >= 1. Runners occasionally
             # emit ``path:0`` for file-level findings — clamp rather than
-            # let a downstream validator reject the whole run.
+            # let a downstream validator reject the whole run. Same clamp
+            # rescues malformed ``path:-5`` (negative line) that the
+            # parser now extracts as a numeric token rather than leaving
+            # embedded in the URI.
             region["startLine"] = max(1, line)
+            # Columns are optional in SARIF; emit only when the runner
+            # provided them. Same >=1 clamp as startLine.
+            if start_col is not None:
+                region["startColumn"] = max(1, start_col)
+            if end_col is not None:
+                region["endColumn"] = max(1, end_col)
 
         # SARIF's ``artifactLocation.uri`` is a uri-reference per RFC 3986
         # (per the schema's ``"format": "uri-reference"`` constraint).
@@ -302,18 +362,26 @@ def findings_to_sarif(
                 # GitHub Code Scanning uses ``partialFingerprints`` to
                 # deduplicate the "same finding" across runs. Without it,
                 # every re-scan creates new alerts for findings that
-                # already exist, drowning users in churn. The fingerprint
-                # must also stay *distinct* per result location: ``rule_id``
-                # alone is shared by every finding with the same severity +
-                # description prefix, so two genuinely different findings in
-                # different files (or different lines of one file) would
-                # collapse into a single Code Scanning alert. Bind the
-                # fingerprint to (rule_id, relative path, start line) so it
-                # is stable across re-scans yet unique per location.
+                # already exist, drowning users in churn.
+                #
+                # The fingerprint MUST include the file + line in addition
+                # to the rule_id — using the rule_id alone would collapse
+                # two distinct findings (same rule, different files) into
+                # ONE alert in the GHCS UI. ``synthesize_rule_id`` is
+                # intentionally file-agnostic (so the same rule groups
+                # across files in the rule list), so the per-result
+                # uniqueness has to come from this layer.
+                #
+                # ``"?"`` only for ``line is None`` (file-level finding) —
+                # preserves the distinction from ``line == 0`` so both
+                # give stable, distinct fingerprints. Don't use
+                # ``line or "?"`` here: ``0`` is falsy and would collide
+                # with the no-line case.
                 "partialFingerprints": {
                     "primaryLocationLineHash": hashlib.sha1(
-                        "\0".join((rule_id, rel, str(region.get("startLine", "")))).encode("utf-8")
-                    ).hexdigest(),
+                        f"{rule_id}|{_url_quote(rel, safe='/')}|"
+                        f"{'?' if line is None else line}".encode("utf-8")
+                    ).hexdigest()[:16]
                 },
                 "properties": {
                     "severity": _strip_controls(f.severity),

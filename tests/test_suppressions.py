@@ -184,6 +184,61 @@ class TestLoader:
         with pytest.raises(ValueError, match="invalid file_glob"):
             load_suppressions(p)
 
+    def test_non_dict_jsonl_line_warns_and_skips(self, tmp_path: Path) -> None:
+        """A JSONL line that parses but isn't a dict (bare scalar, array)
+        must not crash the loader. Without the isinstance guard,
+        ``obj.get(...)`` raises AttributeError and aborts the whole load
+        — silently disabling every suppression in the file.
+        """
+        p = tmp_path / "s.jsonl"
+        p.write_text(
+            '42\n{"rule_id": "advisor/medium/abc", "file": "x.py", "reason": "r"}\n',
+            encoding="utf-8",
+        )
+        with pytest.warns(UserWarning, match="non-dict suppression entry"):
+            result = load_suppressions(p)
+        assert len(result) == 1
+        assert result[0].rule_id == "advisor/medium/abc"
+
+    def test_whitespace_only_rule_id_raises(self, tmp_path: Path) -> None:
+        """A ``rule_id`` of only whitespace would silently load as a
+        functionally-inert entry — no finding's rule_id matches whitespace.
+        Tighten the missing-rule_id check to reject empty-after-strip.
+        """
+        p = tmp_path / "s.jsonl"
+        _write_jsonl(
+            p,
+            [
+                {"rule_id": "   ", "file": "x.py", "reason": "r"},
+            ],
+        )
+        with pytest.raises(ValueError, match="missing required 'rule_id'"):
+            load_suppressions(p)
+
+    def test_expire_soon_emits_warning(self, tmp_path: Path) -> None:
+        """An ``until`` within 14 days (and not expired) emits a
+        UserWarning at load so the user can renew before the suppression
+        flips to expired and findings resurface.
+        """
+        from datetime import datetime, timezone
+
+        soon = (datetime.now(timezone.utc).date() + timedelta(days=7)).isoformat()
+        p = tmp_path / "s.jsonl"
+        _write_jsonl(
+            p,
+            [
+                {
+                    "rule_id": "advisor/high/abc",
+                    "file": "x.py",
+                    "until": soon,
+                    "reason": "r",
+                },
+            ],
+        )
+        with pytest.warns(UserWarning, match="expires in"):
+            entries = load_suppressions(p)
+        assert entries[0].expired is False
+
 
 class TestApply:
     def test_active_suppression_drops_match(self) -> None:

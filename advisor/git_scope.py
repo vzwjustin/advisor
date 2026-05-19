@@ -21,7 +21,10 @@ exist on disk, so callers can feed them straight into ``rank_files``.
 
 from __future__ import annotations
 
+import os
+import re
 import shutil
+import signal
 import subprocess
 from pathlib import Path
 
@@ -41,6 +44,14 @@ def _require_git() -> None:
 # tradeoff between "works on a large repo" and "bails quickly on a hang".
 _GIT_TIMEOUT_SECONDS = 30
 
+# Characters legal in a git ref or revspec we want to support
+# (branch/tag names, ``HEAD~N``, ``main^``, ``origin/foo``, reflog
+# ``@{2.weeks.ago}``). Anything outside this class is rejected at the
+# public boundary so a value like ``main --output=/tmp/x`` or ``HEAD..main``
+# cannot smuggle option-like tokens into git's parser via concatenation
+# in ``files_branch``.
+_REF_ALLOWED = re.compile(r"^[A-Za-z0-9_./~^@{}\-]+$")
+
 
 def _run_git(cwd: Path, *args: str) -> list[str]:
     """Run ``git *args`` in ``cwd`` and return stdout lines (empty on empty output).
@@ -49,35 +60,61 @@ def _run_git(cwd: Path, *args: str) -> list[str]:
     timeout.
     """
     _require_git()
+    # ``start_new_session=True`` puts git (and any grandchildren it forks,
+    # e.g. ``ssh`` or ``git-credential-manager``) into a fresh process
+    # group. On ``TimeoutExpired`` we ``killpg`` the whole group so a
+    # wedged credential prompt cannot outlive the CLI — closing the gap
+    # between this module's "cannot wedge indefinitely" promise and what
+    # ``subprocess.run`` alone delivers (it only signals the direct child).
+    # POSIX-only; on Windows ``start_new_session`` is silently ignored and
+    # ``os.killpg`` doesn't exist, so we skip the group kill there.
     try:
-        completed = subprocess.run(
+        proc = subprocess.Popen(  # noqa: S603 — args are a fixed list, never shell-parsed
             ["git", *args],
             cwd=str(cwd),
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            # Pin the decoder — ``text=True`` alone relies on
-            # ``locale.getpreferredencoding()``, which can be ASCII/CP1252
-            # on containers or Windows. A non-ASCII filename from git
-            # would then raise ``UnicodeDecodeError`` outside the caught
-            # exception set and crash the CLI. ``errors="replace"`` keeps
-            # the command scoped-review-usable even on partial encoding
-            # issues; display strings only need to be readable, not
-            # round-trippable.
+            # See encoding/errors rationale below.
             encoding="utf-8",
             errors="replace",
-            check=False,
-            timeout=_GIT_TIMEOUT_SECONDS,
+            start_new_session=True,
         )
+    except OSError as exc:
+        raise GitScopeError(f"failed to invoke git: {exc}") from exc
+    try:
+        # ``text=True`` alone relies on ``locale.getpreferredencoding()``,
+        # which can be ASCII/CP1252 on containers or Windows. A non-ASCII
+        # filename from git would then raise ``UnicodeDecodeError`` outside
+        # the caught exception set and crash the CLI. ``errors="replace"``
+        # keeps the command scoped-review-usable even on partial encoding
+        # issues; display strings only need to be readable, not
+        # round-trippable.
+        stdout, stderr = proc.communicate(timeout=_GIT_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired as exc:
+        # Kill the whole process group so grandchildren (credential
+        # managers, ssh, askpass helpers) die with git. ``killpg`` is
+        # POSIX-only; on Windows fall back to plain ``proc.kill()``.
+        if hasattr(os, "killpg"):
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        else:
+            proc.kill()
+        # Drain pipes so the Popen object releases its file descriptors;
+        # ignore output — we're erroring out anyway.
+        try:
+            proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
         raise GitScopeError(
             f"git {' '.join(args)} timed out after {_GIT_TIMEOUT_SECONDS}s"
         ) from exc
-    except OSError as exc:
-        raise GitScopeError(f"failed to invoke git: {exc}") from exc
-    if completed.returncode != 0:
-        stderr = completed.stderr.strip() or "(no stderr)"
-        raise GitScopeError(f"git {' '.join(args)} failed: {stderr}")
-    return [line for line in completed.stdout.splitlines() if line.strip()]
+    if proc.returncode != 0:
+        stderr_text = stderr.strip() or "(no stderr)"
+        raise GitScopeError(f"git {' '.join(args)} failed: {stderr_text}")
+    return [line for line in stdout.splitlines() if line.strip()]
 
 
 def _repo_root(cwd: Path) -> Path:
@@ -162,11 +199,37 @@ def resolve_git_scope(
     # mode; ``-h`` would hang on help output). Validation happens here at
     # the public boundary rather than inside ``_run_git`` so the error
     # message can name the specific selector the user passed.
+    # Additionally enforce a character-class allowlist on the rest of the
+    # ref: refs/revspecs in practice only need ``[A-Za-z0-9_./~^@{}-]``.
+    # Anything else (whitespace, ``=``, ``--``, control chars, quotes,
+    # shell-meta) is rejected so a value like ``main --output=/tmp/x`` or
+    # ``HEAD..main`` cannot smuggle option-like tokens into git's parser
+    # via concatenation in ``files_branch``. We do NOT shell out to
+    # ``git check-ref-format`` because it rejects valid revspecs like
+    # ``HEAD~1`` and ``main^`` that this module legitimately accepts.
     for label, value in (("--since", since), ("--branch", branch)):
-        if value and value.startswith("-"):
+        if not value:
+            continue
+        if value.startswith("-"):
             raise GitScopeError(
                 f"{label} ref {value!r} cannot begin with '-'; "
                 f"git would parse it as an option, not a ref"
+            )
+        if not _REF_ALLOWED.match(value):
+            raise GitScopeError(
+                f"{label} ref {value!r} contains characters outside "
+                f"[A-Za-z0-9_./~^@{{}}-]; reject to prevent option-injection"
+            )
+        # Reject literal ``..`` / ``...`` in the user-supplied value:
+        # ``files_branch`` concatenates ``f\"{base_ref}...HEAD\"``, so a
+        # value containing ``..`` would produce a malformed multi-dot
+        # revrange (``HEAD..main...HEAD``) that git parses unpredictably.
+        # Legitimate refspecs do not contain ``..`` — only revranges do,
+        # which the caller constructs, never the user.
+        if ".." in value:
+            raise GitScopeError(
+                f"{label} ref {value!r} contains '..'; "
+                f"pass a single ref, not a revrange"
             )
     if since:
         return files_since(target, since)

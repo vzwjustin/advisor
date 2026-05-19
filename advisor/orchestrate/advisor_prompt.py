@@ -120,7 +120,7 @@ def build_advisor_prompt(config: TeamConfig, *, history_block: str = "") -> str:
     return _render(
         _load_template(),
         {
-            "team_name": config.team_name,
+            "team_name": _sanitize_inline(config.team_name),
             "target_dir": safe_target_dir,
             "file_types": safe_file_types,
             "goal_block": goal_block,

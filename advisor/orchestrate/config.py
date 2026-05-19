@@ -36,10 +36,15 @@ POOL_SIZE_CEILING: int = 20
 # ``<version>`` is one or more dot/dash-separated digit groups (e.g. ``4``,
 # ``4-5``, ``4.5``); the trailing ``-YYYYMMDD`` date stamp is optional.
 # Anchored to reject leading/trailing dots/dashes and double separators
-# that the previous ``[\d.-]+`` would have silently allowed.
+# that the previous ``[\d.-]+`` would have silently allowed. The version
+# segment is bounded to at most 4 dot/dash groups so an unbounded
+# ``([.-]\d+)*`` chain can't swallow the trailing ``-YYYYMMDD`` date and
+# make the date stamp decorative (e.g. an 8-digit nonsense suffix like
+# ``-99999999`` would previously have matched). Case-strict — Claude
+# Code's canonical model strings are lowercase, mirroring the
+# short-alias exact-match check.
 _LONG_FORM_MODEL_RE = re.compile(
-    r"^claude-(opus|sonnet|haiku)-\d+([.-]\d+)*(-\d{8})?$",
-    re.IGNORECASE,
+    r"^claude-(opus|sonnet|haiku)-\d+(?:[.-]\d+){0,3}(?:-\d{8})?$",
 )
 
 

@@ -10,11 +10,17 @@ def _safe_str(value: str) -> str:
 
     The output of :func:`render_pipeline` contains pseudo-code like
     ``TeamCreate(name="{config.team_name}")``. A team name containing a
-    literal ``"`` would close the string early and corrupt the reference
-    that users paste/copy. Backslash-escape both quote and backslash so
-    the rendered snippet stays syntactically valid.
+    literal ``"`` would close the string early; a literal newline would
+    shatter the snippet across lines and corrupt the reference that users
+    paste/copy. Backslash-escape backslash, quote, and CR/LF so the
+    rendered snippet stays a single syntactically valid line.
     """
-    return value.replace("\\", "\\\\").replace('"', '\\"')
+    return (
+        value.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+    )
 
 
 def render_pipeline(config: TeamConfig) -> str:

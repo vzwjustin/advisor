@@ -193,6 +193,22 @@ def _update_check_cache_path() -> Path:
     return Path.home() / ".claude" / ".advisor" / "update-check.json"
 
 
+def invalidate_update_check_cache(cache_path: Path | None = None) -> None:
+    """Remove the PyPI update-check cache, if present.
+
+    Called after a successful ``advisor update`` so the next ``advisor
+    status`` / ``advisor doctor`` invocation re-fetches the latest version
+    instead of reporting the now-stale TTL'd value (which would say
+    "update available: vY-1" to a user who is already on vY).
+    """
+    path = cache_path or _update_check_cache_path()
+    try:
+        path.unlink()
+    except (FileNotFoundError, OSError):
+        # Best-effort: missing cache or unwritable parent is harmless.
+        pass
+
+
 def check_for_update_cached(
     *,
     current: str,
@@ -802,11 +818,17 @@ def status(
         except (OSError, UnicodeDecodeError):
             pass
 
+    # Compare with trailing-newline differences ignored to match
+    # ensure_nudge's rstrip("\n") policy — otherwise atomic_write_text's
+    # platform-dependent final-newline handling can flip skill_current
+    # back to False on the next CLI run even after a successful install.
     skill_present = skill_target.exists()
     skill_current = False
     if skill_present:
         try:
-            skill_current = skill_target.read_text(encoding="utf-8") == SKILL_MD
+            skill_current = skill_target.read_text(encoding="utf-8").rstrip(
+                "\n"
+            ) == SKILL_MD.rstrip("\n")
         except (OSError, UnicodeDecodeError):
             skill_current = False
 
@@ -814,9 +836,9 @@ def status(
     update_skill_current = False
     if update_skill_present:
         try:
-            update_skill_current = (
-                update_skill_target.read_text(encoding="utf-8") == SKILL_MD_UPDATE
-            )
+            update_skill_current = update_skill_target.read_text(encoding="utf-8").rstrip(
+                "\n"
+            ) == SKILL_MD_UPDATE.rstrip("\n")
         except (OSError, UnicodeDecodeError):
             update_skill_current = False
 

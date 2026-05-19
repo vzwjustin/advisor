@@ -177,6 +177,67 @@ class TestPathHandling:
         assert "region" not in loc
 
 
+class TestPartialFingerprints:
+    """``partialFingerprints.primaryLocationLineHash`` is GitHub Code
+    Scanning's per-result dedup key. Two distinct findings (same rule,
+    different file or different line) MUST produce distinct fingerprints,
+    or GHCS collapses them into a single alert and half the findings
+    disappear from the UI.
+
+    Regression net for B1 (fingerprint previously keyed only on rule_id,
+    which is file-agnostic by design).
+    """
+
+    @staticmethod
+    def _fp(doc: dict[str, object], idx: int = 0) -> str:
+        runs = doc["runs"]
+        assert isinstance(runs, list)
+        results = runs[0]["results"]  # type: ignore[index]
+        return results[idx]["partialFingerprints"]["primaryLocationLineHash"]
+
+    def test_same_rule_different_files_distinct_fingerprints(self, tmp_path: Path) -> None:
+        findings = [
+            _make_finding(file_path="src/a.py:5", severity="HIGH", description="same bug"),
+            _make_finding(file_path="src/b.py:10", severity="HIGH", description="same bug"),
+        ]
+        doc = findings_to_sarif(findings, tool_version="0.5.0", target_dir=tmp_path)
+        # Same rule_id (same severity + description) means they SHOULD
+        # group as one rule, but the per-result fingerprints MUST differ.
+        assert doc["runs"][0]["results"][0]["ruleId"] == doc["runs"][0]["results"][1]["ruleId"]
+        assert self._fp(doc, 0) != self._fp(doc, 1)
+
+    def test_same_rule_same_file_different_lines_distinct_fingerprints(
+        self, tmp_path: Path
+    ) -> None:
+        findings = [
+            _make_finding(file_path="src/a.py:5", severity="HIGH", description="same bug"),
+            _make_finding(file_path="src/a.py:99", severity="HIGH", description="same bug"),
+        ]
+        doc = findings_to_sarif(findings, tool_version="0.5.0", target_dir=tmp_path)
+        assert self._fp(doc, 0) != self._fp(doc, 1)
+
+    def test_file_level_finding_distinct_from_line_zero(self, tmp_path: Path) -> None:
+        """No-line finding (``path``) must have a distinct fingerprint
+        from a ``path:0`` finding even though both clamp to startLine=1
+        in the region block. Defense-in-depth — runners shouldn't emit
+        ``:0`` but if they do, dedup must still be correct."""
+        findings = [
+            _make_finding(file_path="src/a.py", severity="HIGH", description="bug"),
+            _make_finding(file_path="src/a.py:0", severity="HIGH", description="bug"),
+        ]
+        doc = findings_to_sarif(findings, tool_version="0.5.0", target_dir=tmp_path)
+        assert self._fp(doc, 0) != self._fp(doc, 1)
+
+    def test_identical_findings_share_fingerprint(self, tmp_path: Path) -> None:
+        """Run-to-run stability: re-scanning the SAME finding (same file,
+        same line, same rule) MUST produce the same fingerprint so GHCS
+        recognizes the existing alert instead of opening a duplicate."""
+        f1 = _make_finding(file_path="src/a.py:5", severity="HIGH", description="bug")
+        f2 = _make_finding(file_path="src/a.py:5", severity="HIGH", description="bug")
+        doc = findings_to_sarif([f1, f2], tool_version="0.5.0", target_dir=tmp_path)
+        assert self._fp(doc, 0) == self._fp(doc, 1)
+
+
 class TestSchemaShape:
     """Light structural validation without pulling in a jsonschema dep.
 
@@ -251,17 +312,17 @@ class TestParseFilePathWhitespace:
     def test_embedded_newline_dropped(self) -> None:
         from advisor.sarif import _parse_file_path
 
-        assert _parse_file_path("src/foo.py\n:42") == ("src/foo.py", 42)
+        assert _parse_file_path("src/foo.py\n:42") == ("src/foo.py", 42, None, None)
 
     def test_embedded_tab_dropped(self) -> None:
         from advisor.sarif import _parse_file_path
 
-        assert _parse_file_path("src/foo.py\t:42") == ("src/foo.py", 42)
+        assert _parse_file_path("src/foo.py\t:42") == ("src/foo.py", 42, None, None)
 
     def test_embedded_cr_dropped(self) -> None:
         from advisor.sarif import _parse_file_path
 
-        assert _parse_file_path("src/foo\rpath.py:42") == ("src/foopath.py", 42)
+        assert _parse_file_path("src/foo\rpath.py:42") == ("src/foopath.py", 42, None, None)
 
     def test_embedded_nul_dropped(self) -> None:
         """NUL bytes survive the original whitespace strip and confuse
@@ -269,7 +330,7 @@ class TestParseFilePathWhitespace:
         the first NUL). Drop them up-front."""
         from advisor.sarif import _parse_file_path
 
-        assert _parse_file_path("src\x00/foo.py:42") == ("src/foo.py", 42)
+        assert _parse_file_path("src\x00/foo.py:42") == ("src/foo.py", 42, None, None)
 
 
 class TestShortDescriptionWhitespace:
@@ -435,6 +496,115 @@ class TestControlCharSanitization:
         assert "résumé" in rules[0]["fullDescription"]["text"]
         assert "naïve" in rules[0]["help"]["text"]
         assert "café" in results[0]["message"]["text"]
+
+
+class TestEmptyPathPostParseSkip:
+    """B2 regression: a ``file_path = ":42"`` survives the pre-parse
+    non-empty check (its ``strip()`` is non-empty) but ``_parse_file_path``
+    peels the leading colon and returns an empty path, which then
+    resolves to ``"."`` and emits a SARIF result pointing at %SRCROOT%
+    itself. Skip such results."""
+
+    def test_colon_only_line_skipped(self, tmp_path: Path) -> None:
+        f = _make_finding(file_path=":42")
+        doc = findings_to_sarif([f], tool_version="0.5.0", target_dir=tmp_path)
+        assert doc["runs"][0]["results"] == []
+
+    def test_dot_only_path_skipped(self, tmp_path: Path) -> None:
+        """``"."`` resolves to %SRCROOT% itself — same misleading shape."""
+        f = _make_finding(file_path=".")
+        doc = findings_to_sarif([f], tool_version="0.5.0", target_dir=tmp_path)
+        assert doc["runs"][0]["results"] == []
+
+
+class TestNegativeLineClamped:
+    """B3 regression: a ``file_path="foo.py:-5"`` used to leave ``-5``
+    embedded in the URI as ``%3A-5``. The parser now peels the leading
+    ``-`` as part of the numeric token and the existing startLine clamp
+    handles the negative value."""
+
+    def test_negative_line_clamped_to_one(self, tmp_path: Path) -> None:
+        f = _make_finding(file_path="foo.py:-5")
+        doc = findings_to_sarif([f], tool_version="0.5.0", target_dir=tmp_path)
+        loc = doc["runs"][0]["results"][0]["locations"][0]["physicalLocation"]
+        assert loc["artifactLocation"]["uri"] == "foo.py"
+        assert loc["region"]["startLine"] == 1
+
+
+class TestTargetResolveOnce:
+    """B4 regression: ``target_dir.resolve()`` previously ran once per
+    finding (O(N) syscalls). Now resolved once outside the loop."""
+
+    def test_resolve_called_once_for_batch(self, tmp_path: Path, monkeypatch) -> None:
+        # Wrap Path.resolve to count invocations on our specific target_dir.
+        original_resolve = Path.resolve
+        call_count = {"n": 0}
+
+        def counting_resolve(self: Path, *args, **kwargs) -> Path:
+            if self == tmp_path:
+                call_count["n"] += 1
+            return original_resolve(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "resolve", counting_resolve)
+
+        findings = [_make_finding(file_path=f"src/f{i}.py:1") for i in range(10)]
+        findings_to_sarif(findings, tool_version="0.5.0", target_dir=tmp_path)
+
+        # findings_to_sarif resolves once at loop top + once for the
+        # originalUriBaseIds URI = 2 calls total. The OLD code resolved
+        # once per finding = 11 calls for this batch.
+        assert call_count["n"] <= 2, (
+            f"expected target_dir.resolve() ≤2 times for 10 findings, got {call_count['n']}"
+        )
+
+
+class TestColumnRegionEmitted:
+    """F1: ``_parse_file_path`` extracts trailing ``:col[:end-col]``
+    already; SARIF 2.1.0 ``region`` supports ``startColumn`` /
+    ``endColumn``. Emit them when the runner provided them so GHCS can
+    highlight the precise span instead of the whole line."""
+
+    def test_line_col_endcol_emitted(self, tmp_path: Path) -> None:
+        f = _make_finding(file_path="foo.py:10:5:15")
+        doc = findings_to_sarif([f], tool_version="0.5.0", target_dir=tmp_path)
+        region = doc["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["region"]
+        assert region["startLine"] == 10
+        assert region["startColumn"] == 5
+        assert region["endColumn"] == 15
+
+    def test_line_col_only_no_endcol(self, tmp_path: Path) -> None:
+        f = _make_finding(file_path="foo.py:10:5")
+        doc = findings_to_sarif([f], tool_version="0.5.0", target_dir=tmp_path)
+        region = doc["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["region"]
+        assert region["startLine"] == 10
+        assert region["startColumn"] == 5
+        assert "endColumn" not in region
+
+    def test_line_only_no_column_keys(self, tmp_path: Path) -> None:
+        f = _make_finding(file_path="foo.py:10")
+        doc = findings_to_sarif([f], tool_version="0.5.0", target_dir=tmp_path)
+        region = doc["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["region"]
+        assert region["startLine"] == 10
+        assert "startColumn" not in region
+        assert "endColumn" not in region
+
+
+class TestSeverityTag:
+    """F2: rule ``properties.tags`` exposes the severity bucket so the
+    GHCS UI filter pane can group alerts without parsing custom result
+    fields."""
+
+    def test_high_severity_tag_present(self, tmp_path: Path) -> None:
+        f = _make_finding(severity="HIGH")
+        doc = findings_to_sarif([f], tool_version="0.5.0", target_dir=tmp_path)
+        tags = doc["runs"][0]["tool"]["driver"]["rules"][0]["properties"]["tags"]
+        assert "severity:high" in tags
+
+    def test_critical_severity_tag_present(self, tmp_path: Path) -> None:
+        f = _make_finding(severity="CRITICAL", description="another bug")
+        doc = findings_to_sarif([f], tool_version="0.5.0", target_dir=tmp_path)
+        tags = doc["runs"][0]["tool"]["driver"]["rules"][0]["properties"]["tags"]
+        assert "severity:critical" in tags
 
 
 @settings(deadline=1000, max_examples=50)

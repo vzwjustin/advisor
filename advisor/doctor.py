@@ -143,6 +143,19 @@ def _check_claude_home() -> Check:
             )
         # Fall through to the directory checks below — a within-$HOME
         # symlink to a regular dir is healthy.
+    if claude_dir.is_symlink() and not claude_dir.exists():
+        # Broken symlink (resolved to within-$HOME above, but target is
+        # missing). ``advisor install`` will fail until the target exists
+        # or the symlink is removed.
+        try:
+            target = os.readlink(claude_dir)
+        except OSError as exc:
+            target = f"<unreadable: {exc}>"
+        return Check(
+            "claude-home",
+            "warn",
+            f"{claude_dir} is a broken symlink (target: {target})",
+        )
     if not claude_dir.exists():
         return Check(
             "claude-home",
@@ -202,7 +215,11 @@ def _check_install(
 
 
 def _collect_env_overrides() -> dict[str, str]:
-    """Return env-var overrides currently in effect (only keys set to non-empty values).
+    """Return env-var overrides currently in effect (every key that is set).
+
+    Includes vars set to falsy-but-meaningful values like ``"0"`` or
+    ``"false"`` — doctor reports what the environment contains; it does
+    not interpret the values.
 
     .. warning::
 
@@ -214,7 +231,7 @@ def _collect_env_overrides() -> dict[str, str]:
        instead, so the doctor report and any shared diagnostics stay
        free of sensitive material.
     """
-    return {k: val for k in _KNOWN_ENV_VARS if (val := os.environ.get(k))}
+    return {k: val for k in _KNOWN_ENV_VARS if (val := os.environ.get(k)) is not None}
 
 
 def run_doctor(

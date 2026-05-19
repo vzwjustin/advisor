@@ -729,12 +729,7 @@ def _matches_compiled_pattern(
                 return True
             continue
         # Match against filename only
-        if matcher.filename_re is not None:
-            if matcher.filename_re.match(name):
-                return True
-        elif fnmatch.fnmatch(name, pattern):
-            # Fallback for patterns that were too complex to pre-compile
-            # into filename_re (e.g. they already hit slash_re or dir_re paths)
+        if matcher.filename_re is not None and matcher.filename_re.match(name):
             return True
         # Match against full path — but only for patterns that contain a path
         # separator. fnmatch's ``*`` matches ``/``, so applying it to path_str

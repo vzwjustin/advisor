@@ -23,6 +23,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import unicodedata
 from typing import IO
 
 _RESET = "\033[0m"
@@ -36,6 +37,18 @@ _CODES = {
     "dim": "\033[2m",
     "bold": "\033[1m",
 }
+
+
+def _disp_width(s: str) -> int:
+    """Approximate terminal display width of ``s``.
+
+    Counts East Asian Wide/Fullwidth characters as 2 columns and everything
+    else as 1. Used by box helpers so CJK/wide glyphs don't desync the
+    border from the centered text. Not a full ``wcwidth`` — emoji whose
+    East-Asian-Width category is ``N`` (many BMP-supplementary emoji) still
+    count as 1, which is a known limitation.
+    """
+    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in s)
 
 
 def _compute_supports_color() -> bool:
@@ -164,9 +177,15 @@ def banner(text: str, width: int = 50, stream: IO[str] | None = None) -> str:
     if not supports_color(stream):
         return f"== {text} =="
     # +4 accounts for the two-space pad on each side of the centered text.
-    effective_width = max(width, len(text) + 4)
+    # Use display width (CJK / wide chars count as 2) so the border encloses
+    # the text correctly regardless of len() vs visible-column mismatch.
+    text_w = _disp_width(text)
+    effective_width = max(width, text_w + 4)
     line = "━" * effective_width
-    centered = text.center(effective_width - 4)
+    inner = effective_width - 4
+    left = (inner - text_w) // 2
+    right = inner - text_w - left
+    centered = " " * left + text + " " * right
     return (
         f"{paint('┏', 'cyan')}{paint(line, 'cyan')}{paint('┓', 'cyan')}\n"
         f"{paint('┃', 'cyan')}  {paint(centered, 'bold')}  {paint('┃', 'cyan')}\n"
@@ -287,6 +306,13 @@ _PRIORITY_RE = re.compile(r"\*\*P([1-5])\*\*" r"|(?<![A-Za-z0-9*\x1b])P([1-5])(?
 # colorized text (e.g. a colored header body). Re-painting them would
 # emit an inner ``\x1b[0m`` that prematurely closes the outer style.
 _ANSI_SGR_RE = re.compile(r"\x1b\[[\d;]*m")
+# Broader than ``_ANSI_SGR_RE``: matches any CSI (``ESC [ ... <letter>``)
+# plus OSC (``ESC ] ... BEL`` or ``ESC ] ... ESC \``). Used by
+# ``strip_ansi`` so untrusted finding text can't smuggle clipboard-write
+# OSC sequences or cursor-control CSIs through the renderer. Must NOT be
+# used for ``_inside_ansi_span`` — that one specifically needs to count
+# SGR opens/closes that this module emits via ``paint()``.
+_ANSI_STRIP_RE = re.compile(r"\x1b\[[\d;?]*[a-zA-Z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
 # Matches any SGR whose first parameter is `0` — both the canonical
 # ``\x1b[0m`` reset and combined sequences like ``\x1b[0;1m`` (reset
 # then bold). Used by `_inside_ansi_span` to count resets correctly.
@@ -311,6 +337,18 @@ _HEADER_STYLES: dict[int, tuple[str, ...]] = {
 }
 
 
+def strip_ansi(text: str) -> str:
+    """Remove ANSI CSI + OSC escape sequences from ``text``.
+
+    Broader than just SGR colors — also drops cursor-control CSIs
+    (``\\x1b[2J``, ``\\x1b[6n``) and OSC sequences (``\\x1b]0;...\\x07``,
+    ``\\x1b]52;c;<base64>\\x07``). Use for any input that may originate
+    from untrusted source (target-repo file content, third-party output)
+    before printing or re-styling.
+    """
+    return _ANSI_STRIP_RE.sub("", text)
+
+
 def colorize_markdown(text: str, stream: IO[str] | None = None) -> str:
     """Colorize markdown headers, priority badges, and `paths`.
 
@@ -318,17 +356,18 @@ def colorize_markdown(text: str, stream: IO[str] | None = None) -> str:
     Markdown markers (``**``, ``##``, backticks) are preserved so the output
     still works as a paste-into-Claude artifact even with colors on.
 
-    Strips any pre-existing ANSI SGR escape sequences from the input before
-    colorizing. A finding description sourced from a target-repo file (e.g.
-    a literal ``\\x1b[`` in source) would otherwise pass through unchanged
-    and inject terminal escape sequences. The local colorizer adds its own
-    span markers afterward, so dropping inbound escapes is safe.
+    Strips any pre-existing ANSI CSI/OSC escape sequences from the input
+    before colorizing. A finding description sourced from a target-repo
+    file (e.g. a literal ``\\x1b[`` or ``\\x1b]52;c;…\\x07`` in source)
+    would otherwise pass through unchanged and inject terminal escape
+    sequences. The local colorizer adds its own span markers afterward,
+    so dropping inbound escapes is safe.
     """
     if not supports_color(stream):
         # Even on no-color terminals, strip inbound ANSI so a finding
         # description doesn't smuggle escapes into a "plain" output.
-        return _ANSI_SGR_RE.sub("", text)
-    text = _ANSI_SGR_RE.sub("", text)
+        return strip_ansi(text)
+    text = strip_ansi(text)
 
     def _inside_ansi_span(full: str, pos: int) -> bool:
         """True when ``pos`` falls inside an unclosed SGR span.
@@ -372,6 +411,12 @@ def colorize_markdown(text: str, stream: IO[str] | None = None) -> str:
         return hashes + ws + paint(body, *styles, stream=stream)
 
     def _color_path(m: re.Match[str]) -> str:
+        # Same guard as ``_color_priority``: a backtick path inside an
+        # already-painted header body would inject ``\x1b[32m...\x1b[0m``
+        # whose inner reset prematurely closes the outer header span.
+        # Leave the backtick as-is when the match sits inside an open SGR.
+        if _inside_ansi_span(m.string, m.start()):
+            return m.group(0)
         return "`" + paint(m.group(1), "green", stream=stream) + "`"
 
     def _color_blockquote(m: re.Match[str]) -> str:
