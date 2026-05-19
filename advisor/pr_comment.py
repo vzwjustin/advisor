@@ -107,7 +107,7 @@ def _cap_evidence(evidence: str) -> str:
     # byte for the ellipsis and overshot the cap by up to 2 bytes — a
     # contract violation against the docstring promise even if upstream
     # body-limit accounting absorbs it.
-    ellipsis_bytes = len("…".encode("utf-8"))
+    ellipsis_bytes = len("…".encode())
     return (
         encoded[: _EVIDENCE_BYTE_CAP - ellipsis_bytes]
         .decode("utf-8", errors="ignore")
