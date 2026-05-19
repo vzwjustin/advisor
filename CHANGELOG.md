@@ -14,8 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--format pretty` overrides a stray `--json`. Precedence now lives in one
   shared `_resolve_json_output` helper used by both commands.
 - `advisor history --stats` — aggregate view (confirm rate, status/severity
-  breakdown, run count, most-flagged files) over the full history window.
-  Composes with `--json`; ignores `--limit` (which only caps the recent list).
+  breakdown, run count, most-flagged files) over the 500 most recent findings
+  (the same window the ranker uses). Composes with `--json`; ignores `--limit`
+  (which only caps the recent-list view).
 
 ### Changed
 

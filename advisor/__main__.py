@@ -1920,8 +1920,9 @@ def cmd_history(args: argparse.Namespace) -> int:
     """Show recent CONFIRMED findings from ``.advisor/history.jsonl``."""
     target = Path(args.target)
     if getattr(args, "stats", False):
-        # --stats aggregates a fuller window than --limit (which only caps
-        # the recent-list view), so it loads via load_recent_findings.
+        # --stats aggregates the 500 most recent findings (the same window
+        # the ranker uses via load_recent_findings) rather than the --limit
+        # recent-list view, so stats describe the data the ranker acts on.
         all_entries = load_recent_findings(history_path(target), limit=500)
         summary = summarize(all_entries)
         if getattr(args, "json", False):
@@ -3197,7 +3198,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Show aggregate stats (confirm rate, status/severity breakdown, "
             "most-flagged files) instead of the recent-entry list. Aggregates "
-            "the full window — ignores --limit. Composes with --json."
+            "up to the 500 most recent findings (the same window the ranker "
+            "uses) — ignores --limit. Composes with --json."
         ),
     )
     p_history.add_argument(

@@ -191,8 +191,18 @@ class TestHistoryStatsCLI:
         )
         out = self._run(capsys, ["history", str(tmp_path), "--stats", "--json", "--limit", "1"])
         # --limit caps the recent-list view only; --stats aggregates the
-        # full window, so all 30 entries are counted despite --limit 1.
+        # 500-entry window, so all 30 entries are counted despite --limit 1.
         assert json.loads(out)["stats"]["total"] == 30
+
+    def test_stats_caps_at_500_most_recent(self, tmp_path: Path, capsys) -> None:
+        # Locks the documented contract: --stats aggregates up to the 500
+        # most recent findings (the ranker's window), not the entire file.
+        append_entries(
+            tmp_path,
+            [_entry(file_path=f"f{i}.py", status="CONFIRMED") for i in range(510)],
+        )
+        out = self._run(capsys, ["history", str(tmp_path), "--stats", "--json"])
+        assert json.loads(out)["stats"]["total"] == 500
 
     def test_stats_empty_history_friendly_message(self, tmp_path: Path, capsys) -> None:
         out = self._run(capsys, ["history", str(tmp_path), "--stats"])
