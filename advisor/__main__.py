@@ -2667,7 +2667,14 @@ def cmd_audit(args: argparse.Namespace) -> int:
 
     fail_on_rc = _fail_on_findings(getattr(args, "fail_on", None), report.findings_in_batch)
 
-    if getattr(args, "json", False):
+    # ``--format`` is the explicit selector; the legacy ``--json`` flag is
+    # honored only when ``--format`` is unset. ``--format pretty`` therefore
+    # overrides a stray ``--json``, and ``--format json`` works even without
+    # ``--json`` (previously ``json``/``pretty`` were accepted by argparse
+    # but silently ignored — only ``pr-comment`` was wired up).
+    as_json = fmt == "json" or (fmt != "pretty" and getattr(args, "json", False))
+
+    if as_json:
         payload: dict[str, object] = {
             "schema_version": JSON_SCHEMA_VERSION,
             **audit_to_dict(report),

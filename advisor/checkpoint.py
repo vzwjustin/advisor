@@ -191,13 +191,11 @@ def load_checkpoint(target: str | Path, run_id: str) -> Checkpoint:
     raw_batches = obj.get("batches", [])
     if not isinstance(raw_tasks, list):
         raise ValueError(
-            f"checkpoint {path}: 'tasks' must be a JSON array, "
-            f"got {type(raw_tasks).__name__}"
+            f"checkpoint {path}: 'tasks' must be a JSON array, got {type(raw_tasks).__name__}"
         )
     if not isinstance(raw_batches, list):
         raise ValueError(
-            f"checkpoint {path}: 'batches' must be a JSON array, "
-            f"got {type(raw_batches).__name__}"
+            f"checkpoint {path}: 'batches' must be a JSON array, got {type(raw_batches).__name__}"
         )
     try:
         return Checkpoint(

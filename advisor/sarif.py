@@ -157,11 +157,7 @@ def _parse_file_path(raw: str) -> tuple[str, int | None]:
     # ``:label`` (e.g. ``host:port-style:path``).
     all_parts = body.split(":")
     trailing_non_numeric: list[str] = []
-    while (
-        len(all_parts) > 2
-        and not all_parts[-1].isdigit()
-        and all_parts[-2].isdigit()
-    ):
+    while len(all_parts) > 2 and not all_parts[-1].isdigit() and all_parts[-2].isdigit():
         trailing_non_numeric.append(all_parts.pop())
     trailing_numeric: list[str] = []
     while len(all_parts) > 1 and all_parts[-1].isdigit():
@@ -306,10 +302,19 @@ def findings_to_sarif(
                 # GitHub Code Scanning uses ``partialFingerprints`` to
                 # deduplicate the "same finding" across runs. Without it,
                 # every re-scan creates new alerts for findings that
-                # already exist, drowning users in churn. The synthesized
-                # rule_id is already a stable per-(file, severity, desc)
-                # hash, so it's a reasonable fingerprint value.
-                "partialFingerprints": {"primaryLocationLineHash": rule_id},
+                # already exist, drowning users in churn. The fingerprint
+                # must also stay *distinct* per result location: ``rule_id``
+                # alone is shared by every finding with the same severity +
+                # description prefix, so two genuinely different findings in
+                # different files (or different lines of one file) would
+                # collapse into a single Code Scanning alert. Bind the
+                # fingerprint to (rule_id, relative path, start line) so it
+                # is stable across re-scans yet unique per location.
+                "partialFingerprints": {
+                    "primaryLocationLineHash": hashlib.sha1(
+                        "\0".join((rule_id, rel, str(region.get("startLine", "")))).encode("utf-8")
+                    ).hexdigest(),
+                },
                 "properties": {
                     "severity": _strip_controls(f.severity),
                     "evidence": _strip_controls(f.evidence, keep_block_whitespace=True),
