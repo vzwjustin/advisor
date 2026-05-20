@@ -106,8 +106,11 @@ def _lock_exclusive(fh: IO[str]) -> None:
     platform that exposes neither (or where the call fails — e.g. NFS
     without lock support) silently proceeds without a lock. Locking is
     a best-effort nicety, not a correctness gate: on local filesystems
-    Python's buffered ``.write`` flushes short records atomically, so
-    the unlocked path is fine.
+    the kernel guarantees a single ``write()`` syscall under PIPE_BUF
+    (~4096 bytes on Linux) appends atomically to an ``O_APPEND`` file,
+    so the unlocked path is fine for small single-entry payloads. (This
+    is a kernel guarantee, not a Python-buffering one — Python's buffered
+    ``.write`` may split a large payload across multiple syscalls.)
 
     On lock-unsupported filesystems (NFS-without-lockd is the canonical
     case), a multi-finding batch payload can exceed PIPE_BUF and split

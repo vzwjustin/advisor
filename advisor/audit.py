@@ -85,8 +85,10 @@ _PROTOCOL_VIOLATION_RE = re.compile(
     # a nested list or quoted block. The sentinel is structurally a
     # top-of-line marker per the advisor prompt; tolerating an indent
     # keeps the match aligned with how the prompt actually renders it.
+    # ``IGNORECASE`` for parity with ``_CONTEXT_PRESSURE_RE`` so a future
+    # prompt variant emitting mixed-case still surfaces in audit counts.
     r"^\s*PROTOCOL_VIOLATION\s*:\s*[^\n]*",
-    re.MULTILINE,
+    re.MULTILINE | re.IGNORECASE,
 )
 
 _HANDOFF_RE = re.compile(r"##\s+Handoff\s+from\s+runner-\d+")

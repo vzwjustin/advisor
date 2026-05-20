@@ -129,7 +129,7 @@ def _matches_glob(file_path: str, pattern: str) -> bool:
     return fnmatch.fnmatch(p, pattern)
 
 
-_DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_DATE_ONLY_RE = re.compile(r"\A\d{4}-\d{2}-\d{2}\Z")
 
 
 def _parse_until(raw: str | None, *, context: str) -> tuple[str | None, bool]:

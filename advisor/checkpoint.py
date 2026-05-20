@@ -65,6 +65,11 @@ def _dir(target: str | Path) -> Path:
 def _validate_run_id(run_id: str) -> None:
     if not _RUN_ID_RE.fullmatch(run_id):
         raise ValueError("invalid run_id: use only letters, digits, underscore, dot, and hyphen")
+    # Bound length so a pathologically long ``--resume RUN_ID`` surfaces as a
+    # clean ``ValueError`` here rather than ``OSError: [Errno 36] File name
+    # too long`` when ``checkpoint_path`` builds ``run-<run_id>.json``.
+    if len(run_id) > 128:
+        raise ValueError("invalid run_id: must be 128 characters or fewer")
 
 
 def checkpoint_path(target: str | Path, run_id: str) -> Path:

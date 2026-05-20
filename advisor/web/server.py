@@ -542,7 +542,17 @@ def find_free_port(host: str = DEFAULT_HOST) -> int:
 
     Only used by tests and by the CLI when ``--port 0`` is requested.
     """
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    # Resolve the address family from ``host`` so an IPv6 literal (``::1``)
+    # picks an IPv6 free port; previously hardcoded ``AF_INET`` always
+    # returned an IPv4 port even for IPv6 hosts.
+    family = socket.AF_INET
+    try:
+        infos = socket.getaddrinfo(host, 0, type=socket.SOCK_STREAM)
+        if infos:
+            family = infos[0][0]
+    except OSError:
+        pass
+    with socket.socket(family, socket.SOCK_STREAM) as sock:
         sock.bind((host, 0))
         port: int = sock.getsockname()[1]
         return port

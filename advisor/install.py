@@ -8,6 +8,7 @@ testability; the CLI wrapper handles filesystem IO.
 from __future__ import annotations
 
 import enum
+import math
 import os
 import re
 import sys
@@ -239,6 +240,12 @@ def check_for_update_cached(
             cached_latest = latest_val
         if isinstance(at_val, (int, float)):
             cached_at = float(at_val)
+            # Force a re-fetch on non-finite timestamps; ``json.loads`` can
+            # parse ``1e500`` (and friends) into ``inf``/``-inf``, which
+            # would otherwise make ``now - cached_at`` evaluate as eternally
+            # fresh (``-inf < ttl``) or eternally stale (``inf < ttl``).
+            if not math.isfinite(cached_at):
+                cached_at = 0.0
 
     latest: str | None
     if cached_latest is not None and (now - cached_at) < ttl_seconds:
@@ -531,6 +538,12 @@ def install(path: Path | None = None, body: str = NUDGE_BODY) -> InstallResult:
     # ``path=`` is respected as-is — tests and power-users need to target
     # arbitrary files.
     if path is None:
+        # Reject when the leaf file is itself a symlink (an attacker dropping
+        # ``~/.claude/CLAUDE.md`` → ``~/.ssh/authorized_keys``). Symlinked
+        # *parent* dirs (dotfiles managers) are still allowed: ``is_symlink``
+        # checks the final path component only.
+        if target.is_symlink():
+            raise OSError(f"refusing to install nudge through symlink: {target}")
         resolved = target.resolve()
         if not resolved.is_relative_to(Path.home().resolve()):
             raise OSError(f"refusing to install nudge outside $HOME: {resolved}")
@@ -584,6 +597,8 @@ def ensure_nudge(
         # path. Without this, ``install(path=target)`` below passes an
         # explicit path that skips ``install``'s own resolve branch and
         # trips the ``reject_symlink=True`` guard on every CLI run.
+        if target.is_symlink():
+            raise OSError(f"refusing to install nudge through symlink: {target}")
         target = target.resolve()
     if not should_auto_nudge(env):
         return InstallResult(path=target, action=InstallAction.UNCHANGED.value)
@@ -718,6 +733,8 @@ def install_skill(
     # where the symlink-rejection check resolved one path but the write
     # then operated on a different one.
     if path is None:
+        if target.is_symlink():
+            raise OSError(f"refusing to install skill through symlink: {target}")
         resolved = target.resolve()
         if not resolved.is_relative_to(Path.home().resolve()):
             raise OSError(f"refusing to install skill outside $HOME: {resolved}")
@@ -770,6 +787,8 @@ def install_update_skill(
     """
     target = path or default_update_skill_path()
     if path is None:
+        if target.is_symlink():
+            raise OSError(f"refusing to install skill through symlink: {target}")
         resolved = target.resolve()
         if not resolved.is_relative_to(Path.home().resolve()):
             raise OSError(f"refusing to install skill outside $HOME: {resolved}")
