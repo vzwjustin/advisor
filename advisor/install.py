@@ -577,6 +577,14 @@ def ensure_nudge(
     - Swallows filesystem and decode errors so CLI commands never fail here.
     """
     target = path or default_claude_md()
+    if path is None:
+        # Mirror ``install(path=None)``'s resolve step so the dotfiles
+        # case (``~/.claude/CLAUDE.md`` → ``~/dotfiles/claude/CLAUDE.md``)
+        # threads through to ``atomic_write_text`` as the resolved real
+        # path. Without this, ``install(path=target)`` below passes an
+        # explicit path that skips ``install``'s own resolve branch and
+        # trips the ``reject_symlink=True`` guard on every CLI run.
+        target = target.resolve()
     if not should_auto_nudge(env):
         return InstallResult(path=target, action=InstallAction.UNCHANGED.value)
 

@@ -967,11 +967,27 @@ def _batches_from_checkpoint(cp: Checkpoint) -> list[FocusBatch]:
                 stacklevel=2,
             )
             continue
+        raw_complexity = str(b.get("complexity", ""))
+        # Allowlist match against the FocusBatch.complexity contract
+        # ("low" | "medium" | "high"). A stale or corrupted checkpoint
+        # otherwise feeds the raw string straight into runner spawn
+        # prompts (``runner_prompts.py:95``, ``:441``), where a
+        # multi-line value can poison the prompt header.
+        if raw_complexity not in ("low", "medium", "high"):
+            warnings.warn(
+                f"checkpoint batch {batch_id_val}: unknown complexity "
+                f"{raw_complexity!r}; defaulting to 'medium'",
+                UserWarning,
+                stacklevel=2,
+            )
+            batch_complexity = "medium"
+        else:
+            batch_complexity = raw_complexity
         out.append(
             FocusBatch(
                 batch_id=batch_id_val,
                 tasks=batch_tasks,
-                complexity=str(b.get("complexity", "")),
+                complexity=batch_complexity,
             )
         )
     return out
@@ -2262,7 +2278,7 @@ def _load_findings_from_input(
     Returns (findings, error_exit_code). On error, returns ``([], code)``.
     Accepts both the raw parser format (markdown dump) and a JSON array.
     """
-    from .verify import Finding, parse_findings_from_text
+    from .verify import Finding, _canonical_severity, parse_findings_from_text
 
     try:
         if source is None:
@@ -2355,7 +2371,9 @@ def _load_findings_from_input(
                     findings.append(
                         Finding(
                             file_path=str(f["file_path"]),
-                            severity=str(f["severity"]),
+                            severity=_canonical_severity(
+                                str(f["severity"]), context="<json-import>"
+                            ),
                             description=str(f["description"]),
                             evidence=str(f.get("evidence", "")),
                             fix=str(f.get("fix", "")),

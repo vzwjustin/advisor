@@ -96,6 +96,45 @@ class TestLoadFindingsFromInput:
         assert findings[0].rule_id is None
         assert findings[1].rule_id == "custom/rule"
 
+    def test_json_severity_is_canonicalized(self, tmp_path):
+        """JSON-import path must run severity through ``_canonical_severity``.
+
+        ``verify.py`` docstring promises three Finding-construction sites see
+        the same canonical form; the JSON branch here was silently passing
+        raw strings, so a mixed-case ``"Critical"`` became a distinct
+        baseline / SARIF / PR-render value from the runner-emitted
+        ``"CRITICAL"``. This pins the invariant.
+        """
+        import json
+
+        from advisor.__main__ import _load_findings_from_input
+
+        p = tmp_path / "mixed-case-severity.json"
+        p.write_text(
+            json.dumps(
+                {
+                    "findings_in_batch": [
+                        {
+                            "file_path": "a.py",
+                            "severity": "Critical",
+                            "description": "d",
+                        },
+                        {
+                            "file_path": "b.py",
+                            "severity": "INVENTED",
+                            "description": "d",
+                        },
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        findings, rc = _load_findings_from_input(p)
+        assert rc is None
+        assert findings[0].severity == "CRITICAL"
+        assert findings[1].severity == "UNKNOWN"
+
     def test_bom_prefixed_json_is_parsed_as_json(self, tmp_path):
         """Pass-Q regression: ``lstrip("\\xef\\xbb\\xbf")`` stripped three
         Latin-1 bytes, not the U+FEFF codepoint that ``read_text`` emits.
