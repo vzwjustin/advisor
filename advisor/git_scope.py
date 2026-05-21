@@ -69,7 +69,7 @@ def _run_git(cwd: Path, *args: str) -> list[str]:
     # POSIX-only; on Windows ``start_new_session`` is silently ignored and
     # ``os.killpg`` doesn't exist, so we skip the group kill there.
     try:
-        proc = subprocess.Popen(  # noqa: S603 — args are a fixed list, never shell-parsed
+        proc = subprocess.Popen(
             ["git", *args],
             cwd=str(cwd),
             stdout=subprocess.PIPE,

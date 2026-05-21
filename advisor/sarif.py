@@ -377,7 +377,7 @@ def findings_to_sarif(
                 "partialFingerprints": {
                     "primaryLocationLineHash": hashlib.sha1(
                         f"{rule_id}|{_url_quote(rel, safe='/')}|"
-                        f"{'?' if line is None else line}".encode("utf-8")
+                        f"{'?' if line is None else line}".encode()
                     ).hexdigest()[:16]
                 },
                 "properties": {

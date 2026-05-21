@@ -1688,7 +1688,7 @@ class TestCmdAuditSuppressionQuietJson:
         suppr_dir = tmp_path / ".advisor"
         suppr_dir.mkdir(exist_ok=True)
         (suppr_dir / "suppressions.jsonl").write_text(
-            '{"rule_id": "%s", "file": "auth.py", "reason": "known-test"}\n' % rule_id,
+            f'{{"rule_id": "{rule_id}", "file": "auth.py", "reason": "known-test"}}\n',
             encoding="utf-8",
         )
         return transcript_path

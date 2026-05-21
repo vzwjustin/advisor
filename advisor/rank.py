@@ -716,7 +716,6 @@ def _matches_compiled_pattern(
     path_str = path.as_posix()
     name = path.name
     for matcher in matchers:
-        pattern = matcher.pattern
         # Pattern ending with / matches directories only
         if matcher.dir_re is not None:
             if any(matcher.dir_re.match(part) for part in path.parts):
