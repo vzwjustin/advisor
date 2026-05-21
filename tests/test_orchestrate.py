@@ -696,6 +696,8 @@ class TestIsKnownModel:
 
         assert is_known_model("claude-sonnet-4-5-20250929") is True
         assert is_known_model("claude-opus-4-20250514") is True
+        assert is_known_model("Codex-opus-4-7") is True
+        assert is_known_model("Codex-sonnet-4-6") is True
 
     def test_unknown_rejected(self):
         from advisor.orchestrate import is_known_model

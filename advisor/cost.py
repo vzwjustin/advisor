@@ -237,13 +237,11 @@ def estimate_cost(
         for label, cents in (("input", in_c), ("output", out_c)):
             if isinstance(cents, bool) or not isinstance(cents, int):
                 raise ValueError(
-                    f"pricing= entry for {fam!r} {label} cents must be an integer "
-                    f"(got {cents!r})"
+                    f"pricing= entry for {fam!r} {label} cents must be an integer (got {cents!r})"
                 )
             if cents < 0:
                 raise ValueError(
-                    f"pricing= entry for {fam!r} {label} cents must be non-negative "
-                    f"(got {cents})"
+                    f"pricing= entry for {fam!r} {label} cents must be non-negative (got {cents})"
                 )
     # Reject negative caps explicitly. The CLI argparse and
     # ``default_team_config`` both floor at >=1 before reaching here, so

@@ -67,6 +67,19 @@ class TestRankFiles:
         with pytest.raises(AttributeError):
             rf.priority = 1  # type: ignore
 
+    def test_test_fixtures_do_not_outrank_source(self):
+        files = ["tests/test_auth.py", "src/auth.py"]
+        content = {
+            "tests/test_auth.py": "password = 'fixture'\ntoken = 'fixture'\ndef test_login(): pass",
+            "src/auth.py": "def login(password): return issue_token(password)",
+        }
+        ranked = rank_files(files, read_fn=lambda p: content[p])
+
+        by_path = {r.path: r for r in ranked}
+        assert by_path["src/auth.py"].priority == 5
+        assert by_path["tests/test_auth.py"].priority == 1
+        assert by_path["tests/test_auth.py"].reasons == ("test file",)
+
 
 class TestRankToPrompt:
     def test_formats_markdown(self):

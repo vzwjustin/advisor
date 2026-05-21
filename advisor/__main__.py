@@ -89,7 +89,7 @@ from .orchestrate import (
     default_team_config,
     render_pipeline,
 )
-from .orchestrate.config import POOL_SIZE_CEILING
+from .orchestrate.config import DEFAULT_ADVISOR_MODEL, DEFAULT_RUNNER_MODEL, POOL_SIZE_CEILING
 from .rank import load_advisorignore, rank_files
 from .sarif import findings_to_sarif
 
@@ -382,12 +382,12 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--context", default="", help="Extra goal context")
     parser.add_argument(
         "--advisor-model",
-        default="claude-opus-4-7",
+        default=DEFAULT_ADVISOR_MODEL,
         help="Model for the advisor agent (default: %(default)s)",
     )
     parser.add_argument(
         "--runner-model",
-        default="claude-sonnet-4-6",
+        default=DEFAULT_RUNNER_MODEL,
         help="Model for the runner pool agents (default: %(default)s)",
     )
     parser.add_argument(
@@ -454,7 +454,9 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
     print(_style.colorize_markdown(text))
     if not getattr(args, "quiet", False):
         print()
-        print(_style.cta(f"/advisor {args.target}", "run the live pipeline in Claude Code"))
+        print(
+            _style.cta(f"/advisor {args.target}", "run the live pipeline in Claude Code or Codex")
+        )
     return 0
 
 
@@ -691,9 +693,7 @@ def _resolve_plan_files(
         # not ``target``), so without this an ``advisor plan ./subdir
         # --since main`` would silently widen to the whole repo.
         target_resolved = target.resolve()
-        files = [
-            p for p in files if Path(p).resolve().is_relative_to(target_resolved)
-        ]
+        files = [p for p in files if Path(p).resolve().is_relative_to(target_resolved)]
         return files, None
     return _safe_rglob(target, args.file_types)
 
@@ -1207,7 +1207,7 @@ def _emit_plan(
             )
 
     print()
-    print(_style.cta(f"/advisor {target}", "run the live pipeline in Claude Code"))
+    print(_style.cta(f"/advisor {target}", "run the live pipeline in Claude Code or Codex"))
     if not quiet:
         # The browser dashboard is invisible to users who don't read the
         # README — add an inline pointer so they discover it after their
@@ -1235,7 +1235,11 @@ def cmd_prompt(args: argparse.Namespace) -> int:
     show_frame = sys.stdout.isatty() and not quiet and not as_json
     if args.step == "advisor":
         if show_frame:
-            print(_style.dim(f"# advisor prompt — paste into Claude Code (target: {args.target})"))
+            print(
+                _style.dim(
+                    f"# advisor prompt — paste into Claude Code or Codex (target: {args.target})"
+                )
+            )
             print()
         # Include recent history if available — gives the advisor longitudinal
         # awareness of past findings. Disabled via --no-history.
@@ -1268,7 +1272,7 @@ def cmd_prompt(args: argparse.Namespace) -> int:
                 ),
                 file=sys.stderr,
             )
-            print(_style.dim(f"# runner-{runner_id} prompt — paste into Claude Code"))
+            print(_style.dim(f"# runner-{runner_id} prompt — paste into Claude Code or Codex"))
             print()
         text = build_runner_pool_prompt(runner_id, config)
     else:  # verify
@@ -1304,7 +1308,7 @@ def cmd_prompt(args: argparse.Namespace) -> int:
     print(text)
     if show_frame:
         print()
-        print(_style.cta("next", "paste into Claude Code"))
+        print(_style.cta("next", "paste into Claude Code or Codex"))
     return 0
 
 
@@ -1398,7 +1402,10 @@ def cmd_status(args: argparse.Namespace) -> int:
     skill_target = Path(args.skill_path) if args.skill_path else None
     s = get_status(nudge_path=nudge_target, skill_path=skill_target)
     installed = get_installed_skill_version(path=skill_target)
-    healthy = s.nudge.present and s.nudge.current and s.skill.present and s.skill.current
+    update_ok = s.update_skill is None or (s.update_skill.present and s.update_skill.current)
+    healthy = (
+        s.nudge.present and s.nudge.current and s.skill.present and s.skill.current and update_ok
+    )
 
     if getattr(args, "json", False):
         print(json.dumps(_status_to_dict(s, _get_version(), installed), indent=2))
@@ -1561,9 +1568,9 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     )
 
 
-_PROTOCOL_TEXT = """# Advisor team lifecycle protocol
+_PROTOCOL_TEXT = f"""# Advisor team lifecycle protocol
 
-Strict sequence for any Claude Code session using the /advisor skill.
+Strict sequence for any Claude Code or Codex session using the /advisor skill.
 Deviating (e.g. shutting down with broadcast `"*"`, forgetting TeamDelete,
 or spawning runners before the advisor) breaks the pipeline.
 
@@ -1571,14 +1578,14 @@ or spawning runners before the advisor) breaks the pipeline.
 
 2. Spawn advisor FIRST (no runners yet):
    Agent(name="advisor", description="Investigate, rank, and dispatch runners",
-         model="claude-opus-4-7", subagent_type="advisor-executor",
+         model="{DEFAULT_ADVISOR_MODEL}", subagent_type="advisor-executor",
          team_name="review", prompt=<build_advisor_prompt(config)>)
 
 3. Advisor does Glob+Grep discovery, ranks P1–P5, decides runner pool size,
    THEN sends a dispatch plan with a per-runner prompt for each runner.
    Spawn the pool using those Opus-authored prompts verbatim:
    Agent(name="runner-<i>", description="Pool runner <i> — reads batch from initial prompt",
-         model="claude-sonnet-4-6", subagent_type="code-review",
+         model="{DEFAULT_RUNNER_MODEL}", subagent_type="code-review",
          team_name="review", run_in_background=true,
          prompt=<verbatim text from Opus's "### runner-i / #### Prompt" block>)
 
@@ -1593,15 +1600,15 @@ or spawning runners before the advisor) breaks the pipeline.
 
 5. Shut down teammates INDIVIDUALLY (broadcast "*" with structured messages
    fails silently):
-     SendMessage({"to": "advisor",  "message": {"type": "shutdown_request"}})
-     SendMessage({"to": "runner-1", "message": {"type": "shutdown_request"}})
+     SendMessage({{"to": "advisor",  "message": {{"type": "shutdown_request"}}}})
+     SendMessage({{"to": "runner-1", "message": {{"type": "shutdown_request"}}}})
      ...
-     SendMessage({"to": "runner-N", "message": {"type": "shutdown_request"}})
+     SendMessage({{"to": "runner-N", "message": {{"type": "shutdown_request"}}}})
 
 6. TeamDelete()
 
 Names and models shown here are the defaults (team "review", models
-"claude-opus-4-7" / "claude-sonnet-4-6"). Override them via `--team`, `--advisor-model`,
+"{DEFAULT_ADVISOR_MODEL}" / "{DEFAULT_RUNNER_MODEL}"). Override them via `--team`, `--advisor-model`,
 `--runner-model` on the CLI; `advisor pipeline <dir>` renders the
 concrete call sites for a given config.
 """
@@ -1769,20 +1776,12 @@ def cmd_update(args: argparse.Namespace) -> int:
             # or behind PyPI but missing changelog (GitHub raw 504 / rate limit).
             cur_t = _semver_tuple(current)
             lat_t = _semver_tuple(latest) if latest is not None else None
-            ahead = (
-                latest is not None
-                and cur_t is not None
-                and lat_t is not None
-                and cur_t > lat_t
-            )
+            ahead = latest is not None and cur_t is not None and lat_t is not None and cur_t > lat_t
             # If PyPI shows a strictly-newer version but remote changelog
             # failed, don't refuse the upgrade — fall through with a degraded
             # preview so the user can still upgrade through a GitHub outage.
             pypi_newer = (
-                latest is not None
-                and cur_t is not None
-                and lat_t is not None
-                and lat_t > cur_t
+                latest is not None and cur_t is not None and lat_t is not None and lat_t > cur_t
             )
             if pypi_newer:
                 if not quiet:
@@ -2843,6 +2842,8 @@ def cmd_audit(args: argparse.Namespace) -> int:
             return rc
 
     fmt = getattr(args, "format", None)
+    if fmt == "json":
+        args.json = True
     if fmt == "pr-comment":
         from .pr_comment import format_pr_comment
 
@@ -2989,8 +2990,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_plan.add_argument(
         "--staged",
         action="store_true",
-        help="Scope to files currently staged for commit "
-        "(intersected with target dir)",
+        help="Scope to files currently staged for commit (intersected with target dir)",
     )
     p_plan.add_argument(
         "--branch",

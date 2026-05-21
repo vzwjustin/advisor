@@ -156,6 +156,7 @@ def _parse_file_path(
     if len(stripped) >= 2 and stripped[1] == ":" and stripped[0].isalpha():
         drive_prefix = stripped[:2]
         body = stripped[2:]
+
     # Scan from the right: peel off trailing non-numeric column-label
     # segments first, THEN trailing numeric segments. Linter / pytest-style
     # runners emit ``src/foo.py:42:Error`` or ``src/foo.py:42:ColLabel:Detail``
@@ -179,11 +180,7 @@ def _parse_file_path(
 
     all_parts = body.split(":")
     trailing_non_numeric: list[str] = []
-    while (
-        len(all_parts) > 2
-        and not _is_int_token(all_parts[-1])
-        and _is_int_token(all_parts[-2])
-    ):
+    while len(all_parts) > 2 and not _is_int_token(all_parts[-1]) and _is_int_token(all_parts[-2]):
         trailing_non_numeric.append(all_parts.pop())
     trailing_numeric: list[str] = []
     while len(all_parts) > 1 and _is_int_token(all_parts[-1]):
@@ -380,7 +377,7 @@ def findings_to_sarif(
                 "partialFingerprints": {
                     "primaryLocationLineHash": hashlib.sha1(
                         f"{rule_id}|{_url_quote(rel, safe='/')}|"
-                        f"{'?' if line is None else line}".encode("utf-8")
+                        f"{'?' if line is None else line}".encode()
                     ).hexdigest()[:16]
                 },
                 "properties": {

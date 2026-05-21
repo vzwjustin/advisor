@@ -69,7 +69,7 @@ def _run_git(cwd: Path, *args: str) -> list[str]:
     # POSIX-only; on Windows ``start_new_session`` is silently ignored and
     # ``os.killpg`` doesn't exist, so we skip the group kill there.
     try:
-        proc = subprocess.Popen(  # noqa: S603 — args are a fixed list, never shell-parsed
+        proc = subprocess.Popen(
             ["git", *args],
             cwd=str(cwd),
             stdout=subprocess.PIPE,
@@ -228,8 +228,7 @@ def resolve_git_scope(
         # which the caller constructs, never the user.
         if ".." in value:
             raise GitScopeError(
-                f"{label} ref {value!r} contains '..'; "
-                f"pass a single ref, not a revrange"
+                f"{label} ref {value!r} contains '..'; pass a single ref, not a revrange"
             )
     if since:
         return files_since(target, since)
