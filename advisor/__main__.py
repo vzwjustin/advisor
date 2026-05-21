@@ -454,7 +454,9 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
     print(_style.colorize_markdown(text))
     if not getattr(args, "quiet", False):
         print()
-        print(_style.cta(f"/advisor {args.target}", "run the live pipeline in Claude Code or Codex"))
+        print(
+            _style.cta(f"/advisor {args.target}", "run the live pipeline in Claude Code or Codex")
+        )
     return 0
 
 
@@ -691,9 +693,7 @@ def _resolve_plan_files(
         # not ``target``), so without this an ``advisor plan ./subdir
         # --since main`` would silently widen to the whole repo.
         target_resolved = target.resolve()
-        files = [
-            p for p in files if Path(p).resolve().is_relative_to(target_resolved)
-        ]
+        files = [p for p in files if Path(p).resolve().is_relative_to(target_resolved)]
         return files, None
     return _safe_rglob(target, args.file_types)
 
@@ -1235,7 +1235,11 @@ def cmd_prompt(args: argparse.Namespace) -> int:
     show_frame = sys.stdout.isatty() and not quiet and not as_json
     if args.step == "advisor":
         if show_frame:
-            print(_style.dim(f"# advisor prompt — paste into Claude Code or Codex (target: {args.target})"))
+            print(
+                _style.dim(
+                    f"# advisor prompt — paste into Claude Code or Codex (target: {args.target})"
+                )
+            )
             print()
         # Include recent history if available — gives the advisor longitudinal
         # awareness of past findings. Disabled via --no-history.
@@ -1399,7 +1403,9 @@ def cmd_status(args: argparse.Namespace) -> int:
     s = get_status(nudge_path=nudge_target, skill_path=skill_target)
     installed = get_installed_skill_version(path=skill_target)
     update_ok = s.update_skill is None or (s.update_skill.present and s.update_skill.current)
-    healthy = s.nudge.present and s.nudge.current and s.skill.present and s.skill.current and update_ok
+    healthy = (
+        s.nudge.present and s.nudge.current and s.skill.present and s.skill.current and update_ok
+    )
 
     if getattr(args, "json", False):
         print(json.dumps(_status_to_dict(s, _get_version(), installed), indent=2))
@@ -1770,20 +1776,12 @@ def cmd_update(args: argparse.Namespace) -> int:
             # or behind PyPI but missing changelog (GitHub raw 504 / rate limit).
             cur_t = _semver_tuple(current)
             lat_t = _semver_tuple(latest) if latest is not None else None
-            ahead = (
-                latest is not None
-                and cur_t is not None
-                and lat_t is not None
-                and cur_t > lat_t
-            )
+            ahead = latest is not None and cur_t is not None and lat_t is not None and cur_t > lat_t
             # If PyPI shows a strictly-newer version but remote changelog
             # failed, don't refuse the upgrade — fall through with a degraded
             # preview so the user can still upgrade through a GitHub outage.
             pypi_newer = (
-                latest is not None
-                and cur_t is not None
-                and lat_t is not None
-                and lat_t > cur_t
+                latest is not None and cur_t is not None and lat_t is not None and lat_t > cur_t
             )
             if pypi_newer:
                 if not quiet:
@@ -2992,8 +2990,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_plan.add_argument(
         "--staged",
         action="store_true",
-        help="Scope to files currently staged for commit "
-        "(intersected with target dir)",
+        help="Scope to files currently staged for commit (intersected with target dir)",
     )
     p_plan.add_argument(
         "--branch",

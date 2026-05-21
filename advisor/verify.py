@@ -88,6 +88,7 @@ def _canonical_severity(raw: str, *, context: str = "") -> str:
     )
     return "UNKNOWN"
 
+
 # Accept both ``-`` and ``*`` list markers; some agents (especially those
 # that also emit Markdown prose) prefer ``*`` bullets. Without this, a
 # runner returning ``* **File**: ...`` blocks would parse as zero findings.

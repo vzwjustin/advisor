@@ -228,8 +228,7 @@ def resolve_git_scope(
         # which the caller constructs, never the user.
         if ".." in value:
             raise GitScopeError(
-                f"{label} ref {value!r} contains '..'; "
-                f"pass a single ref, not a revrange"
+                f"{label} ref {value!r} contains '..'; pass a single ref, not a revrange"
             )
     if since:
         return files_since(target, since)

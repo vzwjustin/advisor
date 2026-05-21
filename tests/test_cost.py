@@ -369,7 +369,9 @@ class TestPricingFreshness:
                 pricing={"opus": (1, 1), "sonnet": (1, 1), "haiku": (1, 1)},
             )
         stale = [w for w in caught if "stale" in str(w.message)]
-        assert not stale, f"unexpected stale-pricing warning when pricing= override supplied: {stale}"
+        assert not stale, (
+            f"unexpected stale-pricing warning when pricing= override supplied: {stale}"
+        )
 
 
 class TestPricingValueShapeValidation:

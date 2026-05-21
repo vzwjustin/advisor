@@ -15,12 +15,7 @@ def _safe_str(value: str) -> str:
     paste/copy. Backslash-escape backslash, quote, and CR/LF so the
     rendered snippet stays a single syntactically valid line.
     """
-    return (
-        value.replace("\\", "\\\\")
-        .replace('"', '\\"')
-        .replace("\n", "\\n")
-        .replace("\r", "\\r")
-    )
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r")
 
 
 def render_pipeline(config: TeamConfig) -> str:

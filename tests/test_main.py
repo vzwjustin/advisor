@@ -1736,9 +1736,7 @@ class TestCmdAuditSuppressionQuietJson:
 
         _json.loads(captured.out)
 
-    def test_per_finding_info_still_shown_in_default_pretty_mode(
-        self, tmp_path, capsys
-    ):
+    def test_per_finding_info_still_shown_in_default_pretty_mode(self, tmp_path, capsys):
         """Sanity guard: the info line is only suppressed by --quiet/--json,
         not deleted outright."""
         from advisor.__main__ import main
@@ -1777,14 +1775,10 @@ class TestCmdUpdate:
             setattr(ns, k, v)
         return ns
 
-    def test_proceeds_when_pypi_newer_but_changelog_unavailable(
-        self, monkeypatch, capsys
-    ):
+    def test_proceeds_when_pypi_newer_but_changelog_unavailable(self, monkeypatch, capsys):
         from advisor import __main__ as cli
 
-        monkeypatch.setattr(
-            cli, "_detect_install_method", lambda: ("uv tool", ["true"])
-        )
+        monkeypatch.setattr(cli, "_detect_install_method", lambda: ("uv tool", ["true"]))
         monkeypatch.setattr(cli, "_get_version", lambda: "0.1.0")
         monkeypatch.setattr(cli, "fetch_pypi_latest_version", lambda: "0.99.0")
         monkeypatch.setattr(cli, "fetch_remote_changelog", lambda: None)
@@ -1811,9 +1805,7 @@ class TestCmdUpdate:
     def test_already_latest_when_pypi_equals_current(self, monkeypatch, capsys):
         from advisor import __main__ as cli
 
-        monkeypatch.setattr(
-            cli, "_detect_install_method", lambda: ("uv tool", ["true"])
-        )
+        monkeypatch.setattr(cli, "_detect_install_method", lambda: ("uv tool", ["true"]))
         monkeypatch.setattr(cli, "_get_version", lambda: "0.7.2")
         monkeypatch.setattr(cli, "fetch_pypi_latest_version", lambda: "0.7.2")
         monkeypatch.setattr(cli, "fetch_remote_changelog", lambda: None)
@@ -1833,9 +1825,7 @@ class TestCmdUpdate:
         assert rc == 0
         assert ran == []
 
-    def test_invalidates_cache_after_successful_upgrade(
-        self, monkeypatch, tmp_path
-    ):
+    def test_invalidates_cache_after_successful_upgrade(self, monkeypatch, tmp_path):
         import importlib
 
         from advisor import __main__ as cli
@@ -1846,12 +1836,8 @@ class TestCmdUpdate:
         cache.write_text('{"latest": "0.7.1", "checked_at": 1700000000.0}')
         assert cache.exists()
 
-        monkeypatch.setattr(
-            install_mod, "_update_check_cache_path", lambda: cache
-        )
-        monkeypatch.setattr(
-            cli, "_detect_install_method", lambda: ("uv tool", ["true"])
-        )
+        monkeypatch.setattr(install_mod, "_update_check_cache_path", lambda: cache)
+        monkeypatch.setattr(cli, "_detect_install_method", lambda: ("uv tool", ["true"]))
         monkeypatch.setattr(cli, "_get_version", lambda: "0.7.1")
         monkeypatch.setattr(cli, "fetch_pypi_latest_version", lambda: "0.7.2")
         monkeypatch.setattr(cli, "fetch_remote_changelog", lambda: None)
@@ -1876,9 +1862,7 @@ class TestCmdUpdate:
     def test_quiet_does_not_skip_confirmation_on_tty(self, monkeypatch, capsys):
         from advisor import __main__ as cli
 
-        monkeypatch.setattr(
-            cli, "_detect_install_method", lambda: ("uv tool", ["true"])
-        )
+        monkeypatch.setattr(cli, "_detect_install_method", lambda: ("uv tool", ["true"]))
         monkeypatch.setattr(cli, "_get_version", lambda: "0.1.0")
         monkeypatch.setattr(cli, "fetch_pypi_latest_version", lambda: "0.99.0")
         monkeypatch.setattr(
@@ -1916,9 +1900,7 @@ class TestCmdUpdate:
     def test_quiet_non_tty_skips_prompt_and_proceeds(self, monkeypatch):
         from advisor import __main__ as cli
 
-        monkeypatch.setattr(
-            cli, "_detect_install_method", lambda: ("uv tool", ["true"])
-        )
+        monkeypatch.setattr(cli, "_detect_install_method", lambda: ("uv tool", ["true"]))
         monkeypatch.setattr(cli, "_get_version", lambda: "0.1.0")
         monkeypatch.setattr(cli, "fetch_pypi_latest_version", lambda: "0.99.0")
         monkeypatch.setattr(
