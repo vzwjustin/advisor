@@ -36,7 +36,7 @@ _PRICING_MAX_BYTES = 1_048_576
 #: :func:`format_estimate` output and used to gate the stale-pricing
 #: advisory in :func:`estimate_cost` (fires once per process when the
 #: default table is more than 180 days old).
-PRICING_AS_OF = date(2025, 4, 1)
+PRICING_AS_OF = date(2026, 5, 22)
 
 # Default published pricing (USD per million tokens) snapshotted at
 # :data:`PRICING_AS_OF`. Verify at https://www.anthropic.com/pricing before
@@ -47,7 +47,7 @@ DEFAULT_PRICING_CENTS_PER_MTOK: dict[str, tuple[int, int]] = {
     # family → (input_cents_per_mtok, output_cents_per_mtok)
     "opus": (1500, 7500),
     "sonnet": (300, 1500),
-    "haiku": (100, 500),
+    "haiku": (25, 125),
 }
 
 #: Stale threshold (days) — defaults older than this trigger a one-shot

@@ -1,6 +1,6 @@
 name: Advisor Review
 
-# Reusable workflow: `uses: vzwjustin/advisor/.github/workflows/advisor.yml@v0.5.0`
+# Reusable workflow: `uses: vzwjustin/advisor/.github/workflows/advisor.yml@v0.7.2`
 #
 # Runs `advisor plan` on the caller's repo and uploads the resulting SARIF
 # 2.1.0 document to GitHub Code Scanning. On pull_request events, scope is
@@ -25,7 +25,7 @@ on:
       fail-on:
         type: string
         default: "never"
-        description: "Exit non-zero if any finding at/above level (never|low|medium|high|critical)."
+        description: "Reserved: exit non-zero if any finding at/above level (never|low|medium|high|critical). Not forwarded to `advisor plan` — plan does not gate on findings; pair with a future `advisor audit` step instead."
       preset:
         type: string
         default: ""
@@ -57,21 +57,27 @@ jobs:
 
       - name: Run advisor plan
         id: plan
+        env:
+          INPUT_SINCE: ${{ inputs.since }}
+          INPUT_TARGET: ${{ inputs.target }}
+          INPUT_PRESET: ${{ inputs.preset }}
+          INPUT_MIN_PRIORITY: ${{ inputs.min-priority }}
         run: |
-          SINCE_FLAG=""
-          if [ -n "${{ inputs.since }}" ]; then
-            SINCE_FLAG="--since ${{ inputs.since }}"
+          SINCE_ARG=()
+          if [ -n "$INPUT_SINCE" ]; then
+            SINCE_ARG=("--since" "$INPUT_SINCE")
           elif [ "${{ github.event_name }}" = "pull_request" ]; then
-            SINCE_FLAG="--since origin/${{ github.base_ref }}"
+            SINCE_ARG=("--since" "origin/${{ github.base_ref }}")
           fi
-          PRESET_FLAG=""
-          if [ -n "${{ inputs.preset }}" ]; then
-            PRESET_FLAG="--preset ${{ inputs.preset }}"
+          PRESET_ARG=()
+          if [ -n "$INPUT_PRESET" ]; then
+            PRESET_ARG=("--preset" "$INPUT_PRESET")
           fi
-          advisor plan "${{ inputs.target }}" \
-            $SINCE_FLAG $PRESET_FLAG \
-            --min-priority ${{ inputs.min-priority }} \
-            --fail-on "${{ inputs.fail-on }}" \
+          advisor plan "$INPUT_TARGET" \
+            "${SINCE_ARG[@]}" \
+            "${PRESET_ARG[@]}" \
+            --min-priority "$INPUT_MIN_PRIORITY" \
+            --no-history \
             --sarif advisor.sarif
 
       - name: Upload SARIF
@@ -102,9 +108,24 @@ jobs:
               '',
               '_See Code Scanning for full detail._',
             ].join('\n');
-            await github.rest.issues.createComment({
+            const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.issue.number,
-              body,
             });
+            const existing = comments.find(c => c.body.startsWith('## Advisor review'));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
