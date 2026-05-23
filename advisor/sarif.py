@@ -94,7 +94,8 @@ def _strip_controls(text: str, *, keep_block_whitespace: bool = False) -> str:
     keep = _BLOCK_KEEP if keep_block_whitespace else frozenset()
     extra_strip = frozenset() if keep_block_whitespace else _INLINE_STRIP_EXTRA
     return "".join(
-        c for c in text
+        c
+        for c in text
         if ((ord(c) >= 0x20 and ord(c) != 0x7F) or ord(c) in keep) and ord(c) not in extra_strip
     )
 
