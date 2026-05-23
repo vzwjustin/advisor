@@ -248,7 +248,8 @@ def check_for_update_cached(
                 cached_at = 0.0
 
     latest: str | None
-    if cached_latest is not None and (now - cached_at) < ttl_seconds:
+    elapsed = now - cached_at
+    if cached_latest is not None and 0 <= elapsed < ttl_seconds:
         latest = cached_latest
     else:
         fetched = fetch_pypi_latest_version()
@@ -258,7 +259,10 @@ def check_for_update_cached(
         else:
             latest = fetched
             try:
-                _atomic_write_text(path, _json.dumps({"latest": latest, "checked_at": now}))
+                # Cache is not a sensitive install-path target — use the
+                # shared writer without reject_symlink so a dotfiles manager
+                # symlinking ~/.claude/.advisor/ doesn't silently break caching.
+                _shared_atomic_write(path, _json.dumps({"latest": latest, "checked_at": now}))
             except OSError:
                 pass  # Cache is best-effort.
 
@@ -459,13 +463,18 @@ _ORPHAN_MARKER_RE = re.compile(re.escape(START_MARKER) + r"|" + re.escape(END_MA
 def _strip_all_blocks(existing: str) -> str:
     """Remove every sentinel-wrapped block, including nested or duplicate ones.
 
-    Single non-greedy DOTALL regex strips well-formed START..END blocks in
-    one pass — O(N) in input length regardless of marker count. A second
-    pass clears any orphan markers left by pathological interleaving
-    (e.g. START-START-END-END collapses the inner pair, leaving an outer
-    orphan START + orphan END).
+    Runs _BLOCK_RE.sub to convergence (re-applies until the string stops
+    changing) so nested marker pairs are fully unwound. A single non-greedy
+    pass only collapses the innermost START..END span, leaving body content
+    between the inner END and the outer END intact; convergence handles that.
+    A final pass strips any orphan markers left after convergence.
     """
-    cleaned = _BLOCK_RE.sub("", existing)
+    cleaned = existing
+    while True:
+        next_pass = _BLOCK_RE.sub("", cleaned)
+        if next_pass == cleaned:
+            break
+        cleaned = next_pass
     cleaned = _ORPHAN_MARKER_RE.sub("", cleaned)
     return cleaned
 

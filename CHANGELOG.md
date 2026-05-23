@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-05-23
+
+### Fixed
+
+- `baseline.read_baseline`: added `isinstance(obj, dict)` guard after
+  `json.loads` — a `null`, bare integer, or array on any JSONL line previously
+  raised an uncaught `AttributeError` that aborted the rest of the load.
+  Mirrors the identical guard already present in `suppressions.load_suppressions`.
+- `install._strip_all_blocks`: convergence loop replaces single-pass substitution
+  so nested `START-START-END-END` marker pairs are fully unwound. The prior
+  single non-greedy pass left body text between the inner END and outer END
+  intact, leaking content through `remove_nudge` / `apply_nudge`.
+- `install.check_for_update_cached`: cache write now uses `_shared_atomic_write`
+  (no `reject_symlink`) instead of the install-path wrapper so a symlinked
+  `~/.claude/.advisor/update-check.json` no longer silently defeats the cache.
+- `install.check_for_update_cached`: `elapsed = now - cached_at` is now
+  checked for `>= 0` so a backward system-clock step (NTP, VM migration)
+  forces a re-fetch instead of treating the cache as perpetually fresh.
+
 ### Added
 
 - `advisor plan --format {pretty,json}` — explicit output selector, bringing

@@ -201,6 +201,13 @@ def read_baseline(path: Path) -> list[BaselineEntry]:
                 stacklevel=2,
             )
             continue
+        if not isinstance(obj, dict):
+            warnings.warn(
+                f"skipping non-dict baseline entry at {path}:{line_no}",
+                UserWarning,
+                stacklevel=2,
+            )
+            continue
         if obj.get(_HEADER_KEY):
             # Header — verify schema_version but do not emit.
             version = str(obj.get("schema_version", ""))
