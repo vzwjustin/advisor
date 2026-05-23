@@ -273,6 +273,10 @@ def _resolve_max_runners(raw: int | None) -> int:
             ),
             file=sys.stderr,
         )
+        # Explicit CLI override wins over the env var, even when invalid.
+        # Otherwise ``--max-runners 0`` lets ``ADVISOR_MAX_RUNNERS=N``
+        # silently take effect — contradicting the warning above.
+        return _clamp_max_runners(5, source="--max-runners")
     env_raw = os.environ.get("ADVISOR_MAX_RUNNERS", "").strip()
     if env_raw:
         try:
@@ -536,11 +540,15 @@ def _pos_int_arg(value: str) -> int:
 
     Centralized so flags like ``--runner-id`` reject ``0`` instead of
     silently re-mapping it to ``1`` via a falsy guard at the call site.
+
+    ``int()`` alone accepts Unicode decimal digits (e.g. Bengali
+    ``"১৩"``), explicit signs (``"+1"``), and leading zeros (``"01"``).
+    The explicit ASCII + ``isdigit`` gate rejects all three so CLI
+    flags only accept the conventional unsigned decimal form.
     """
-    try:
-        n = int(value)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(f"expected positive integer, got {value!r}") from exc
+    if not value.isascii() or not value.isdigit():
+        raise argparse.ArgumentTypeError(f"expected positive integer, got {value!r}")
+    n = int(value)
     if n < 1:
         raise argparse.ArgumentTypeError(f"must be >= 1, got {n}")
     return n
@@ -551,12 +559,11 @@ def _valid_port(raw: str) -> int:
 
     Raises ``argparse.ArgumentTypeError`` on out-of-range or non-integer
     input so the CLI shows a clean usage error instead of a cryptic OS
-    bind failure.
+    bind failure. See :func:`_pos_int_arg` for the ASCII-only rationale.
     """
-    try:
-        n = int(raw)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(f"invalid port {raw!r}: {exc}") from exc
+    if not raw.isascii() or not raw.isdigit():
+        raise argparse.ArgumentTypeError(f"invalid port {raw!r}: expected ASCII decimal digits")
+    n = int(raw)
     if not 0 <= n <= 65535:
         raise argparse.ArgumentTypeError(f"port {n} out of range — must be between 0 and 65535")
     return n

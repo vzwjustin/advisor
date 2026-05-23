@@ -597,8 +597,8 @@ def build_fix_assignment_message(
     acceptance: str,
     fix_number: int,
     max_fixes: int,
+    large_file_max_fixes: int,
     is_large_file: bool = False,
-    large_file_max_fixes: int = 3,
 ) -> dict[str, str]:
     """SendMessage spec for a fix assignment with the budget stamped in-band.
 

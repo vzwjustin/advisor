@@ -271,6 +271,7 @@ def test_snapshot_fix_assignment_normal():
         acceptance="11th failed login in 60s returns 429",
         fix_number=1,
         max_fixes=5,
+        large_file_max_fixes=3,
     )
     assert_snapshot("fix_assignment_normal", render_message_spec(actual))
 
@@ -285,6 +286,7 @@ def test_snapshot_fix_assignment_penultimate():
         acceptance="z",
         fix_number=4,
         max_fixes=5,
+        large_file_max_fixes=3,
     )
     assert_snapshot("fix_assignment_penultimate", render_message_spec(actual))
 
@@ -299,6 +301,7 @@ def test_snapshot_fix_assignment_last():
         acceptance="z",
         fix_number=5,
         max_fixes=5,
+        large_file_max_fixes=3,
     )
     assert_snapshot("fix_assignment_last", render_message_spec(actual))
 

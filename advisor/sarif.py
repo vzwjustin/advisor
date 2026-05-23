@@ -65,6 +65,15 @@ _DEFAULT_LEVEL = "warning"
 # rule-grouping key than intended and drops the post-NUL evidence
 # from the UI. Strip at the source instead.
 _BLOCK_KEEP = frozenset({0x09, 0x0A, 0x0D})
+# Additional non-C0 chars stripped from inline fields: U+0085 (NEL, a C1
+# line terminator), U+2028 (LINE SEPARATOR) and U+2029 (PARAGRAPH
+# SEPARATOR). Python's json.dumps with ensure_ascii=True already escapes
+# these in the SARIF output path, but a downstream consumer that inserts
+# a finding's text into a JS string context (custom dashboard, GitHub
+# Actions summary) treats U+2028 / U+2029 as literal newlines that can
+# break the surrounding expression. Strip them at the source so every
+# consumer sees the same single-line invariant.
+_INLINE_STRIP_EXTRA = frozenset({0x85, 0x2028, 0x2029})
 
 
 def _strip_controls(text: str, *, keep_block_whitespace: bool = False) -> str:
@@ -73,17 +82,21 @@ def _strip_controls(text: str, *, keep_block_whitespace: bool = False) -> str:
     ``keep_block_whitespace=True`` preserves tab / newline / carriage return
     for fields rendered as multi-line text (``message.text``,
     ``fullDescription``, ``help.text``, ``properties.evidence/fix``).
-    ``False`` (default) strips everything U+0000–U+001F + U+007F — used for
-    inline fields like ``shortDescription`` that GitHub Code Scanning
-    renders on a single line. ``_short_text`` already collapses Python
-    whitespace via ``str.split()``, but ``\\x00`` is not whitespace and
-    survives that pass — so this strip is the only NUL guard for inline
-    fields.
+    ``False`` (default) strips everything U+0000–U+001F + U+007F plus the
+    Unicode line terminators U+0085 / U+2028 / U+2029 — used for inline
+    fields like ``shortDescription`` that GitHub Code Scanning renders on
+    a single line. ``_short_text`` already collapses Python whitespace
+    via ``str.split()``, but ``\\x00`` is not whitespace and survives
+    that pass — so this strip is the only NUL guard for inline fields.
     """
     if not text:
         return text
     keep = _BLOCK_KEEP if keep_block_whitespace else frozenset()
-    return "".join(c for c in text if (ord(c) >= 0x20 and ord(c) != 0x7F) or ord(c) in keep)
+    extra_strip = frozenset() if keep_block_whitespace else _INLINE_STRIP_EXTRA
+    return "".join(
+        c for c in text
+        if ((ord(c) >= 0x20 and ord(c) != 0x7F) or ord(c) in keep) and ord(c) not in extra_strip
+    )
 
 
 def synthesize_rule_id(severity: str, description: str, *, prefix: str = "advisor") -> str:

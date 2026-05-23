@@ -762,6 +762,7 @@ class TestBuildFixAssignmentMessage:
             acceptance="no literal secret remains",
             fix_number=1,
             max_fixes=5,
+            large_file_max_fixes=3,
         )
         base.update(over)
         return base

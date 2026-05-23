@@ -269,7 +269,11 @@ def parse_findings_with_drift(
 
     raw = _parse_blocks(text)
     if normalized_batch is None:
-        return raw, []
+        # Unscoped path: callers expect well-formed Findings only.
+        # ``<incomplete>`` sentinels emitted by ``_dict_to_finding`` for
+        # partial drops are filtered here so the public API stays the
+        # same as before the drift-tally fix.
+        return [f for f in raw if f.file_path != INCOMPLETE_FILE_PATH], []
 
     kept: list[Finding] = []
     dropped: list[Finding] = []
@@ -486,27 +490,58 @@ def _extract_value(line: str, prefix: str) -> str:
     return line[len(prefix) :].strip().strip("`").strip()
 
 
-def _dict_to_finding(d: dict[str, str]) -> Finding | None:
-    """Convert a parsed block to a Finding, or None if any required field is missing.
+# Sentinel ``file_path`` value used when a block had at least one required
+# field but was missing others (a "partial drop"). Synthesizing a Finding
+# with this path lets the drift tally in ``parse_findings_with_drift``
+# include partial drops in its dropped count — otherwise an incomplete
+# block at EOF disappears from both the kept and dropped lists and the
+# audit undercounts parse misses.
+INCOMPLETE_FILE_PATH = "<incomplete>"
 
-    ``rule_id`` is optional — absent from the dict is fine and yields
-    ``rule_id=None`` on the Finding.
+
+def _dict_to_finding(d: dict[str, str]) -> Finding | None:
+    """Convert a parsed block to a Finding, or None if the block was empty.
+
+    Returns ``None`` only when the block was empty (no required field
+    populated or present-but-empty). Otherwise returns either a
+    well-formed Finding or a synthesized partial-drop Finding with
+    ``file_path == INCOMPLETE_FILE_PATH`` so the caller can surface it
+    in the drift tally. ``rule_id`` is optional — absent from the dict
+    yields ``rule_id=None``.
     """
-    missing = [k for k in _REQUIRED_FIELDS if not d.get(k)]
-    if missing:
+    # Distinguish "field absent from the parsed dict" from "field present
+    # but empty string" — both are equally invalid as a Finding, but they
+    # come from different upstream emit bugs and the log should show
+    # which one happened.
+    absent = [k for k in _REQUIRED_FIELDS if k not in d]
+    empty = [k for k in _REQUIRED_FIELDS if k in d and not d[k]]
+    if absent or empty:
         # Surface partial drops: if the block has at least one populated
         # required field, the body almost certainly intended to be a
         # finding (e.g. a Fix line consumed inside an unclosed fence
         # before auto-recovery). Silent loss in that path masked real
         # findings during pass M-N audits.
         populated = [k for k in _REQUIRED_FIELDS if d.get(k)]
-        if populated:
-            _log.warning(
-                "verify: dropping partial finding (have %s, missing %s)",
-                populated,
-                missing,
-            )
-        return None
+        if not populated:
+            return None
+        _log.warning(
+            "verify: dropping partial finding (have %s, empty %s, absent %s)",
+            populated,
+            empty,
+            absent,
+        )
+        # Synthesize an incomplete Finding so the drift tally in
+        # parse_findings_with_drift can account for parse misses. The
+        # caller filters this sentinel out of the kept list when batch
+        # filtering is disabled (preserves the original unscoped API).
+        return Finding(
+            file_path=INCOMPLETE_FILE_PATH,
+            severity=_canonical_severity(d.get("severity", ""), context=INCOMPLETE_FILE_PATH),
+            description=d.get("description") or f"<partial: empty={empty} absent={absent}>",
+            evidence=d.get("evidence") or "",
+            fix=d.get("fix") or "",
+            rule_id=d.get("rule_id") or None,
+        )
     return Finding(
         file_path=d["file_path"],
         severity=_canonical_severity(d["severity"], context=d["file_path"]),

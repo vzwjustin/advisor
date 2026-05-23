@@ -72,6 +72,7 @@ def _run_git(cwd: Path, *args: str) -> list[str]:
         proc = subprocess.Popen(
             ["git", *args],
             cwd=str(cwd),
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -96,8 +97,11 @@ def _run_git(cwd: Path, *args: str) -> list[str]:
         # managers, ssh, askpass helpers) die with git. ``killpg`` is
         # POSIX-only; on Windows fall back to plain ``proc.kill()``.
         if hasattr(os, "killpg"):
+            # start_new_session=True makes the child its own session leader,
+            # so PGID == proc.pid on POSIX. Use os.getpgid() explicitly so
+            # the invariant is visible in the source rather than implicit.
             try:
-                os.killpg(proc.pid, signal.SIGKILL)
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
                 pass
         else:
@@ -132,10 +136,20 @@ def _resolve_files(repo_root: Path, rel_paths: list[str]) -> list[str]:
     we drop them because advisor cannot rank what is not on disk.
     """
     out: list[str] = []
+    # Mirrors safe_rglob_paths' containment guard (_fs.py:121): git's
+    # --name-only output is contractually repo-relative, but a defense-
+    # in-depth check guards against malformed output (submodule edges,
+    # hooks, hostile worktree configs) leaking paths outside repo_root.
+    resolved_root = repo_root.resolve()
     for rel in rel_paths:
         p = repo_root / rel
-        if p.is_file():
-            out.append(str(p))
+        if not p.is_file():
+            continue
+        try:
+            if p.resolve().is_relative_to(resolved_root):
+                out.append(str(p))
+        except OSError:
+            continue
     return out
 
 
