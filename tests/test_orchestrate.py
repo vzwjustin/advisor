@@ -681,6 +681,20 @@ class TestTeamConfigEnhancements:
         config = default_team_config("/src", advisor_model="sonnet")
         assert config.advisor_model == "sonnet"
 
+    def test_env_var_runner_output_char_ceiling(self, monkeypatch):
+        from advisor.orchestrate import default_team_config
+
+        monkeypatch.setenv("ADVISOR_RUNNER_OUTPUT_CHAR_CEILING", "100000")
+        config = default_team_config("/src")
+        assert config.runner_output_char_ceiling == 100000
+
+    def test_env_var_runner_file_read_ceiling(self, monkeypatch):
+        from advisor.orchestrate import default_team_config
+
+        monkeypatch.setenv("ADVISOR_RUNNER_FILE_READ_CEILING", "25")
+        config = default_team_config("/src")
+        assert config.runner_file_read_ceiling == 25
+
 
 class TestIsKnownModel:
     """E10 — model name validation."""

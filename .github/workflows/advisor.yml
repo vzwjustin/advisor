@@ -44,11 +44,11 @@ jobs:
   advisor:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
@@ -63,6 +63,9 @@ jobs:
           INPUT_PRESET: ${{ inputs.preset }}
           INPUT_MIN_PRIORITY: ${{ inputs.min-priority }}
         run: |
+          if [ "${{ inputs.fail-on }}" != "never" ]; then
+            echo "::warning::fail-on='${{ inputs.fail-on }}' is not supported in the reusable plan workflow (plan does not gate on findings). To gate on findings, pair with a subsequent 'advisor audit --fail-on LEVEL' step instead."
+          fi
           SINCE_ARG=()
           if [ -n "$INPUT_SINCE" ]; then
             SINCE_ARG=("--since" "$INPUT_SINCE")
@@ -81,7 +84,7 @@ jobs:
             --sarif advisor.sarif
 
       - name: Upload SARIF
-        if: always()
+        if: always() && hashFiles('advisor.sarif') != ''
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: advisor.sarif

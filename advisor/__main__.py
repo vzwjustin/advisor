@@ -168,6 +168,8 @@ def _team_config_default(name: str) -> int:
 _DEFAULT_MAX_FIXES = _team_config_default("max_fixes_per_runner")
 _DEFAULT_LARGE_FILE_THRESHOLD = _team_config_default("large_file_line_threshold")
 _DEFAULT_LARGE_FILE_MAX_FIXES = _team_config_default("large_file_max_fixes")
+_DEFAULT_RUNNER_OUTPUT_CHAR_CEILING = _team_config_default("runner_output_char_ceiling")
+_DEFAULT_RUNNER_FILE_READ_CEILING = _team_config_default("runner_file_read_ceiling")
 
 
 def _get_version() -> str:
@@ -341,6 +343,12 @@ def _config_from_args(args: argparse.Namespace) -> TeamConfig:
         large_file_max_fixes=getattr(args, "large_file_max_fixes", _DEFAULT_LARGE_FILE_MAX_FIXES),
         test_command=getattr(args, "test_cmd", "") or "",
         preset=getattr(args, "preset", None),
+        runner_output_char_ceiling=getattr(
+            args, "runner_output_char_ceiling", _DEFAULT_RUNNER_OUTPUT_CHAR_CEILING
+        ),
+        runner_file_read_ceiling=getattr(
+            args, "runner_file_read_ceiling", _DEFAULT_RUNNER_FILE_READ_CEILING
+        ),
     )
 
 
@@ -419,6 +427,18 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
             "--large-file-line-threshold lines. Lowest applicable cap wins. "
             "Default: %(default)s"
         ),
+    )
+    parser.add_argument(
+        "--runner-output-char-ceiling",
+        type=int,
+        default=_DEFAULT_RUNNER_OUTPUT_CHAR_CEILING,
+        help=("Per-runner cumulative output characters cap before rotating. Default: %(default)s"),
+    )
+    parser.add_argument(
+        "--runner-file-read-ceiling",
+        type=int,
+        default=_DEFAULT_RUNNER_FILE_READ_CEILING,
+        help=("Per-runner distinct file read ceiling before rotating. Default: %(default)s"),
     )
     parser.add_argument(
         "--preset",

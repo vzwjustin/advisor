@@ -70,7 +70,7 @@ advisor uninstall            # cleanly remove the nudge + skill
 advisor install --path /x    # target a different CLAUDE.md
 ```
 
-Opt out of auto-install with `ADVISOR_NO_NUDGE=1`. The CLAUDE.md block is
+Opt out of auto-install with `ADVISOR_NO_NUDGE=1`. Suppress the diagnostic TTY spinner with `ADVISOR_QUIET=1`. The CLAUDE.md block is
 wrapped in `<!-- advisor:nudge:start -->` / `<!-- advisor:nudge:end -->`
 markers so reinstalls update in place.
 
@@ -127,7 +127,7 @@ exceed for large repos), `--min-priority`, `--context`, `--advisor-model`,
 `--runner-model`. Default models: `claude-opus-4-7` / `claude-sonnet-4-6` (full IDs pin the version; bare aliases `opus`/`sonnet`/`haiku` resolve to the latest at spawn time).
 
 Context-pressure knobs (reduce runner context exhaustion):
-`--max-fixes-per-runner N` · `--large-file-line-threshold N` · `--large-file-max-fixes M`.
+`--max-fixes-per-runner N` · `--large-file-line-threshold N` · `--large-file-max-fixes M` · `--runner-output-char-ceiling K` · `--runner-file-read-ceiling L`.
 
 Automation flags: `--json` on `status`/`plan`/`install --check`,
 `--quiet` on `install`/`uninstall`, `--strict` on `status`/`install`/`uninstall`
