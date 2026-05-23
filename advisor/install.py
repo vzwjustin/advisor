@@ -600,6 +600,8 @@ def ensure_nudge(
         if target.is_symlink():
             raise OSError(f"refusing to install nudge through symlink: {target}")
         target = target.resolve()
+        if not target.is_relative_to(Path.home().resolve()):
+            raise OSError(f"refusing to install nudge outside $HOME: {target}")
     if not should_auto_nudge(env):
         return InstallResult(path=target, action=InstallAction.UNCHANGED.value)
 

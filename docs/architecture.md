@@ -62,7 +62,7 @@
          └──────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────┐
-│                 v0.5 feature-pack modules                        │
+│                 core feature-pack modules                        │
 │                                                                  │
 │  ┌──────────┐  ┌──────────┐  ┌──────────────┐  ┌──────────────┐  │
 │  │ sarif.py │  │presets.py│  │ baseline.py  │  │suppressions  │  │
@@ -88,7 +88,7 @@ Claude Code (Opus)
      │
      ├── 2. TeamCreate            ← fresh team with advisor + runner pool
      │
-     ├── 3. Bash: advisor plan <dir>    ← silent; output redirected to /tmp
+     ├── 3. Bash: advisor plan <dir>    ← writes plan to stdout, SARIF to --sarif
      │        │
      │        └─→ advisor.__main__.cmd_plan
      │               │

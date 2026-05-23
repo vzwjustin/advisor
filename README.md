@@ -256,14 +256,16 @@ on:
 
 jobs:
   advisor:
-    uses: vzwjustin/advisor/.github/workflows/advisor.yml@v0.5.1
+    uses: vzwjustin/advisor/.github/workflows/advisor.yml@v0.7.2
     with:
       target: "."
       min-priority: 3
-      fail-on: "high"        # fail CI on HIGH/CRITICAL findings
       preset: "python-web"   # optional rule-pack tuning
       post-pr-comment: false
 ```
+
+> [!NOTE]
+> The `fail-on` parameter is currently reserved for a future audit gating step and is not forwarded to `advisor plan`.
 
 Or roll your own: any CI system can run `advisor plan --sarif advisor.sarif`
 and upload the file to whatever scanner you use.

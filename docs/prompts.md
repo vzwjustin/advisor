@@ -60,7 +60,7 @@ find auth bugs
 ```
 ```
 
-See `advisor/orchestrate/advisor_prompt.py:47-53`. Adopt the same pattern
+See `build_advisor_prompt()` in `advisor/orchestrate/advisor_prompt.py`. Adopt the same pattern
 for any future free-form untrusted input.
 
 ---
@@ -114,7 +114,7 @@ they read.
 
 ## 7. Why the prompt lives in a `.txt` file, not a Python string
 
-The advisor body is ~140 lines of prose. Keeping it in Python had three
+The advisor body is ~210 lines of prose. Keeping it in Python had three
 problems:
 
 1. **Diffs were noisy.** A one-word wording change showed up as a
@@ -126,8 +126,8 @@ problems:
 
 The `.txt` file is loaded via `importlib.resources` so it ships inside the
 wheel, and placeholder substitution is a single-pass `re.sub` that leaves
-unknown braces intact. See
-[`advisor/orchestrate/advisor_prompt.py:32-41`](../advisor/orchestrate/advisor_prompt.py).
+unknown braces intact. See `_render()` in
+[`advisor/orchestrate/advisor_prompt.py`](../advisor/orchestrate/advisor_prompt.py).
 
 ---
 
