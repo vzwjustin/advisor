@@ -293,12 +293,18 @@ class TestConfigFromArgs:
                 "500",
                 "--large-file-max-fixes",
                 "1",
+                "--runner-output-char-ceiling",
+                "120000",
+                "--runner-file-read-ceiling",
+                "30",
             ]
         )
         cfg = _config_from_args(args)
         assert cfg.max_fixes_per_runner == 3
         assert cfg.large_file_line_threshold == 500
         assert cfg.large_file_max_fixes == 1
+        assert cfg.runner_output_char_ceiling == 120000
+        assert cfg.runner_file_read_ceiling == 30
 
     def test_config_from_args_context_pressure_defaults(self):
         """Without the flags, config falls back to the documented defaults."""
@@ -310,6 +316,8 @@ class TestConfigFromArgs:
         assert cfg.max_fixes_per_runner == 5
         assert cfg.large_file_line_threshold == 800
         assert cfg.large_file_max_fixes == 3
+        assert cfg.runner_output_char_ceiling == 80000
+        assert cfg.runner_file_read_ceiling == 20
 
 
 class TestCmdPlanJson:

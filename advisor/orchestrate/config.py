@@ -199,6 +199,8 @@ def default_team_config(
     file_types_is_default = file_types == "*.py"
     min_priority_is_default = min_priority == 3
     test_command_is_default = test_command == ""
+    runner_output_char_ceiling_is_default = runner_output_char_ceiling == 80_000
+    runner_file_read_ceiling_is_default = runner_file_read_ceiling == 20
 
     # NOTE: ``advisor_model="claude-opus-4-7"`` and
     # ``runner_model="claude-sonnet-4-6"`` are the documented default
@@ -273,6 +275,14 @@ def default_team_config(
         min_priority = clamped
     if test_command_is_default:
         test_command = _env_or("ADVISOR_TEST_COMMAND", test_command)
+    if runner_output_char_ceiling_is_default:
+        runner_output_char_ceiling = _env_int_or(
+            "ADVISOR_RUNNER_OUTPUT_CHAR_CEILING", runner_output_char_ceiling
+        )
+    if runner_file_read_ceiling_is_default:
+        runner_file_read_ceiling = _env_int_or(
+            "ADVISOR_RUNNER_FILE_READ_CEILING", runner_file_read_ceiling
+        )
 
     # Preset merge — only fills in fields the caller left at their
     # documented default sentinels. Explicit overrides always win. The
