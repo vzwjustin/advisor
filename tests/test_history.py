@@ -44,6 +44,57 @@ class TestAppendAndLoad:
         append_entries(tmp_path, [])
         assert not history_path(tmp_path).exists()
 
+    def test_append_flushes_before_unlocking(self, tmp_path: Path, monkeypatch) -> None:
+        """The advisory lock must cover the buffered write itself.
+
+        On Windows ``_unlock_exclusive`` runs before close. Without an
+        explicit flush before unlock, another process could acquire the lock
+        while this process still had the JSONL payload in Python's text
+        buffer, defeating the lock's ordering guarantee.
+        """
+        events: list[str] = []
+
+        class TrackingFile:
+            def __init__(self, wrapped):
+                self._wrapped = wrapped
+
+            def __enter__(self):
+                self._wrapped.__enter__()
+                return self
+
+            def __exit__(self, *args):
+                return self._wrapped.__exit__(*args)
+
+            def write(self, payload: str) -> int:
+                events.append("write")
+                return self._wrapped.write(payload)
+
+            def flush(self) -> None:
+                events.append("flush")
+                self._wrapped.flush()
+
+            def fileno(self) -> int:
+                return self._wrapped.fileno()
+
+        real_open = Path.open
+
+        def tracking_open(self: Path, *args, **kwargs):
+            opened = real_open(self, *args, **kwargs)
+            if self == history_path(tmp_path) and args and args[0] == "a":
+                return TrackingFile(opened)
+            return opened
+
+        def fake_unlock(_fh) -> None:
+            events.append("unlock")
+
+        monkeypatch.setattr(Path, "open", tracking_open)
+        monkeypatch.setattr("advisor.history._unlock_exclusive", fake_unlock)
+        monkeypatch.setattr("advisor.history._lock_exclusive", lambda _fh: events.append("lock"))
+
+        append_entries(tmp_path, [_entry(file_path="a.py")])
+
+        assert events[:4] == ["lock", "write", "flush", "unlock"]
+
     def test_malformed_line_skipped(self, tmp_path: Path) -> None:
         import warnings
 

@@ -246,10 +246,12 @@ def append_entries(target: str | Path, entries: list[HistoryEntry]) -> Path:
         _lock_exclusive(f)
         try:
             f.write(payload)
+            f.flush()
         finally:
             # On Windows, msvcrt.locking does NOT auto-release on close —
             # explicit LK_UNLCK is required or the next appender blocks.
-            # No-op on POSIX (fcntl.flock releases at close).
+            # Flush before unlocking so the advisory lock covers the actual
+            # buffered append on Windows as well as POSIX.
             _unlock_exclusive(f)
     return path
 

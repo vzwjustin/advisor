@@ -167,6 +167,15 @@ class TestCostPayload:
         assert payload["task_count"] == 4
         assert payload["estimate"]["runner_count"] == 2
 
+    def test_invalid_max_runners_fallback_still_obeys_ceiling(self, tmp_path):
+        for i in range(25):
+            (tmp_path / f"auth{i}.py").write_text("password = 'x'\n" * 10)
+        state = build_app_state(tmp_path, min_priority=1, max_runners=999)
+        payload = _cost_payload(state, {"max_runners": ["not-a-number"]})
+
+        assert payload["task_count"] == 25
+        assert payload["estimate"]["runner_count"] == 20
+
 
 class TestHistoryPayload:
     def test_empty_history(self, tmp_path):

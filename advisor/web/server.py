@@ -159,15 +159,19 @@ def _first_int(
     into cost-estimation math (``estimate_cost(max_runners=10**18)``)
     and producing nonsensical results.
     """
+    def _clamp(value: int) -> int:
+        value = max(value, min_value)
+        if max_value is not None and value > max_value:
+            return max_value
+        return value
+
     try:
         value = int(_first(qs, key, str(default)))
     except ValueError:
-        return max(default, min_value)
+        return _clamp(default)
     if value < min_value:
-        return max(default, min_value)
-    if max_value is not None and value > max_value:
-        return max_value
-    return value
+        return _clamp(default)
+    return _clamp(value)
 
 
 def _rank_target(state: AppState, file_types: str, min_priority: int) -> list[FocusTask]:
