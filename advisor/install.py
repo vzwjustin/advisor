@@ -574,9 +574,7 @@ def install(path: Path | None = None, body: str = NUDGE_BODY) -> InstallResult:
         target = resolved
     target.parent.mkdir(parents=True, exist_ok=True)
     current = (
-        _read_text_capped(target, _CLAUDE_MD_MAX_BYTES, encoding="utf-8")
-        if target.exists()
-        else ""
+        _read_text_capped(target, _CLAUDE_MD_MAX_BYTES, encoding="utf-8") if target.exists() else ""
     )
     new_contents, action = apply_nudge(current, body)
     if action != InstallAction.UNCHANGED.value:
