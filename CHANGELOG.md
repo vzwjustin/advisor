@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `history.load_recent_findings`: skip non-dict JSONL lines instead of raising
+  `AttributeError` on `null` / scalar entries.
+- `checkpoint.load_checkpoint`: reject non-object JSON; skip non-dict batch
+  elements with a warning.
+- `_load_findings_from_input`: warn when `findings` / `findings_in_batch` is not
+  an array (e.g. a path-keyed object).
+- `suppressions._parse_until`: reject non-string `until` values with
+  `ValueError`; `_matches_glob` catches `ValueError` at apply time.
+- `ensure_nudge`: symlink / outside-`$HOME` guards run inside the swallow-errors
+  path so unrelated CLI commands do not abort.
+- Web dashboard `max_fixes_per_runner` query accepts `0` (no fix waves), matching
+  `estimate_cost`.
+
 ## [0.7.3] - 2026-05-23
 
 ### Fixed
