@@ -75,6 +75,31 @@ _BLOCK_KEEP = frozenset({0x09, 0x0A, 0x0D})
 # consumer sees the same single-line invariant.
 _INLINE_STRIP_EXTRA = frozenset({0x85, 0x2028, 0x2029})
 
+# Bidi formatting / override / isolate / mark code points. These reorder
+# rendered text without changing the byte sequence a consumer (LLM,
+# parser, JSON tool) sees, so they let a Finding description visually
+# misrepresent the file or severity it names when rendered into a
+# GitHub PR comment or SARIF viewer. Stripped on BOTH the inline and
+# block-whitespace paths in :func:`_strip_controls` — unlike
+# :data:`_INLINE_STRIP_EXTRA`, this set has no whitespace semantics and
+# is unconditionally unsafe in either context.
+_BIDI_CONTROLS = frozenset(
+    {
+        0x202A,  # LRE LEFT-TO-RIGHT EMBEDDING
+        0x202B,  # RLE RIGHT-TO-LEFT EMBEDDING
+        0x202C,  # PDF POP DIRECTIONAL FORMATTING
+        0x202D,  # LRO LEFT-TO-RIGHT OVERRIDE
+        0x202E,  # RLO RIGHT-TO-LEFT OVERRIDE
+        0x2060,  # WJ WORD JOINER
+        0x200E,  # LRM LEFT-TO-RIGHT MARK
+        0x200F,  # RLM RIGHT-TO-LEFT MARK
+        0x2066,  # LRI LEFT-TO-RIGHT ISOLATE
+        0x2067,  # RLI RIGHT-TO-LEFT ISOLATE
+        0x2068,  # FSI FIRST STRONG ISOLATE
+        0x2069,  # PDI POP DIRECTIONAL ISOLATE
+    }
+)
+
 
 def _strip_controls(text: str, *, keep_block_whitespace: bool = False) -> str:
     """Remove C0 control chars (and DEL) that survive JSON but break consumers.
@@ -96,7 +121,9 @@ def _strip_controls(text: str, *, keep_block_whitespace: bool = False) -> str:
     return "".join(
         c
         for c in text
-        if ((ord(c) >= 0x20 and ord(c) != 0x7F) or ord(c) in keep) and ord(c) not in extra_strip
+        if ((ord(c) >= 0x20 and ord(c) != 0x7F) or ord(c) in keep)
+        and ord(c) not in extra_strip
+        and ord(c) not in _BIDI_CONTROLS
     )
 
 

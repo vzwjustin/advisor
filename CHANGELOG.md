@@ -7,20 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-05-26
+
+Two combined fix waves. The first (six advisor self-review findings,
+two MEDIUM + four LOW) closes defensive-engineering gaps surfaced by a
+`/advisor` run against this repo. The second (six loader-guard fixes)
+hardens JSON import paths against non-dict input and tightens an
+`ensure_nudge` symlink-handling regression. All 949 existing tests pass
+plus two new bidi regression assertions.
+
 ### Fixed
 
-- `history.load_recent_findings`: skip non-dict JSONL lines instead of raising
-  `AttributeError` on `null` / scalar entries.
-- `checkpoint.load_checkpoint`: reject non-object JSON; skip non-dict batch
-  elements with a warning.
-- `_load_findings_from_input`: warn when `findings` / `findings_in_batch` is not
-  an array (e.g. a path-keyed object).
+- `orchestrate/_fence.py` + `sarif.py`: bidi formatting / override /
+  isolate / mark code points (U+202A–202E, U+2066–2069, U+200E/F,
+  U+2060) now stripped on both `sanitize_inline()` and on
+  `sarif._strip_controls()` — including the `keep_block_whitespace=True`
+  branch used by `pr_comment._sanitize`. Closes the "trojan source"
+  class where a Finding description visually misrepresents the named
+  file or severity to a human reviewer in a rendered GitHub PR comment.
+- `rank.py:_compile_ignore_patterns`: the `filename_re` branch now
+  calls `_check_quantifier_count` before `fnmatch.translate`, matching
+  the three other regex-compilation branches. Closes a ReDoS hole
+  where a hostile `.advisorignore` pattern like
+  `*a*a*a*a*a*a*a*a*a*X` (9 wildcards, above the guard threshold)
+  triggered catastrophic backtracking on Python 3.10/3.11.
+  (Python 3.12+ uses atomic groups in `fnmatch.translate` and is
+  already safe.)
+- `verify.py:_parse_blocks`: continuation lines now accumulate into
+  a `parts: dict[str, list[str]]` and join at flush time, replacing
+  the prior `current[key] = current[key] + " " + stripped` pattern.
+  Eliminates O(n²) string-copy cost on multi-megabyte LLM output that
+  lacks `### Finding` headers — a plausible degraded-output mode that
+  `_STDIN_LIMIT` does not bound for `cmd_baseline` /
+  `_load_findings_from_input` file-source callers.
+- `install.py`: ten `Path.read_text(encoding="utf-8")` call sites
+  (CLAUDE.md install / uninstall / status / ensure_nudge, bundled
+  CHANGELOG, SKILL.md install / install_update_skill / status / badge
+  parse) now route through `_read_text_capped` with explicit byte caps
+  (1 MB for CLAUDE.md and the changelog, 256 KB for SKILL.md). Mirrors
+  the precedent at `check_for_update_cached` (4 KB cap on the update
+  cache). Robustness fix: a pathological-but-self-inflicted CLAUDE.md
+  no longer OOMs the install command.
+- `doctor.py:_check_codex_home`: dead-symlink case now emits
+  `"is a broken symlink (target: ...)"` mirroring `_check_claude_home`,
+  instead of the misleading
+  `"does not exist (will be created on first advisor install)"` —
+  install would actually fail on the dead link, not silently create
+  the dir.
+- `doctor.py:_collect_env_overrides`: `ADVISOR_TEST_COMMAND` value
+  now redacted to the literal placeholder `"<set>"` in both the human
+  `format_report` and the `--json` payload. Closes a credential-leak
+  surface where a user who embedded a secret in
+  `ADVISOR_TEST_COMMAND="pytest --token=secret"` could leak it by
+  pasting `advisor doctor` output into an issue tracker. Presence of
+  the variable is still surfaced; only the value is hidden.
+- `history.load_recent_findings`: skip non-dict JSONL lines instead of
+  raising `AttributeError` on `null` / scalar entries.
+- `checkpoint.load_checkpoint`: reject non-object JSON; skip non-dict
+  batch elements with a warning.
+- `_load_findings_from_input`: warn when `findings` / `findings_in_batch`
+  is not an array (e.g. a path-keyed object).
 - `suppressions._parse_until`: reject non-string `until` values with
   `ValueError`; `_matches_glob` catches `ValueError` at apply time.
-- `ensure_nudge`: symlink / outside-`$HOME` guards run inside the swallow-errors
-  path so unrelated CLI commands do not abort.
-- Web dashboard `max_fixes_per_runner` query accepts `0` (no fix waves), matching
-  `estimate_cost`.
+- `ensure_nudge`: symlink / outside-`$HOME` guards now run inside the
+  swallow-errors path so unrelated CLI commands do not abort.
+- Web dashboard `max_fixes_per_runner` query accepts `0` (no fix waves),
+  matching `estimate_cost`.
+
+### Added
+
+- `tests/test_fence.py::test_sanitize_inline_strips_bidi_controls`
+  and `tests/test_sarif.py::test_strip_controls_strips_bidi_on_both_paths` —
+  regression assertions pinning the bidi-strip behavior on both the
+  inline and block-whitespace paths so a future cleanup cannot silently
+  remove the trojan-source defense.
 
 ## [0.7.3] - 2026-05-23
 

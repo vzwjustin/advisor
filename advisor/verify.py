@@ -309,6 +309,13 @@ def _parse_blocks(text: str) -> list[Finding]:
     """Inner parser shared by the scoped and unscoped public entry points."""
     findings: list[Finding] = []
     current: dict[str, str] = {}
+    # Continuation pieces for each active field, accumulated as a list and
+    # joined at flush time. Replaces the prior ``current[key] = current[key]
+    # + " " + stripped`` pattern, which was O(n²) when an LLM emitted
+    # multi-megabyte output with no field delimiters: every continuation
+    # line copied the growing string. List-append is O(1); the join at
+    # flush is O(n) total.
+    parts: dict[str, list[str]] = {}
     active_key: str | None = None
     # "list" or "plain"; keeps body labels from stealing slots.
     field_style: str | None = None
@@ -316,7 +323,26 @@ def _parse_blocks(text: str) -> list[Finding]:
     in_fence: bool = False  # True while inside a fenced code block (``` or ~~~)
     fence_marker: str | None = None  # opening marker that started the current fence
 
+    def _merge_parts() -> None:
+        """Fold accumulated continuation pieces back into ``current``.
+
+        Idempotent: clears ``parts`` after merging so subsequent calls are
+        no-ops until new content accumulates.
+        """
+        for key, pieces in parts.items():
+            if not pieces:
+                continue
+            joined = " ".join(pieces)
+            existing = current.get(key, "")
+            current[key] = (existing + " " + joined).strip() if existing else joined.strip()
+        parts.clear()
+
+    def _append(key: str, value: str) -> None:
+        """Append a continuation piece to ``parts[key]`` — O(1) per line."""
+        parts.setdefault(key, []).append(value)
+
     def _flush() -> None:
+        _merge_parts()
         finding = _dict_to_finding(current)
         if finding is not None:
             findings.append(finding)
@@ -386,7 +412,7 @@ def _parse_blocks(text: str) -> list[Finding]:
             # Mid-body for a still-incomplete block — treat the H2 line as
             # continuation of the active field so it doesn't vanish.
             if active_key:
-                current[active_key] = (current[active_key] + " " + stripped).strip()
+                _append(active_key, stripped)
             continue
 
         # Primary block delimiter: ### Finding headers from format_findings_block.
@@ -421,7 +447,7 @@ def _parse_blocks(text: str) -> list[Finding]:
             # the line as continuation of the active field so it doesn't
             # vanish into a dropped partial.
             if active_key:
-                current[active_key] = (current[active_key] + " " + stripped).strip()
+                _append(active_key, stripped)
             continue
 
         matched = _match_key(stripped)
@@ -458,11 +484,11 @@ def _parse_blocks(text: str) -> list[Finding]:
                 # Key already set — this label text appeared inside a body
                 # value. Treat as continuation of the active field.
                 if active_key:
-                    current[active_key] = (current[active_key] + " " + stripped).strip()
+                    _append(active_key, stripped)
         elif active_key and stripped and not stripped.startswith("### Finding"):
             # Fence markers are already handled at the top of the loop and
             # never reach here — accumulate everything else into the active field.
-            current[active_key] = (current.get(active_key, "") + " " + stripped).strip()
+            _append(active_key, stripped)
 
     if current:
         _flush()

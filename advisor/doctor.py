@@ -83,6 +83,17 @@ _KNOWN_ENV_VARS = (
     OPT_OUT_ENV,
 )
 
+# Env vars whose values must NOT be surfaced verbatim by the doctor report.
+# ``ADVISOR_TEST_COMMAND`` is a free-form shell string a user might embed a
+# credential into (``pytest --token=secret``); since ``advisor doctor``
+# output is a paste-friendly diagnostic, a literal value here would leak
+# silently. We preserve the *presence* of the variable (key still appears
+# in the report) but substitute the literal placeholder ``<set>`` for the
+# value, so a user can ``echo $ADVISOR_TEST_COMMAND`` themselves when
+# debugging without the diagnostic doing the leak for them.
+_REDACT_ENV_VARS = frozenset({"ADVISOR_TEST_COMMAND"})
+_REDACTED_VALUE = "<set>"
+
 
 def _check_python_version() -> Check:
     # pyproject.toml gates Python >= 3.10 via requires-python at install
@@ -155,6 +166,22 @@ def _check_codex_home() -> Check:
             )
         # Fall through to the directory checks below — a within-$HOME
         # symlink to a regular dir is healthy.
+    if codex_dir.is_symlink() and not codex_dir.exists():
+        # Broken symlink (resolved to within-$HOME above, but target is
+        # missing). ``advisor install`` will fail until the target exists
+        # or the symlink is removed — mirror ``_check_claude_home``'s
+        # explicit message so the diagnostic doesn't claim the dir
+        # "will be created on first install" when in fact install will
+        # refuse to write through the dead link.
+        try:
+            target = os.readlink(codex_dir)
+        except OSError as exc:
+            target = f"<unreadable: {exc}>"
+        return Check(
+            "codex-home",
+            "warn",
+            f"{codex_dir} is a broken symlink (target: {target})",
+        )
     if not codex_dir.exists():
         return Check(
             "codex-home",
@@ -268,17 +295,21 @@ def _collect_env_overrides() -> dict[str, str]:
     ``"false"`` — doctor reports what the environment contains; it does
     not interpret the values.
 
-    .. warning::
-
-       Values are surfaced verbatim by :func:`format_report` (via
-       ``repr()``) and by ``advisor doctor --json``. ``ADVISOR_TEST_COMMAND``
-       in particular is a free-form shell string — do NOT embed secrets,
-       tokens, or credentials in it (e.g. ``pytest --token=...``). Use
-       a wrapper script that reads the secret from a file or keychain
-       instead, so the doctor report and any shared diagnostics stay
-       free of sensitive material.
+    Values for keys in :data:`_REDACT_ENV_VARS` are replaced with the
+    literal placeholder ``"<set>"`` (presence is preserved, the actual
+    value is not). ``ADVISOR_TEST_COMMAND`` is the current redacted key
+    because it is a free-form shell string a user may have embedded a
+    secret into (``pytest --token=...``); ``advisor doctor`` output is a
+    paste-friendly diagnostic, so the value must not leak through it.
+    Users can ``echo $ADVISOR_TEST_COMMAND`` themselves when debugging.
     """
-    return {k: val for k in _KNOWN_ENV_VARS if (val := os.environ.get(k)) is not None}
+    overrides: dict[str, str] = {}
+    for k in _KNOWN_ENV_VARS:
+        val = os.environ.get(k)
+        if val is None:
+            continue
+        overrides[k] = _REDACTED_VALUE if k in _REDACT_ENV_VARS else val
+    return overrides
 
 
 def run_doctor(

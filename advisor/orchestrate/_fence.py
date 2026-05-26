@@ -19,7 +19,12 @@ _LINEBREAK_TO_SPACE = (
 )
 # Zero-width / invisible code points dropped entirely so a payload using
 # them to smuggle invisible content past a downstream consumer leaves no
-# trace.
+# trace. The bidi formatting/override/isolate/mark block (U+202A–202E,
+# U+2066–2069, U+200E/F, U+2060) is included here as a trojan-source
+# defense: those code points reorder rendered text without changing the
+# byte sequence the LLM/parser sees, so a Finding description rendered
+# into a GitHub PR comment can visually misrepresent the named file or
+# severity to a human reviewer.
 _INVISIBLE_TO_DROP = (
     "\x00",
     "​",
@@ -27,6 +32,18 @@ _INVISIBLE_TO_DROP = (
     "‍",
     "﻿",
     "­",
+    "‪",  # U+202A LRE
+    "‫",  # U+202B RLE
+    "‬",  # U+202C PDF
+    "‭",  # U+202D LRO
+    "‮",  # U+202E RLO
+    "⁠",  # U+2060 WJ
+    "‎",  # U+200E LRM
+    "‏",  # U+200F RLM
+    "⁦",  # U+2066 LRI
+    "⁧",  # U+2067 RLI
+    "⁨",  # U+2068 FSI
+    "⁩",  # U+2069 PDI
 )
 
 

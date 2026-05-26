@@ -32,6 +32,21 @@ _BADGE_RE = re.compile(r"<!--\s*advisor:([^\s>]+)\s*-->")
 #: ``_json.load(resp)`` and exhaust the process before the timeout fires.
 _PYPI_MAX_BYTES = 1_048_576
 
+#: Byte cap for the user's ``~/.claude/CLAUDE.md`` and the bundled CHANGELOG
+#: when read into memory during install/uninstall/status. Without a cap, a
+#: pathological-but-self-inflicted CLAUDE.md (e.g. a hand-edited file that
+#: grew without bound) would OOM the install command. 1 MB is well above
+#: any realistic CLAUDE.md (the bundled nudge is ~3 KB) but well below
+#: anything that would exhaust install-time memory. Mirrors the precedent
+#: at :func:`check_for_update_cached` (4 KB cap on the cache file).
+_CLAUDE_MD_MAX_BYTES = 1_048_576
+
+#: Byte cap for the bundled / installed ``SKILL.md`` files. The bundled
+#: skill body is ~10 KB; 256 KB leaves room for future skill growth while
+#: still capping a runaway file. Same robustness rationale as
+#: :data:`_CLAUDE_MD_MAX_BYTES`.
+_SKILL_MD_MAX_BYTES = 262_144
+
 #: Response-size cap for the raw GitHub CHANGELOG.md fetch. Same rationale as
 #: ``_PYPI_MAX_BYTES``: ``timeout=`` doesn't bound body size. A truncated read
 #: yields valid UTF-8 prefix text the caller's version-section regex parses
@@ -114,8 +129,8 @@ def _read_changelog() -> str | None:
     """Return the bundled CHANGELOG text, or ``None`` if unreadable."""
     for candidate in _CHANGELOG_CANDIDATES:
         try:
-            return candidate.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+            return _read_text_capped(candidate, _CLAUDE_MD_MAX_BYTES, encoding="utf-8")
+        except (OSError, UnicodeDecodeError, ValueError):
             continue
     return None
 
@@ -303,8 +318,8 @@ def get_installed_skill_version(path: Path | None = None) -> str | None:
     """
     target = path or default_skill_path()
     try:
-        return parse_badge(target.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError):
+        return parse_badge(_read_text_capped(target, _SKILL_MD_MAX_BYTES, encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError):
         return None
 
 
@@ -558,7 +573,11 @@ def install(path: Path | None = None, body: str = NUDGE_BODY) -> InstallResult:
             raise OSError(f"refusing to install nudge outside $HOME: {resolved}")
         target = resolved
     target.parent.mkdir(parents=True, exist_ok=True)
-    current = target.read_text(encoding="utf-8") if target.exists() else ""
+    current = (
+        _read_text_capped(target, _CLAUDE_MD_MAX_BYTES, encoding="utf-8")
+        if target.exists()
+        else ""
+    )
     new_contents, action = apply_nudge(current, body)
     if action != InstallAction.UNCHANGED.value:
         _atomic_write_text(target, new_contents)
@@ -626,7 +645,11 @@ def ensure_nudge(
             target = target.resolve()
             if not target.is_relative_to(Path.home().resolve()):
                 raise OSError(f"refusing to install nudge outside $HOME: {target}")
-        current = target.read_text(encoding="utf-8") if target.exists() else ""
+        current = (
+            _read_text_capped(target, _CLAUDE_MD_MAX_BYTES, encoding="utf-8")
+            if target.exists()
+            else ""
+        )
         expected_block = render_block(NUDGE_BODY)
         if (
             START_MARKER not in current
@@ -634,11 +657,14 @@ def ensure_nudge(
             or expected_block not in current
         ):
             nudge_result = install(path=target, body=NUDGE_BODY)
-    except (OSError, UnicodeDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
         # Warnings for auto-install failures are non-fatal by design — we
         # don't want `advisor plan` to bail because ~/.claude is readonly.
         # But stay visible: use the warning glyph, not dim text, so a user
         # who misses the warning once will still see it on the next run.
+        # ValueError covers the byte-cap-exceeded path from
+        # :func:`_read_text_capped` — a pathological-but-self-inflicted
+        # CLAUDE.md should warn, not crash the CLI.
         msg = f"nudge write failed ({target}): {exc}"
         errors.append(msg)
         print(_style.warning_box(msg), file=out)
@@ -650,7 +676,7 @@ def ensure_nudge(
         skill_res = install_skill(path=skill_path)
         skill_target = skill_res.path
         skill_result_action = skill_res.action
-    except (OSError, UnicodeDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
         msg = f"skill write failed ({skill_target}): {exc}"
         errors.append(msg)
         print(_style.warning_box(msg), file=out)
@@ -663,7 +689,7 @@ def ensure_nudge(
         update_skill_res = install_update_skill(path=update_arg)
         update_skill_target = update_skill_res.path
         update_skill_result_action = update_skill_res.action
-    except (OSError, UnicodeDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
         msg = f"update-skill write failed ({update_skill_target}): {exc}"
         errors.append(msg)
         print(_style.warning_box(msg), file=out)
@@ -723,7 +749,7 @@ def uninstall(path: Path | None = None) -> InstallResult:
     target = path or default_claude_md()
     if not target.exists():
         return InstallResult(path=target, action=InstallAction.ABSENT.value)
-    current = target.read_text(encoding="utf-8")
+    current = _read_text_capped(target, _CLAUDE_MD_MAX_BYTES, encoding="utf-8")
     new_contents, action = remove_nudge(current)
     if action == InstallAction.REMOVED.value:
         _atomic_write_text(target, new_contents)
@@ -788,8 +814,8 @@ def install_skill(
 
     if target.exists():
         try:
-            current = target.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+            current = _read_text_capped(target, _SKILL_MD_MAX_BYTES, encoding="utf-8")
+        except (OSError, UnicodeDecodeError, ValueError):
             current = ""
         if current == body:
             return InstallResult(path=target, action=InstallAction.UNCHANGED.value)
@@ -842,8 +868,8 @@ def install_update_skill(
 
     if target.exists():
         try:
-            current = target.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+            current = _read_text_capped(target, _SKILL_MD_MAX_BYTES, encoding="utf-8")
+        except (OSError, UnicodeDecodeError, ValueError):
             current = ""
         if current == body:
             return InstallResult(path=target, action=InstallAction.UNCHANGED.value)
@@ -885,10 +911,10 @@ def status(
     nudge_current = False
     if nudge_target.exists():
         try:
-            text = nudge_target.read_text(encoding="utf-8")
+            text = _read_text_capped(nudge_target, _CLAUDE_MD_MAX_BYTES, encoding="utf-8")
             nudge_present = START_MARKER in text and END_MARKER in text
             nudge_current = nudge_present and expected_block in text
-        except (OSError, UnicodeDecodeError):
+        except (OSError, UnicodeDecodeError, ValueError):
             pass
 
     # Compare with trailing-newline differences ignored to match
@@ -899,20 +925,20 @@ def status(
     skill_current = False
     if skill_present:
         try:
-            skill_current = skill_target.read_text(encoding="utf-8").rstrip(
-                "\n"
-            ) == SKILL_MD.rstrip("\n")
-        except (OSError, UnicodeDecodeError):
+            skill_current = _read_text_capped(
+                skill_target, _SKILL_MD_MAX_BYTES, encoding="utf-8"
+            ).rstrip("\n") == SKILL_MD.rstrip("\n")
+        except (OSError, UnicodeDecodeError, ValueError):
             skill_current = False
 
     update_skill_present = update_skill_target.exists()
     update_skill_current = False
     if update_skill_present:
         try:
-            update_skill_current = update_skill_target.read_text(encoding="utf-8").rstrip(
-                "\n"
-            ) == SKILL_MD_UPDATE.rstrip("\n")
-        except (OSError, UnicodeDecodeError):
+            update_skill_current = _read_text_capped(
+                update_skill_target, _SKILL_MD_MAX_BYTES, encoding="utf-8"
+            ).rstrip("\n") == SKILL_MD_UPDATE.rstrip("\n")
+        except (OSError, UnicodeDecodeError, ValueError):
             update_skill_current = False
 
     return Status(

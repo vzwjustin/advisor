@@ -14,6 +14,7 @@ from hypothesis import strategies as st
 from advisor.sarif import (
     SARIF_SCHEMA_URI,
     SARIF_VERSION,
+    _strip_controls,
     findings_to_sarif,
     synthesize_rule_id,
 )
@@ -584,3 +585,16 @@ def test_fuzz_synthesize_rule_id_is_stable(severity: str, description: str) -> N
     b = synthesize_rule_id(severity, description)
     assert a == b
     assert a.startswith(f"advisor/{severity.lower()}/")
+
+
+def test_strip_controls_strips_bidi_on_both_paths():
+    # Bidi formatting / override / isolate / mark code points must be
+    # dropped on BOTH the inline path (``keep_block_whitespace=False``,
+    # used for ``shortDescription`` / ``message.text``) and the block
+    # path (``keep_block_whitespace=True``, used by ``pr_comment._sanitize``
+    # to preserve newlines inside Evidence / Fix). Without the block-path
+    # branch a Finding description renders into a GitHub PR comment that
+    # visually misrepresents the named file or severity to a human
+    # reviewer — the "trojan source" attack class.
+    assert _strip_controls("text‮evil", keep_block_whitespace=False) == "textevil"
+    assert _strip_controls("text‮evil", keep_block_whitespace=True) == "textevil"

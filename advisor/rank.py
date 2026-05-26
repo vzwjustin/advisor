@@ -667,7 +667,22 @@ def _compile_ignore_patterns(patterns: list[str]) -> tuple[_IgnorePatternMatcher
         filename_re: re.Pattern[str] | None = None
         if not dir_re and not recursive_re and not slash_re:
             try:
+                # ReDoS guard mirrors the dir_re branch above:
+                # ``fnmatch.translate`` emits non-atomic ``.*`` groups on
+                # Python 3.10/3.11, so a pattern like
+                # ``*a*a*a*a*a*a*a*a*a*X`` from a hostile ``.advisorignore``
+                # causes catastrophic backtracking on non-matching
+                # filenames. 3.12+ uses atomic groups and is safe, but the
+                # project supports >=3.10 so the guard must run here too.
+                _check_quantifier_count(pattern)
                 filename_re = re.compile(fnmatch.translate(pattern))
+            except GlobPatternError as exc:
+                warnings.warn(
+                    f"ignoring unsafe pattern {pattern!r}: {exc}",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                filename_re = re.compile(r"$.^")
             except (re.error, TypeError):
                 filename_re = re.compile(r"$.^")
 
