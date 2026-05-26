@@ -119,7 +119,7 @@ def _matches_glob(file_path: str, pattern: str) -> bool:
     p = PurePath(file_path).as_posix()
     try:
         return bool(_double_star_to_regex(pattern).match(p))
-    except re.error as exc:
+    except (ValueError, re.error) as exc:
         warnings.warn(
             f"malformed glob pattern {pattern!r}: {exc}; falling back to "
             "fnmatch semantics (single ``*`` will cross ``/``)",
@@ -136,6 +136,10 @@ def _parse_until(raw: str | None, *, context: str) -> tuple[str | None, bool]:
     """Return (normalized_until, expired) or raise ValueError on bad shape."""
     if raw is None or raw == "":
         return None, False
+    if not isinstance(raw, str):
+        raise ValueError(
+            f"{context}: until must be a string (YYYY-MM-DD), got {type(raw).__name__}"
+        )
     # Reject datetime-shaped strings up front. Python 3.11+ ``date.fromisoformat``
     # accepts full ISO datetimes (e.g. ``2026-09-01T00:00:00+05:30``) and
     # silently drops the time and timezone, which would store an

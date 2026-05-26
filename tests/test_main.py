@@ -61,6 +61,32 @@ class TestCmdPromptVerifyEmptyStdin:
 
 
 class TestLoadFindingsFromInput:
+    def test_json_findings_must_be_array(self, tmp_path, capsys):
+        import json
+
+        from advisor.__main__ import _load_findings_from_input
+
+        p = tmp_path / "findings-dict.json"
+        p.write_text(
+            json.dumps(
+                {
+                    "findings": {
+                        "a.py": {
+                            "file_path": "a.py",
+                            "severity": "HIGH",
+                            "description": "d",
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        findings, rc = _load_findings_from_input(p)
+        assert rc is None
+        assert findings == []
+        err = capsys.readouterr().err
+        assert "must be an array" in err
+
     def test_json_rule_id_must_be_string(self, tmp_path):
         import json
 

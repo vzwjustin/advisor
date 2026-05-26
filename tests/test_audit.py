@@ -304,6 +304,20 @@ class TestAuditTranscriptScopeDrift:
         assert [f.file_path for f in report.findings_in_batch] == ["only.py"]
         assert [f.file_path for f in report.findings_out_of_batch] == ["other.py"]
 
+    def test_non_dict_batch_entry_is_skipped(self):
+        """Corrupt batch elements must not crash scope collection."""
+        cp = _mk_checkpoint(batch_files=[["auth.py"]])
+        cp.batches.append(1)  # type: ignore[arg-type]
+        transcript = """### Finding 1
+- **File**: auth.py
+- **Severity**: HIGH
+- **Description**: d
+- **Evidence**: e
+- **Fix**: f
+"""
+        report = audit_transcript(transcript, cp)
+        assert [f.file_path for f in report.findings_in_batch] == ["auth.py"]
+
 
 class TestAuditToDict:
     def test_round_trips_through_json(self):

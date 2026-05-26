@@ -385,6 +385,13 @@ def load_recent_findings(history_path: Path, *, limit: int = 500) -> list[Histor
             continue
         try:
             obj = json.loads(stripped)
+            if not isinstance(obj, dict):
+                warnings.warn(
+                    f"skipping non-dict history entry at {history_path}:{line_num}",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                continue
             for _f in ("timestamp", "file_path", "severity", "description", "status", "run_id"):
                 if not isinstance(obj.get(_f), str):
                     raise TypeError(f"{_f} must be str, got {type(obj.get(_f)).__name__}")

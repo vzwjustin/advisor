@@ -257,7 +257,14 @@ def _collect_batch_files(cp: Checkpoint) -> set[str]:
     """
     files: set[str] = set()
     if cp.batches:
-        for batch in cp.batches:
+        # ``Checkpoint.batches`` is typed as dicts, but callers may mutate
+        # the list or construct a checkpoint without ``load_checkpoint``.
+        from typing import cast
+
+        for batch_obj in cast(list[object], cp.batches):
+            if not isinstance(batch_obj, dict):
+                continue
+            batch = batch_obj
             raw_tasks = batch.get("tasks", [])
             if not isinstance(raw_tasks, list):
                 continue

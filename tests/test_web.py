@@ -176,6 +176,14 @@ class TestCostPayload:
         assert payload["task_count"] == 25
         assert payload["estimate"]["runner_count"] == 20
 
+    def test_max_fixes_zero_matches_estimate_cost(self, tmp_path):
+        (tmp_path / "auth.py").write_text("password = 'x'\n" * 100)
+        state = build_app_state(tmp_path, min_priority=1)
+        zero = _cost_payload(state, {"max_fixes_per_runner": ["0"]})
+        one = _cost_payload(state, {"max_fixes_per_runner": ["1"]})
+        assert zero["estimate"]["cost_usd_min"] == zero["estimate"]["cost_usd_max"]
+        assert zero["estimate"]["cost_usd_max"] < one["estimate"]["cost_usd_max"]
+
 
 class TestHistoryPayload:
     def test_empty_history(self, tmp_path):

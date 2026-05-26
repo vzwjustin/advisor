@@ -116,6 +116,47 @@ class TestSaveAndLoad:
         with pytest.raises(ValueError):
             load_checkpoint(tmp_path, "bad")
 
+    def test_non_object_checkpoint_raises_value_error(self, tmp_path: Path) -> None:
+        path = checkpoint_path(tmp_path, "null")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("null", encoding="utf-8")
+        with pytest.raises(ValueError, match="expected a JSON object"):
+            load_checkpoint(tmp_path, "null")
+
+    def test_non_dict_batch_entry_skipped_on_load(self, tmp_path: Path) -> None:
+        import json
+
+        path = checkpoint_path(tmp_path, "bad-batch")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "run_id": "bad-batch",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "target": str(tmp_path),
+            "team_name": "t",
+            "file_types": "*.py",
+            "min_priority": 3,
+            "max_runners": 5,
+            "advisor_model": "opus",
+            "runner_model": "sonnet",
+            "max_fixes_per_runner": 5,
+            "test_command": "",
+            "context": "",
+            "tasks": [],
+            "batches": [
+                42,
+                {
+                    "batch_id": 1,
+                    "complexity": "medium",
+                    "tasks": [{"file_path": "a.py", "priority": 3, "prompt": ""}],
+                },
+            ],
+        }
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        with pytest.warns(UserWarning, match="non-dict batch entry"):
+            cp = load_checkpoint(tmp_path, "bad-batch")
+        assert len(cp.batches) == 1
+        assert cp.batches[0]["batch_id"] == 1
+
     def test_missing_required_field_raises(self, tmp_path: Path) -> None:
         path = checkpoint_path(tmp_path, "missing")
         path.parent.mkdir(parents=True, exist_ok=True)

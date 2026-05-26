@@ -38,6 +38,14 @@ def _write_jsonl(path: Path, lines: list[dict[str, object]]) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+class TestMatchesGlob:
+    def test_value_error_falls_back_to_fnmatch(self) -> None:
+        from advisor.suppressions import _matches_glob
+
+        with pytest.warns(UserWarning, match="malformed glob pattern"):
+            assert _matches_glob("src/a.py", "*" * 50) is True
+
+
 class TestLoader:
     def test_missing_file_returns_empty(self, tmp_path: Path) -> None:
         assert load_suppressions(tmp_path / "absent.jsonl") == ()
@@ -182,6 +190,22 @@ class TestLoader:
             ],
         )
         with pytest.raises(ValueError, match="invalid file_glob"):
+            load_suppressions(p)
+
+    def test_numeric_until_raises_value_error(self, tmp_path: Path) -> None:
+        p = tmp_path / "s.jsonl"
+        _write_jsonl(
+            p,
+            [
+                {
+                    "rule_id": "advisor/medium/abc",
+                    "file": "x.py",
+                    "until": 20260901,
+                    "reason": "r",
+                },
+            ],
+        )
+        with pytest.raises(ValueError, match="until must be a string"):
             load_suppressions(p)
 
     def test_non_dict_jsonl_line_warns_and_skips(self, tmp_path: Path) -> None:
