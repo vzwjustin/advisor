@@ -132,7 +132,7 @@ A shutdown_request queued in the mailbox survives the old agent's death
 and will be delivered to any new agent with the same name on the same
 team — causing it to immediately shut down. TeamDelete clears all mailboxes.
 
-User sees only: `**Advisor mode**` → `[TeamCreate]` → `[Agent...]`
+User sees only: `**Advisor mode**` → `[TeamDelete]` → `[TeamCreate]` → `[Agent...]`
 
 ## Architecture
 

@@ -1,6 +1,6 @@
 name: Advisor Review
 
-# Reusable workflow: `uses: vzwjustin/advisor/.github/workflows/advisor.yml@v0.7.2`
+# Reusable workflow: `uses: vzwjustin/advisor/.github/workflows/advisor.yml@v0.7.3`
 #
 # Runs `advisor plan` on the caller's repo and uploads the resulting SARIF
 # 2.1.0 document to GitHub Code Scanning. On pull_request events, scope is
@@ -62,15 +62,17 @@ jobs:
           INPUT_TARGET: ${{ inputs.target }}
           INPUT_PRESET: ${{ inputs.preset }}
           INPUT_MIN_PRIORITY: ${{ inputs.min-priority }}
+          INPUT_FAIL_ON: ${{ inputs.fail-on }}
+          PR_BASE_REF: ${{ github.base_ref }}
         run: |
-          if [ "${{ inputs.fail-on }}" != "never" ]; then
-            echo "::warning::fail-on='${{ inputs.fail-on }}' is not supported in the reusable plan workflow (plan does not gate on findings). To gate on findings, pair with a subsequent 'advisor audit --fail-on LEVEL' step instead."
+          if [ "$INPUT_FAIL_ON" != "never" ]; then
+            echo "::warning::fail-on='$INPUT_FAIL_ON' is not supported in the reusable plan workflow (plan does not gate on findings). To gate on findings, pair with a subsequent 'advisor audit --fail-on LEVEL' step instead."
           fi
           SINCE_ARG=()
           if [ -n "$INPUT_SINCE" ]; then
             SINCE_ARG=("--since" "$INPUT_SINCE")
           elif [ "${{ github.event_name }}" = "pull_request" ]; then
-            SINCE_ARG=("--since" "origin/${{ github.base_ref }}")
+            SINCE_ARG=("--since" "origin/$PR_BASE_REF")
           fi
           PRESET_ARG=()
           if [ -n "$INPUT_PRESET" ]; then

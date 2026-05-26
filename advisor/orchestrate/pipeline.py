@@ -37,7 +37,8 @@ Suggested runners: ~{config.max_runners} | Min priority: P{config.min_priority}
 > team-lead relays each report verbatim to the advisor. End by shutting
 > down each teammate individually, then `TeamDelete()`.
 
-### Step 1: Create team
+### Step 1: Reset and create team
+TeamDelete()
 TeamCreate(name="{team}")
 
 ### Step 2: Spawn advisor FIRST (no runners yet)

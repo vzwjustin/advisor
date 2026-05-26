@@ -389,6 +389,13 @@ class TestRenderPipeline:
         assert "sonnet" in output
         assert "haiku" not in output
 
+    def test_starts_with_team_delete_before_create(self):
+        config = default_team_config("/src")
+        output = render_pipeline(config)
+
+        assert "TeamDelete()" in output
+        assert output.index("TeamDelete()") < output.index('TeamCreate(name="review")')
+
 
 class TestLargeFileConfig:
     def test_large_file_line_threshold_default(self):

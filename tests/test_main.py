@@ -185,8 +185,8 @@ class TestNudgeSkipCommands:
     """Only commands that explicitly manage the nudge should skip ensure_nudge.
 
     The first-run auto-install behavior (documented in the README) relies on
-    every OTHER subcommand triggering ``ensure_nudge()`` — including dry-run
-    / preview commands like ``plan`` and ``status``. ``ensure_nudge`` is
+    every OTHER subcommand triggering ``ensure_nudge()`` — including preview
+    commands like ``plan`` and ``status``. ``ensure_nudge`` is
     idempotent, so firing it on each command is harmless after the first.
     """
 
@@ -417,6 +417,34 @@ class TestCmdStatusStrict:
 
         assert cli.main(["status", "--strict"]) == 3
 
+    def test_status_auto_install_respects_custom_paths(self, tmp_path, monkeypatch, capsys):
+        from advisor import __main__ as cli
+
+        from .conftest import isolate_home
+
+        isolate_home(monkeypatch, tmp_path / "home")
+        nudge = tmp_path / "custom" / "CLAUDE.md"
+        skill = tmp_path / "custom" / "skills" / "advisor" / "SKILL.md"
+        update_skill = tmp_path / "custom" / "skills" / "advisor-update" / "SKILL.md"
+
+        rc = cli.main(
+            [
+                "status",
+                "--path",
+                str(nudge),
+                "--skill-path",
+                str(skill),
+                "--quiet",
+            ]
+        )
+
+        assert rc == 0
+        assert nudge.exists()
+        assert skill.exists()
+        assert update_skill.exists()
+        assert not (tmp_path / "home" / ".claude" / "skills" / "advisor" / "SKILL.md").exists()
+        capsys.readouterr()
+
 
 class TestCmdInstallUninstall:
     """End-to-end install/uninstall with overridden paths (safe tmp_path)."""
@@ -427,6 +455,7 @@ class TestCmdInstallUninstall:
         parser = build_parser()
         claude_md = tmp_path / "CLAUDE.md"
         skill_md = tmp_path / "skills" / "advisor" / "SKILL.md"
+        update_skill_md = tmp_path / "skills" / "advisor-update" / "SKILL.md"
 
         install_args = parser.parse_args(
             [
@@ -441,6 +470,7 @@ class TestCmdInstallUninstall:
         assert cmd_install(install_args) == 0
         assert claude_md.exists()
         assert skill_md.exists()
+        assert update_skill_md.exists()
 
         uninstall_args = parser.parse_args(
             [
@@ -455,6 +485,7 @@ class TestCmdInstallUninstall:
         assert cmd_uninstall(uninstall_args) == 0
         # The CLAUDE.md file remains (stripped of the nudge), but the skill is removed.
         assert not skill_md.exists()
+        assert not update_skill_md.exists()
 
     def test_install_strict_exits_3_on_noop(self, tmp_path):
         from advisor.__main__ import cmd_install
@@ -1014,6 +1045,15 @@ class TestCmdPromptHappyPaths:
         assert rc == 0
         out = capsys.readouterr().out
         assert "/advisor" in out
+
+    def test_protocol_starts_with_team_delete(self, capsys):
+        from advisor import __main__ as cli
+
+        rc = cli.main(["protocol", "--quiet"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "TeamDelete()" in out
+        assert out.index("TeamDelete()") < out.index('TeamCreate(name="review")')
 
 
 class TestCompletionHintPackageName:

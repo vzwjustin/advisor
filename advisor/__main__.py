@@ -70,6 +70,7 @@ from .install import (
     parse_changelog_sections,
     uninstall_skill,
     uninstall_update_skill,
+    update_skill_path_for,
 )
 from .install import (
     install as install_nudge,
@@ -1427,7 +1428,12 @@ def cmd_status(args: argparse.Namespace) -> int:
     """Print a colored health summary of the local advisor install."""
     nudge_target = Path(args.path) if args.path else None
     skill_target = Path(args.skill_path) if args.skill_path else None
-    s = get_status(nudge_path=nudge_target, skill_path=skill_target)
+    update_skill_target = update_skill_path_for(skill_target) if skill_target else None
+    s = get_status(
+        nudge_path=nudge_target,
+        skill_path=skill_target,
+        update_skill_path=update_skill_target,
+    )
     installed = get_installed_skill_version(path=skill_target)
     update_ok = s.update_skill is None or (s.update_skill.present and s.update_skill.current)
     healthy = (
@@ -1463,6 +1469,7 @@ def _run_install_op(
     """
     nudge_target = Path(args.path) if args.path else None
     skill_target = Path(args.skill_path) if args.skill_path else None
+    update_skill_target = update_skill_path_for(skill_target) if skill_target else None
     quiet = getattr(args, "quiet", False)
 
     try:
@@ -1488,7 +1495,7 @@ def _run_install_op(
 
         if update_skill_fn is not None:
             try:
-                update_skill_result = update_skill_fn()
+                update_skill_result = update_skill_fn(path=update_skill_target)
             except (OSError, UnicodeDecodeError) as exc:
                 print(
                     _style.error_box(f"update-skill: {exc}", stream=sys.stderr),
@@ -1558,7 +1565,12 @@ def cmd_install(args: argparse.Namespace) -> int:
     if args.check:
         nudge_target = Path(args.path) if args.path else None
         skill_target = Path(args.skill_path) if args.skill_path else None
-        s = get_status(nudge_path=nudge_target, skill_path=skill_target)
+        update_skill_target = update_skill_path_for(skill_target) if skill_target else None
+        s = get_status(
+            nudge_path=nudge_target,
+            skill_path=skill_target,
+            update_skill_path=update_skill_target,
+        )
         installed = get_installed_skill_version(path=skill_target)
         quiet = getattr(args, "quiet", False)
         if getattr(args, "json", False):
@@ -1601,7 +1613,9 @@ Strict sequence for any Claude Code or Codex session using the /advisor skill.
 Deviating (e.g. shutting down with broadcast `"*"`, forgetting TeamDelete,
 or spawning runners before the advisor) breaks the pipeline.
 
-1. TeamCreate(name="review")
+1. Reset and create the team:
+   TeamDelete()
+   TeamCreate(name="review")
 
 2. Spawn advisor FIRST (no runners yet):
    Agent(name="advisor", description="Investigate, rank, and dispatch runners",
@@ -3162,7 +3176,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_status = sub.add_parser(
         "status",
-        help="Print a health summary of the advisor install (writes nothing)",
+        help="Print a health summary of the advisor install (first run may auto-install)",
     )
     p_status.add_argument("--path", default="", help="Override target CLAUDE.md path")
     p_status.add_argument(
@@ -3186,7 +3200,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_doctor = sub.add_parser(
         "doctor",
         help=(
-            "Extended diagnostic: install status + git/claude/python/env checks (writes nothing)"
+            "Extended diagnostic: install status + git/claude/python/env checks "
+            "(first run may auto-install)"
         ),
     )
     p_doctor.add_argument("--path", default="", help="Override target CLAUDE.md path")
@@ -3237,7 +3252,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_protocol = sub.add_parser(
         "protocol",
-        help="Print the strict team-lifecycle protocol (TeamCreate → shutdowns → TeamDelete)",
+        help="Print the strict team-lifecycle protocol (TeamDelete → TeamCreate → shutdowns)",
     )
     p_protocol.add_argument(
         "--json", action="store_true", help='Emit protocol as JSON {"text": ...}'
@@ -3550,7 +3565,7 @@ def build_parser() -> argparse.ArgumentParser:
 # `install` / `uninstall` manage the nudge + skill explicitly, so calling
 # ``ensure_nudge()`` before them is redundant (and would produce a confusing
 # setup-complete banner right before the user's actual install command runs).
-# Every other subcommand — including dry-run / read-only ones like ``status``,
+# Every other subcommand — including preview commands like ``status``,
 # ``plan``, ``doctor`` — triggers the first-run setup so the README claim
 # "The first run wires up ~/.claude/CLAUDE.md automatically" actually holds.
 # ``ensure_nudge`` is itself idempotent: on every run after the first it
@@ -3600,7 +3615,9 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 0
     if args.command not in _NUDGE_SKIP_COMMANDS:
-        ensure_nudge()
+        nudge_target = Path(args.path) if getattr(args, "path", "") else None
+        skill_target = Path(args.skill_path) if getattr(args, "skill_path", "") else None
+        ensure_nudge(path=nudge_target, skill_path=skill_target)
     try:
         rc = args.func(args)
         return int(rc) if rc is not None else 0
