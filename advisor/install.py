@@ -21,6 +21,31 @@ from ._fs import atomic_write_text as _shared_atomic_write
 from ._fs import read_text_capped as _read_text_capped
 from .skill_asset import SKILL_MD, SKILL_MD_UPDATE
 
+
+def _read_text_capped_lf(path: Path, max_bytes: int) -> str:
+    """Like :func:`_read_text_capped` but normalizes CRLF / CR line endings to LF.
+
+    :func:`_read_text_capped` is binary-mode by design (byte caps must be
+    measured against raw bytes), so it preserves whatever line endings the
+    file holds on disk. On Windows, :meth:`Path.write_text` translates
+    ``\\n`` to ``\\r\\n``; a subsequent exact-equality compare against a
+    string literal embedded in source code (which has LF endings on every
+    platform) would always mismatch. The previous ``target.read_text``
+    path implicitly normalized via Python's text-mode universal-newlines.
+    This helper restores that behavior for the install/status equality
+    comparisons against bundled ``SKILL_MD`` / ``SKILL_MD_UPDATE``.
+
+    Always uses ``encoding="utf-8"`` — the install path never expects a
+    BOM, and ``utf-8-sig`` (the cap helper's default) would silently
+    strip one, masking corruption.
+    """
+    return (
+        _read_text_capped(path, max_bytes, encoding="utf-8")
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+    )
+
+
 #: Matches ``<!-- advisor:0.4.0 -->``; used to extract installed skill version
 #: without hashing or diffing the whole file.
 _BADGE_RE = re.compile(r"<!--\s*advisor:([^\s>]+)\s*-->")
@@ -129,7 +154,7 @@ def _read_changelog() -> str | None:
     """Return the bundled CHANGELOG text, or ``None`` if unreadable."""
     for candidate in _CHANGELOG_CANDIDATES:
         try:
-            return _read_text_capped(candidate, _CLAUDE_MD_MAX_BYTES, encoding="utf-8")
+            return _read_text_capped_lf(candidate, _CLAUDE_MD_MAX_BYTES)
         except (OSError, UnicodeDecodeError, ValueError):
             continue
     return None
@@ -318,7 +343,7 @@ def get_installed_skill_version(path: Path | None = None) -> str | None:
     """
     target = path or default_skill_path()
     try:
-        return parse_badge(_read_text_capped(target, _SKILL_MD_MAX_BYTES, encoding="utf-8"))
+        return parse_badge(_read_text_capped_lf(target, _SKILL_MD_MAX_BYTES))
     except (OSError, UnicodeDecodeError, ValueError):
         return None
 
@@ -573,9 +598,7 @@ def install(path: Path | None = None, body: str = NUDGE_BODY) -> InstallResult:
             raise OSError(f"refusing to install nudge outside $HOME: {resolved}")
         target = resolved
     target.parent.mkdir(parents=True, exist_ok=True)
-    current = (
-        _read_text_capped(target, _CLAUDE_MD_MAX_BYTES, encoding="utf-8") if target.exists() else ""
-    )
+    current = _read_text_capped_lf(target, _CLAUDE_MD_MAX_BYTES) if target.exists() else ""
     new_contents, action = apply_nudge(current, body)
     if action != InstallAction.UNCHANGED.value:
         _atomic_write_text(target, new_contents)
@@ -643,11 +666,7 @@ def ensure_nudge(
             target = target.resolve()
             if not target.is_relative_to(Path.home().resolve()):
                 raise OSError(f"refusing to install nudge outside $HOME: {target}")
-        current = (
-            _read_text_capped(target, _CLAUDE_MD_MAX_BYTES, encoding="utf-8")
-            if target.exists()
-            else ""
-        )
+        current = _read_text_capped_lf(target, _CLAUDE_MD_MAX_BYTES) if target.exists() else ""
         expected_block = render_block(NUDGE_BODY)
         if (
             START_MARKER not in current
@@ -747,7 +766,7 @@ def uninstall(path: Path | None = None) -> InstallResult:
     target = path or default_claude_md()
     if not target.exists():
         return InstallResult(path=target, action=InstallAction.ABSENT.value)
-    current = _read_text_capped(target, _CLAUDE_MD_MAX_BYTES, encoding="utf-8")
+    current = _read_text_capped_lf(target, _CLAUDE_MD_MAX_BYTES)
     new_contents, action = remove_nudge(current)
     if action == InstallAction.REMOVED.value:
         _atomic_write_text(target, new_contents)
@@ -812,7 +831,10 @@ def install_skill(
 
     if target.exists():
         try:
-            current = _read_text_capped(target, _SKILL_MD_MAX_BYTES, encoding="utf-8")
+            # CRLF-normalized so Windows-written files (Path.write_text
+            # emits ``\r\n``) compare byte-for-byte against the bundled
+            # ``body`` string literal, which uses ``\n``.
+            current = _read_text_capped_lf(target, _SKILL_MD_MAX_BYTES)
         except (OSError, UnicodeDecodeError, ValueError):
             current = ""
         if current == body:
@@ -866,7 +888,8 @@ def install_update_skill(
 
     if target.exists():
         try:
-            current = _read_text_capped(target, _SKILL_MD_MAX_BYTES, encoding="utf-8")
+            # CRLF-normalized — see install_skill's matching comment.
+            current = _read_text_capped_lf(target, _SKILL_MD_MAX_BYTES)
         except (OSError, UnicodeDecodeError, ValueError):
             current = ""
         if current == body:
@@ -909,7 +932,7 @@ def status(
     nudge_current = False
     if nudge_target.exists():
         try:
-            text = _read_text_capped(nudge_target, _CLAUDE_MD_MAX_BYTES, encoding="utf-8")
+            text = _read_text_capped_lf(nudge_target, _CLAUDE_MD_MAX_BYTES)
             nudge_present = START_MARKER in text and END_MARKER in text
             nudge_current = nudge_present and expected_block in text
         except (OSError, UnicodeDecodeError, ValueError):
@@ -923,9 +946,10 @@ def status(
     skill_current = False
     if skill_present:
         try:
-            skill_current = _read_text_capped(
-                skill_target, _SKILL_MD_MAX_BYTES, encoding="utf-8"
-            ).rstrip("\n") == SKILL_MD.rstrip("\n")
+            # CRLF-normalized — see install_skill's matching comment.
+            skill_current = _read_text_capped_lf(skill_target, _SKILL_MD_MAX_BYTES).rstrip(
+                "\n"
+            ) == SKILL_MD.rstrip("\n")
         except (OSError, UnicodeDecodeError, ValueError):
             skill_current = False
 
@@ -933,8 +957,9 @@ def status(
     update_skill_current = False
     if update_skill_present:
         try:
-            update_skill_current = _read_text_capped(
-                update_skill_target, _SKILL_MD_MAX_BYTES, encoding="utf-8"
+            # CRLF-normalized — see install_skill's matching comment.
+            update_skill_current = _read_text_capped_lf(
+                update_skill_target, _SKILL_MD_MAX_BYTES
             ).rstrip("\n") == SKILL_MD_UPDATE.rstrip("\n")
         except (OSError, UnicodeDecodeError, ValueError):
             update_skill_current = False
