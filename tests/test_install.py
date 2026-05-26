@@ -22,8 +22,9 @@ from advisor.install import (
     status,
     uninstall,
     uninstall_skill,
+    update_skill_path_for,
 )
-from advisor.skill_asset import SKILL_MD
+from advisor.skill_asset import SKILL_MD, SKILL_MD_UPDATE
 
 
 class TestApplyNudge:
@@ -175,23 +176,31 @@ class TestEnsureNudge:
     def test_installs_on_fresh_file(self, tmp_path: Path):
         target = tmp_path / "CLAUDE.md"
         skill = tmp_path / "skills" / "advisor" / "SKILL.md"
+        update_skill = tmp_path / "skills" / "advisor-update" / "SKILL.md"
         stream = io.StringIO()
         result = ensure_nudge(path=target, env={}, stream=stream, skill_path=skill)
         assert result.action == "installed"
         assert START_MARKER in target.read_text()
         assert skill.exists()
         assert skill.read_text(encoding="utf-8") == SKILL_MD
+        assert update_skill.exists()
+        assert update_skill.read_text(encoding="utf-8") == SKILL_MD_UPDATE
         notice = stream.getvalue()
         assert "advisor first-run setup" in notice
         assert "nudge" in notice
         assert "skill" in notice
+        assert "update" in notice
         assert "Setup complete!" in notice
 
     def test_unchanged_when_already_installed(self, tmp_path: Path):
         target = tmp_path / "CLAUDE.md"
         skill = tmp_path / "skills" / "advisor" / "SKILL.md"
+        update_skill = tmp_path / "skills" / "advisor-update" / "SKILL.md"
         install(path=target)
         install_skill(path=skill)
+        from advisor.install import install_update_skill
+
+        install_update_skill(path=update_skill)
         stream = io.StringIO()
         result = ensure_nudge(path=target, env={}, stream=stream, skill_path=skill)
         assert result.action == "unchanged"
@@ -200,6 +209,7 @@ class TestEnsureNudge:
     def test_opt_out_skips(self, tmp_path: Path):
         target = tmp_path / "CLAUDE.md"
         skill = tmp_path / "skills" / "advisor" / "SKILL.md"
+        update_skill = tmp_path / "skills" / "advisor-update" / "SKILL.md"
         stream = io.StringIO()
         result = ensure_nudge(
             path=target,
@@ -210,6 +220,7 @@ class TestEnsureNudge:
         assert result.action == "unchanged"
         assert not target.exists()
         assert not skill.exists()
+        assert not update_skill.exists()
         assert stream.getvalue() == ""
 
     @pytest.mark.skipif(
@@ -268,6 +279,11 @@ class TestEnsureNudge:
 
 
 class TestInstallSkill:
+    def test_update_skill_path_for_custom_file_stays_below_same_parent(self, tmp_path: Path):
+        skill = tmp_path / "custom-skill.md"
+
+        assert update_skill_path_for(skill) == tmp_path / "advisor-update" / "SKILL.md"
+
     def test_fresh_install_writes_skill_file(self, tmp_path: Path):
         target = tmp_path / "skills" / "advisor" / "SKILL.md"
         result = install_skill(path=target)
@@ -368,6 +384,21 @@ class TestStatus:
         s = status(nudge_path=nudge, skill_path=tmp_path / "missing", env={})
         assert s.nudge.present is True
         assert s.nudge.current is False
+
+    def test_custom_skill_path_uses_sibling_update_skill_path(self, tmp_path: Path):
+        skill = tmp_path / "skills" / "advisor" / "SKILL.md"
+        update_skill = update_skill_path_for(skill)
+        install_skill(path=skill)
+        from advisor.install import install_update_skill
+
+        install_update_skill(path=update_skill)
+
+        s = status(nudge_path=tmp_path / "CLAUDE.md", skill_path=skill, env={})
+
+        assert s.update_skill is not None
+        assert s.update_skill.path == update_skill
+        assert s.update_skill.present is True
+        assert s.update_skill.current is True
 
     def test_opt_out_reflected(self, tmp_path: Path):
         s = status(
@@ -503,6 +534,12 @@ class TestVersionBadge:
 
         assert VERSION_BADGE in SKILL_MD
         assert parse_badge(SKILL_MD) is not None
+
+    def test_bundled_skill_shows_teamdelete_before_teamcreate(self):
+        from advisor.skill_asset import SKILL_MD
+
+        assert "[TeamDelete]" in SKILL_MD
+        assert SKILL_MD.index("TeamDelete") < SKILL_MD.index("TeamCreate")
 
     def test_parse_badge_returns_none_for_unbadged_text(self):
         from advisor.install import parse_badge

@@ -582,18 +582,19 @@ def ensure_nudge(
     env: dict[str, str] | None = None,
     stream: IO[str] | None = None,
     skill_path: Path | None = None,
+    update_skill_path: Path | None = None,
 ) -> InstallResult:
-    """First-run hook: silently install the nudge AND the /advisor skill.
+    """First-run hook: silently install the nudge and bundled skills.
 
     This runs automatically on every advisor CLI invocation (except
     `install` / `uninstall`), so vibe coders never have to remember to
     call `advisor install` explicitly — the first time they run anything,
-    their ~/.claude/CLAUDE.md gets the nudge block and the `/advisor`
-    slash command is written to ~/.claude/skills/advisor/SKILL.md.
+    their ~/.claude/CLAUDE.md gets the nudge block and the `/advisor` /
+    `/advisor-update` slash commands are written to the skills directory.
 
     Contract:
     - Skips entirely if `ADVISOR_NO_NUDGE` is set.
-    - No-op if both the sentinel block and the skill file are already present.
+    - No-op if the sentinel block and both skill files are already present.
     - Prints a single friendly notice to `stream` (default stderr) when
       any piece is freshly installed.
     - Swallows filesystem and decode errors so CLI commands never fail here.
@@ -618,6 +619,8 @@ def ensure_nudge(
     nudge_result = InstallResult(path=target, action=InstallAction.UNCHANGED.value)
     skill_result_action = InstallAction.UNCHANGED.value
     skill_target = skill_path or default_skill_path()
+    update_skill_result_action = InstallAction.UNCHANGED.value
+    update_skill_target = update_skill_path or update_skill_path_for(skill_path)
 
     out = stream if stream is not None else sys.stderr
     from . import _style
@@ -642,28 +645,44 @@ def ensure_nudge(
         print(_style.warning_box(msg), file=out)
 
     try:
-        # Compare with trailing-newline differences ignored — atomic_write_text
-        # may add/strip a final newline depending on platform, and a strict
-        # byte-equality check would re-write the file on every CLI invocation
-        # for a no-op delta.
-        if not skill_target.exists() or skill_target.read_text(encoding="utf-8").rstrip(
-            "\n"
-        ) != SKILL_MD.rstrip("\n"):
-            skill_res = install_skill(path=skill_target)
-            skill_result_action = skill_res.action
+        # Let install_skill own idempotency and the default-path symlink guard.
+        # Passing ``None`` for the default path keeps the hardening branch active;
+        # passing the explicit path here would bypass it.
+        skill_res = install_skill(path=skill_path)
+        skill_target = skill_res.path
+        skill_result_action = skill_res.action
     except (OSError, UnicodeDecodeError) as exc:
         msg = f"skill write failed ({skill_target}): {exc}"
         errors.append(msg)
         print(_style.warning_box(msg), file=out)
         skill_result_action = InstallAction.UNCHANGED.value
 
+    try:
+        update_arg = update_skill_path
+        if update_arg is None and skill_path is not None:
+            update_arg = update_skill_target
+        update_skill_res = install_update_skill(path=update_arg)
+        update_skill_target = update_skill_res.path
+        update_skill_result_action = update_skill_res.action
+    except (OSError, UnicodeDecodeError) as exc:
+        msg = f"update-skill write failed ({update_skill_target}): {exc}"
+        errors.append(msg)
+        print(_style.warning_box(msg), file=out)
+        update_skill_result_action = InstallAction.UNCHANGED.value
+
     _updated = {InstallAction.INSTALLED.value, InstallAction.UPDATED.value}
-    if nudge_result.action in _updated or skill_result_action in _updated:
+    if (
+        nudge_result.action in _updated
+        or skill_result_action in _updated
+        or update_skill_result_action in _updated
+    ):
         pieces: list[str] = []
         if nudge_result.action in _updated:
             pieces.append(f"  nudge     → {nudge_result.path}")
         if skill_result_action in _updated:
             pieces.append(f"  skill     → {skill_target}")
+        if update_skill_result_action in _updated:
+            pieces.append(f"  update    → {update_skill_target}")
 
         lines = [
             "",
@@ -725,6 +744,21 @@ def default_skill_path() -> Path:
 
 def default_update_skill_path() -> Path:
     return default_skills_root() / UPDATE_SKILL_DIR_NAME / SKILL_FILE_NAME
+
+
+def update_skill_path_for(skill_path: Path | None = None) -> Path:
+    """Return the companion /advisor-update skill path for ``skill_path``.
+
+    When callers override ``--skill-path`` for the main advisor skill, keep
+    the update skill in the same skills root by replacing the final skill
+    directory with ``advisor-update``. Without this, installs aimed at an
+    alternate skill tree leave ``advisor-update`` stale in the default tree.
+    """
+    if skill_path is None:
+        return default_update_skill_path()
+    if skill_path.name == SKILL_FILE_NAME and skill_path.parent.name == SKILL_DIR_NAME:
+        return skill_path.parent.parent / UPDATE_SKILL_DIR_NAME / SKILL_FILE_NAME
+    return skill_path.parent / UPDATE_SKILL_DIR_NAME / SKILL_FILE_NAME
 
 
 def install_skill(
@@ -839,12 +873,13 @@ def install_update_skill(
 def status(
     nudge_path: Path | None = None,
     skill_path: Path | None = None,
+    update_skill_path: Path | None = None,
     env: dict[str, str] | None = None,
 ) -> Status:
     """Inspect the local advisor install — does not write anything."""
     nudge_target = nudge_path or default_claude_md()
     skill_target = skill_path or default_skill_path()
-    update_skill_target = default_update_skill_path()
+    update_skill_target = update_skill_path or update_skill_path_for(skill_path)
     expected_block = render_block().strip()
 
     nudge_present = False

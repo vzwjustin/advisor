@@ -159,6 +159,7 @@ def _first_int(
     into cost-estimation math (``estimate_cost(max_runners=10**18)``)
     and producing nonsensical results.
     """
+
     def _clamp(value: int) -> int:
         value = max(value, min_value)
         if max_value is not None and value > max_value:
