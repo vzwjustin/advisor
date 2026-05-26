@@ -212,6 +212,27 @@ class TestEnsureNudge:
         assert not skill.exists()
         assert stream.getvalue() == ""
 
+    @pytest.mark.skipif(
+        not hasattr(os, "symlink"),
+        reason="creating symlinks requires OS support",
+    )
+    def test_opt_out_skips_before_default_path_symlink_validation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """ADVISOR_NO_NUDGE is a true skip, even for hostile default paths."""
+        from .conftest import isolate_home
+
+        isolate_home(monkeypatch, tmp_path)
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        (tmp_path / "real.md").write_text("existing", encoding="utf-8")
+        (claude_dir / "CLAUDE.md").symlink_to(tmp_path / "real.md")
+
+        result = ensure_nudge(env={OPT_OUT_ENV: "1"}, stream=io.StringIO())
+
+        assert result.action == "unchanged"
+        assert (tmp_path / "real.md").read_text(encoding="utf-8") == "existing"
+
     def test_survives_unwritable_parent(self, tmp_path: Path):
         # Make a file where a directory would need to be, so mkdir raises.
         (tmp_path / "blocker").write_text("not a dir")

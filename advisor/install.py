@@ -599,6 +599,9 @@ def ensure_nudge(
     - Swallows filesystem and decode errors so CLI commands never fail here.
     """
     target = path or default_claude_md()
+    if not should_auto_nudge(env):
+        return InstallResult(path=target, action=InstallAction.UNCHANGED.value)
+
     if path is None:
         # Mirror ``install(path=None)``'s resolve step so the dotfiles
         # case (``~/.claude/CLAUDE.md`` → ``~/dotfiles/claude/CLAUDE.md``)
@@ -611,8 +614,6 @@ def ensure_nudge(
         target = target.resolve()
         if not target.is_relative_to(Path.home().resolve()):
             raise OSError(f"refusing to install nudge outside $HOME: {target}")
-    if not should_auto_nudge(env):
-        return InstallResult(path=target, action=InstallAction.UNCHANGED.value)
 
     nudge_result = InstallResult(path=target, action=InstallAction.UNCHANGED.value)
     skill_result_action = InstallAction.UNCHANGED.value
