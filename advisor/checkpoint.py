@@ -170,6 +170,10 @@ def load_checkpoint(target: str | Path, run_id: str) -> Checkpoint:
         obj = json.loads(text)
     except json.JSONDecodeError as exc:
         raise ValueError(f"could not read checkpoint {path}: {exc}") from exc
+    if not isinstance(obj, dict):
+        raise ValueError(
+            f"could not read checkpoint {path}: expected a JSON object, got {type(obj).__name__}"
+        )
 
     # Distinguish three states: key absent (silent default — legacy
     # checkpoints predate the field), key present but empty string (warn
@@ -202,6 +206,16 @@ def load_checkpoint(target: str | Path, run_id: str) -> Checkpoint:
         raise ValueError(
             f"checkpoint {path}: 'batches' must be a JSON array, got {type(raw_batches).__name__}"
         )
+    clean_batches: list[dict[str, object]] = []
+    for index, item in enumerate(raw_batches):
+        if not isinstance(item, dict):
+            warnings.warn(
+                f"skipping non-dict batch entry at {path}: index {index}",
+                UserWarning,
+                stacklevel=2,
+            )
+            continue
+        clean_batches.append(item)
     try:
         return Checkpoint(
             run_id=str(obj["run_id"]),
@@ -219,7 +233,7 @@ def load_checkpoint(target: str | Path, run_id: str) -> Checkpoint:
             test_command=str(obj.get("test_command", "")),
             context=str(obj.get("context", "")),
             tasks=list(raw_tasks),
-            batches=list(raw_batches),
+            batches=clean_batches,
             # An older checkpoint that omitted ``schema_version`` would
             # otherwise load with ``""`` instead of the dataclass default,
             # quietly defeating any future code that keys off the sentinel.

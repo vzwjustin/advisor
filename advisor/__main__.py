@@ -2448,6 +2448,7 @@ def _load_findings_from_input(
         if doc is not None:
             unrecognized_dict_keys: list[str] | None = None
             unexpected_top_type: str | None = None
+            wrong_findings_type: str | None = None
             if isinstance(doc, dict):
                 if "findings_in_batch" in doc:
                     raw = doc.get("findings_in_batch") or []
@@ -2467,6 +2468,9 @@ def _load_findings_from_input(
                 # silently falling through to the markdown parser.
                 raw = []
                 unexpected_top_type = type(doc).__name__
+            if not isinstance(raw, list):
+                wrong_findings_type = type(raw).__name__
+                raw = []
             findings: list[object] = []
             for f in raw:
                 if not isinstance(f, dict):
@@ -2514,6 +2518,15 @@ def _load_findings_from_input(
                             "expected a list of findings or an object with "
                             "a 'findings' / 'findings_in_batch' key. "
                             "Falling back to the markdown parser.",
+                            stream=sys.stderr,
+                        ),
+                        file=sys.stderr,
+                    )
+                elif wrong_findings_type is not None:
+                    print(
+                        _style.warning_box(
+                            "JSON 'findings' / 'findings_in_batch' must be an array, "
+                            f"got {wrong_findings_type}; returning empty findings",
                             stream=sys.stderr,
                         ),
                         file=sys.stderr,

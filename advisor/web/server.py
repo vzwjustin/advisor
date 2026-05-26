@@ -223,7 +223,7 @@ def _cost_payload(state: AppState, qs: dict[str, list[str]]) -> dict[str, Any]:
     max_runners = _first_int(
         qs, "max_runners", state.default_max_runners, min_value=1, max_value=POOL_SIZE_CEILING
     )
-    max_fixes = _first_int(qs, "max_fixes_per_runner", 5, min_value=1, max_value=100)
+    max_fixes = _first_int(qs, "max_fixes_per_runner", 5, min_value=0, max_value=100)
     file_types = _first(qs, "file_types", state.default_file_types)
     min_priority = _first_int(qs, "min_priority", state.default_min_priority)
     tasks = _rank_target(state, file_types, min_priority)

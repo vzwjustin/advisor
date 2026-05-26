@@ -206,6 +206,27 @@ class TestEnsureNudge:
         assert result.action == "unchanged"
         assert stream.getvalue() == ""
 
+    @pytest.mark.skipif(
+        not hasattr(os, "symlink"),
+        reason="creating symlinks requires OS support",
+    )
+    def test_symlink_default_path_does_not_raise(self, tmp_path: Path, monkeypatch) -> None:
+        """A symlinked default CLAUDE.md must not abort unrelated CLI runs."""
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        real = tmp_path / "real.md"
+        real.write_text("# notes\n", encoding="utf-8")
+        link = claude_dir / "CLAUDE.md"
+        link.symlink_to(real)
+        import importlib
+
+        install_mod = importlib.import_module("advisor.install")
+        monkeypatch.setattr(install_mod, "default_claude_md", lambda: link)
+        stream = io.StringIO()
+        result = ensure_nudge(path=None, env={}, stream=stream)
+        assert result.action == "unchanged"
+        assert "refusing to install nudge through symlink" in stream.getvalue()
+
     def test_opt_out_skips(self, tmp_path: Path):
         target = tmp_path / "CLAUDE.md"
         skill = tmp_path / "skills" / "advisor" / "SKILL.md"

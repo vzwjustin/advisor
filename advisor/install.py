@@ -603,19 +603,6 @@ def ensure_nudge(
     if not should_auto_nudge(env):
         return InstallResult(path=target, action=InstallAction.UNCHANGED.value)
 
-    if path is None:
-        # Mirror ``install(path=None)``'s resolve step so the dotfiles
-        # case (``~/.claude/CLAUDE.md`` → ``~/dotfiles/claude/CLAUDE.md``)
-        # threads through to ``atomic_write_text`` as the resolved real
-        # path. Without this, ``install(path=target)`` below passes an
-        # explicit path that skips ``install``'s own resolve branch and
-        # trips the ``reject_symlink=True`` guard on every CLI run.
-        if target.is_symlink():
-            raise OSError(f"refusing to install nudge through symlink: {target}")
-        target = target.resolve()
-        if not target.is_relative_to(Path.home().resolve()):
-            raise OSError(f"refusing to install nudge outside $HOME: {target}")
-
     nudge_result = InstallResult(path=target, action=InstallAction.UNCHANGED.value)
     skill_result_action = InstallAction.UNCHANGED.value
     skill_target = skill_path or default_skill_path()
@@ -627,6 +614,18 @@ def ensure_nudge(
 
     errors: list[str] = []
     try:
+        if path is None:
+            # Mirror ``install(path=None)``'s resolve step so the dotfiles
+            # case (``~/.claude/CLAUDE.md`` → ``~/dotfiles/claude/CLAUDE.md``)
+            # threads through to ``atomic_write_text`` as the resolved real
+            # path. Without this, ``install(path=target)`` below passes an
+            # explicit path that skips ``install``'s own resolve branch and
+            # trips the ``reject_symlink=True`` guard on every CLI run.
+            if target.is_symlink():
+                raise OSError(f"refusing to install nudge through symlink: {target}")
+            target = target.resolve()
+            if not target.is_relative_to(Path.home().resolve()):
+                raise OSError(f"refusing to install nudge outside $HOME: {target}")
         current = target.read_text(encoding="utf-8") if target.exists() else ""
         expected_block = render_block(NUDGE_BODY)
         if (

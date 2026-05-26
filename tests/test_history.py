@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from advisor.__main__ import build_parser
 from advisor.history import (
     HISTORY_SCHEMA_VERSION,
@@ -108,6 +110,20 @@ class TestAppendAndLoad:
         )
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
+            entries = load_recent(tmp_path)
+        assert len(entries) == 1
+        assert entries[0].file_path == "a"
+
+    def test_non_dict_jsonl_line_warns_and_skips(self, tmp_path: Path) -> None:
+        path = history_path(tmp_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "null\n"
+            '{"timestamp":"t","file_path":"a","severity":"HIGH","description":"d",'
+            '"status":"CONFIRMED","run_id":"r"}\n',
+            encoding="utf-8",
+        )
+        with pytest.warns(UserWarning, match="non-dict history entry"):
             entries = load_recent(tmp_path)
         assert len(entries) == 1
         assert entries[0].file_path == "a"
