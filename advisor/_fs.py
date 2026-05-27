@@ -168,9 +168,7 @@ def atomic_write_text(
     """
     if reject_symlink:
         if target.is_symlink():
-            raise OSError(
-                f"refusing to write through symlink: {target} -> {os.readlink(target)}"
-            )
+            raise OSError(f"refusing to write through symlink: {target} -> {os.readlink(target)}")
         # Walk the parent chain and reject if any component is a symlink.
         # ``Path.is_symlink`` returns False on non-existent components, so a
         # not-yet-created parent (``~/.claude/skills/advisor/SKILL.md`` when
