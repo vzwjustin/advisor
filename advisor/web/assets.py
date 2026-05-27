@@ -19,6 +19,7 @@ INDEX_HTML = """<!doctype html>
   <h1>advisor</h1>
   <nav>
     <button class="tab active" data-tab="findings">Findings</button>
+    <button class="tab" data-tab="live">Live</button>
     <button class="tab" data-tab="plan">Plan</button>
     <button class="tab" data-tab="config">Run config</button>
     <button class="tab" data-tab="cost">Cost</button>
@@ -104,6 +105,19 @@ INDEX_HTML = """<!doctype html>
     </div>
     <div id="cost-summary"></div>
     <p id="cost-empty" class="empty" hidden>No plan yet — cost estimate needs ranked files.</p>
+  </section>
+
+  <section id="live" class="panel">
+    <div class="controls">
+      <span id="live-stream-indicator" class="live idle" title="click to toggle polling" role="button" tabindex="0">
+        <span class="live-dot"></span>
+        <span class="live-label">IDLE</span>
+      </span>
+      <button id="live-clear" type="button">Clear feed</button>
+      <span id="live-count" class="count"></span>
+    </div>
+    <ul id="live-feed" class="feed"></ul>
+    <p id="live-empty" class="empty">No events yet. Live events are emitted by the /advisor run when SKILL.md is wired to <code>advisor live record</code>; on older skill versions this tab stays quiet.</p>
   </section>
 </main>
 
@@ -271,7 +285,66 @@ tr.row-new td { animation: row-flash 2s ease-out; }
 @media (prefers-reduced-motion: reduce) {
   .live.active .live-dot { animation: none; }
   tr.row-new td { animation: none; }
+  .feed-item.feed-new { animation: none; }
 }
+
+/* --- live feed (events tab) --- */
+.feed {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  font-size: 0.88rem;
+}
+.feed-item {
+  display: grid;
+  grid-template-columns: 8.5rem 7rem 1fr;
+  gap: 0.8rem;
+  padding: 0.55rem 0.8rem;
+  border-top: 1px solid var(--border);
+  align-items: baseline;
+}
+.feed-item:first-child { border-top: none; }
+.feed-time {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+.feed-kind {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.78rem;
+  color: var(--accent);
+  letter-spacing: 0.04em;
+}
+.feed-kind.kind-run_start, .feed-kind.kind-run_end { color: var(--low); }
+.feed-kind.kind-report_relay { color: var(--med); }
+.feed-kind.kind-fix_dispatch { color: var(--high); }
+.feed-kind.kind-runner_spawn { color: var(--accent); }
+.feed-body { color: var(--text); word-break: break-word; }
+.feed-body code {
+  background: rgba(88, 166, 255, 0.08);
+  padding: 0.05rem 0.3rem;
+  border-radius: 3px;
+  font-size: 0.82rem;
+}
+.feed-data {
+  display: block;
+  margin-top: 0.25rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+@keyframes feed-flash {
+  0%   { background: rgba(88, 166, 255, 0.18); }
+  100% { background: transparent; }
+}
+.feed-item.feed-new { animation: feed-flash 2s ease-out; }
 
 form {
   display: grid;
@@ -731,6 +804,190 @@ APP_JS = r"""(() => {
   }
   $('#cost-refresh').addEventListener('click', loadCost);
 
+  // --- live events tab ---
+  // Polls /api/events?since=<token> while the Live tab is active. Mirrors
+  // the findings poll loop's shape (interval + backoff + pause toggle)
+  // but cursors on the server-issued ``next_token`` so we never miss
+  // events even when polling falls behind a burst.
+  const LIVE_POLL_INTERVAL_MS = 2000;
+  const LIVE_POLL_MAX_BACKOFF_MS = 30000;
+  // FIFO bound on how many events live in the DOM. A long-running session
+  // could otherwise accumulate thousands of rows; 500 is generous for the
+  // typical advisor run (a few dozen events) while keeping memory bounded.
+  const LIVE_FEED_MAX_ITEMS = 500;
+  let liveStreamCursor = 0;
+  let liveStreamTimer = null;
+  let liveStreamEnabled = true;
+  let liveStreamErrorStreak = 0;
+  let liveFeedCount = 0;
+  let liveFeedSeenSeqs = new Set();
+
+  function setLiveStreamState(state, labelOverride) {
+    const pill = $('#live-stream-indicator');
+    if (!pill) return;
+    pill.classList.remove('idle', 'active', 'paused', 'error');
+    pill.classList.add(state);
+    pill.querySelector('.live-label').textContent = labelOverride || state.toUpperCase();
+  }
+
+  function scheduleLiveStreamPoll(delayMs) {
+    if (liveStreamTimer) clearTimeout(liveStreamTimer);
+    liveStreamTimer = setTimeout(liveStreamTick, Math.max(0, delayMs));
+  }
+
+  function renderEventBody(ev) {
+    // ``ev.data`` is opaque — the server doesn't enforce a schema.
+    // Render core kinds with a friendly single-line summary; fall through
+    // to a JSON dump for unknown kinds so nothing is silently dropped.
+    const d = (ev && typeof ev.data === 'object' && ev.data !== null) ? ev.data : {};
+    const kind = ev.kind || '';
+    const parts = [];
+    if (kind === 'run_start') {
+      if (d.run_id) parts.push(`run <code>${escapeHtml(d.run_id)}</code>`);
+      if (d.pool_size_advisory) parts.push(`pool ${escapeHtml(d.pool_size_advisory)}`);
+      if (d.advisor_model) parts.push(`advisor=${escapeHtml(d.advisor_model)}`);
+      if (d.runner_model) parts.push(`runner=${escapeHtml(d.runner_model)}`);
+    } else if (kind === 'runner_spawn') {
+      if (d.runner_name) parts.push(`<code>${escapeHtml(d.runner_name)}</code>`);
+      if (d.model) parts.push(`(${escapeHtml(d.model)})`);
+      if (Array.isArray(d.batch_files)) parts.push(`${d.batch_files.length} files`);
+    } else if (kind === 'report_relay') {
+      if (d.runner_name) parts.push(`<code>${escapeHtml(d.runner_name)}</code>`);
+      if (typeof d.finding_count === 'number') parts.push(`${d.finding_count} findings`);
+      if (d.summary) parts.push(escapeHtml(d.summary));
+    } else if (kind === 'fix_dispatch') {
+      if (d.runner_name) parts.push(`<code>${escapeHtml(d.runner_name)}</code>`);
+      if (d.file) parts.push(`<code>${escapeHtml(d.file)}</code>`);
+      if (d.problem) parts.push(escapeHtml(d.problem));
+    } else if (kind === 'run_end') {
+      if (typeof d.findings_confirmed === 'number') parts.push(`${d.findings_confirmed} confirmed`);
+      if (typeof d.findings_rejected === 'number') parts.push(`${d.findings_rejected} rejected`);
+      if (typeof d.fixes_landed === 'number') parts.push(`${d.fixes_landed} fixes`);
+    }
+    let summary = parts.length ? parts.join(' · ') : escapeHtml(kind || 'event');
+    // Generic kinds: append the raw payload below the summary so the user
+    // sees everything the team-lead emitted without crowding the row.
+    const hasExtras = Object.keys(d).length > 0;
+    const extras = hasExtras ? `<span class="feed-data">${escapeHtml(JSON.stringify(d))}</span>` : '';
+    return summary + extras;
+  }
+
+  function appendLiveEvents(events) {
+    const feed = $('#live-feed');
+    if (!feed) return;
+    let appended = 0;
+    events.forEach((ev) => {
+      // Deduplicate by seq — the server's cursor protocol shouldn't replay
+      // events but a misconfigured client (e.g. cursor reset by clear-feed)
+      // could otherwise show duplicates. Set lookup is O(1).
+      const seq = typeof ev.seq === 'number' ? ev.seq : null;
+      if (seq !== null) {
+        if (liveFeedSeenSeqs.has(seq)) return;
+        liveFeedSeenSeqs.add(seq);
+      }
+      const li = document.createElement('li');
+      li.className = 'feed-item feed-new';
+      const ts = ev.ts || '';
+      const tsShort = ts.length >= 19 ? ts.slice(11, 19) : ts;
+      // Kind is rendered as a CSS class suffix; allowlist via a regex strip
+      // so a hostile or unexpected kind can't inject CSS selectors.
+      const safeKind = String(ev.kind || 'event').replace(/[^A-Za-z0-9_-]/g, '');
+      li.innerHTML = `
+        <span class="feed-time" title="${escapeHtml(ts)}">${escapeHtml(tsShort)}</span>
+        <span class="feed-kind kind-${safeKind}">${escapeHtml(ev.kind || 'event')}</span>
+        <span class="feed-body">${renderEventBody(ev)}</span>
+      `;
+      feed.insertBefore(li, feed.firstChild);
+      setTimeout(() => li.classList.remove('feed-new'), 2100);
+      appended += 1;
+    });
+    liveFeedCount += appended;
+    // FIFO trim — newest stays at the top, drop from the bottom.
+    while (feed.childElementCount > LIVE_FEED_MAX_ITEMS) {
+      const removed = feed.lastElementChild;
+      if (!removed) break;
+      feed.removeChild(removed);
+    }
+    // Bound the seen-seq set too so a long session doesn't leak.
+    if (liveFeedSeenSeqs.size > LIVE_FEED_MAX_ITEMS * 2) {
+      const arr = Array.from(liveFeedSeenSeqs);
+      liveFeedSeenSeqs = new Set(arr.slice(-LIVE_FEED_MAX_ITEMS));
+    }
+    $('#live-count').textContent = `${liveFeedCount} event${liveFeedCount === 1 ? '' : 's'}`;
+    $('#live-empty').hidden = liveFeedCount > 0;
+  }
+
+  async function liveStreamTick() {
+    liveStreamTimer = null;
+    if (!liveStreamEnabled) { setLiveStreamState('paused', 'PAUSED'); return; }
+    if (document.hidden) { scheduleLiveStreamPoll(LIVE_POLL_INTERVAL_MS); return; }
+    const activeTab = document.querySelector('.tab.active')?.dataset.tab;
+    // Poll only while the Live tab is visible — keeps the dashboard quiet
+    // on the Findings / Plan / Cost tabs and avoids redundant work.
+    if (activeTab !== 'live') {
+      scheduleLiveStreamPoll(LIVE_POLL_INTERVAL_MS);
+      return;
+    }
+    let nextDelay = LIVE_POLL_INTERVAL_MS;
+    try {
+      const qs = new URLSearchParams();
+      if (liveStreamCursor > 0) qs.set('since', String(liveStreamCursor));
+      qs.set('limit', '200');
+      const r = await fetch('/api/events?' + qs.toString(), { cache: 'no-store' });
+      if (!r.ok) throw new Error('events ' + r.status);
+      const data = await r.json();
+      if (Array.isArray(data.events) && data.events.length) {
+        appendLiveEvents(data.events);
+        setLiveStreamState('active', 'LIVE');
+      } else if (liveFeedCount === 0) {
+        setLiveStreamState('idle', 'IDLE');
+      } else {
+        setLiveStreamState('active', 'LIVE');
+      }
+      if (typeof data.next_token === 'number' && data.next_token >= 0) {
+        liveStreamCursor = data.next_token;
+      }
+      liveStreamErrorStreak = 0;
+    } catch (_) {
+      setLiveStreamState('error', 'ERROR');
+      liveStreamErrorStreak += 1;
+      const backoff = LIVE_POLL_INTERVAL_MS * Math.pow(2, liveStreamErrorStreak - 1);
+      nextDelay = Math.min(LIVE_POLL_MAX_BACKOFF_MS, backoff);
+    }
+    scheduleLiveStreamPoll(nextDelay);
+  }
+
+  function clearLiveFeed() {
+    const feed = $('#live-feed');
+    if (feed) feed.innerHTML = '';
+    liveFeedCount = 0;
+    liveFeedSeenSeqs = new Set();
+    $('#live-count').textContent = '';
+    $('#live-empty').hidden = false;
+    // Leave the cursor in place — clearing the visible feed shouldn't
+    // cause the next poll to re-replay every event the user just
+    // dismissed.
+  }
+  $('#live-clear').addEventListener('click', clearLiveFeed);
+
+  const liveStreamPill = $('#live-stream-indicator');
+  function toggleLiveStream() {
+    liveStreamEnabled = !liveStreamEnabled;
+    if (liveStreamEnabled) scheduleLiveStreamPoll(0);
+    else setLiveStreamState('paused', 'PAUSED');
+  }
+  liveStreamPill.addEventListener('click', toggleLiveStream);
+  liveStreamPill.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleLiveStream(); }
+  });
+  // Kick the live-stream poll when the user switches to the Live tab —
+  // additive to the existing findings-tab kick at the top of the file.
+  $$('.tab').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (btn.dataset.tab === 'live') scheduleLiveStreamPoll(0);
+    });
+  });
+
   // --- helpers ---
   function escapeHtml(s) {
     return String(s)
@@ -775,6 +1032,12 @@ APP_JS = r"""(() => {
   }
 
   // --- init ---
+  // Kick the live-events poll loop once on startup. It runs in the
+  // background regardless of which tab the user is on (the tick gates
+  // network work on the active tab) so the cursor advances steadily and
+  // the Live tab is hot the moment the user clicks it.
+  scheduleLiveStreamPoll(0);
+
   (async () => {
     try {
       const r = await fetch('/api/target');

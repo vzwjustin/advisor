@@ -315,6 +315,71 @@ SendMessage({"to": "runner-1", "message": {"type": "shutdown_request"}})
 TeamDelete()
 ```
 
+## Live dashboard hooks (optional, best-effort)
+
+When the user has the web dashboard running (`advisor ui`) — which they
+often will, since it's how they watch the pipeline progress without
+keeping Claude Code in the foreground — emit small events at three
+checkpoints so the dashboard's **Live** tab reflects the run in real
+time. These are **fire-and-forget**: failure must NOT halt the pipeline.
+Always run them in the background or swallow non-zero exits.
+
+The CLI is:
+
+```bash
+advisor live record --kind <KIND> --data '<JSON>' <target-dir>
+```
+
+Three checkpoints, three event kinds:
+
+1. **`run_start`** — immediately after `TeamCreate` succeeds, before
+   spawning the Opus advisor. Include the user's stated goal and the
+   resolved target directory so the dashboard's first event row has
+   meaningful context.
+
+   ```bash
+   advisor live record --kind run_start \
+     --data '{"target":"<absolute path>","user_goal":"<short goal>","advisor_model":"claude-opus-4-7","runner_model":"claude-sonnet-4-6"}' \
+     <target> || true
+   ```
+
+2. **`report_relay`** — every time a runner report arrives in your
+   inbox and you relay it to the advisor. Record one event per relay
+   with the runner's name and an approximate finding-count derived from
+   the report body (count `**File**:` lines or `### Finding` headers; a
+   rough integer is fine — the dashboard renders the badge as-is).
+
+   ```bash
+   advisor live record --kind report_relay \
+     --data '{"runner_name":"runner-N","finding_count":<int>}' \
+     <target> || true
+   ```
+
+3. **`run_end`** — right after the advisor sends its final report,
+   before you shut down individual teammates. Include the
+   findings-confirmed / findings-rejected / fixes-landed tallies from
+   the report's `## Summary` block.
+
+   ```bash
+   advisor live record --kind run_end \
+     --data '{"findings_confirmed":<int>,"findings_rejected":<int>,"fixes_landed":<int>}' \
+     <target> || true
+   ```
+
+Two optional kinds, both nice-to-have:
+
+* **`runner_spawn`** — after each `Agent` spawn for a runner, so the
+  dashboard shows which runner came up with which batch.
+* **`fix_dispatch`** — when the advisor dispatches a fix assignment
+  during Step 5, so the dashboard can show fix progress.
+
+Skip these events if the user has not started `advisor ui` (you cannot
+tell from the team-lead context — just always emit them with `|| true`
+and let the file write happen idempotently into `.advisor/live/`; an
+ignored events file is harmless).
+
+Schema details and additional kinds: see `advisor live --help`.
+
 ## Rules (non-negotiable)
 
 1. **TeamDelete first** — a leader can only manage one team at a time.

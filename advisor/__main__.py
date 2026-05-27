@@ -2129,6 +2129,145 @@ def cmd_history(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_live(args: argparse.Namespace) -> int:
+    """Emit / inspect events in ``<target>/.advisor/live/events.jsonl``.
+
+    Separate from ``advisor history`` because the two stores have different
+    semantics: history is the authoritative CONFIRMED-findings log; live is
+    an ephemeral event stream the dashboard's Live tab subscribes to.
+
+    Subcommands:
+
+    * ``record`` — append one event. ``--kind`` is required; the optional
+      ``--data`` is a JSON object string. The intended caller is the
+      team-lead Claude session running ``/advisor``, which invokes this
+      via ``Bash`` at run-start, on each runner-report relay, and at
+      run-end so the dashboard reflects the live pipeline in real time.
+    * ``tail`` — print the most recent events (newest-last) for ad-hoc
+      inspection from the terminal. ``--json`` switches to JSON output.
+    * ``clear`` — delete the events file. The dashboard's ``next_token``
+      cursor advances regardless, so a future event-stream resumes
+      cleanly; only the visible feed is lost.
+    """
+    from .live import (
+        append_event,
+        latest_seq,
+        live_events_path,
+        load_recent_events,
+    )
+
+    sub = getattr(args, "live_sub", None)
+    if sub is None:
+        # ``advisor live`` with no subcommand: argparse leaves
+        # ``target`` unset because the positional lives on each
+        # subparser. Short-circuit to the help-like guidance below
+        # before we try to resolve a path.
+        print(
+            _style.error_box(
+                "advisor live: pick a subcommand (record / tail / clear). "
+                "See `advisor live --help`."
+            ),
+            file=sys.stderr,
+        )
+        return 2
+    target = Path(getattr(args, "target", ".")).resolve()
+    if sub == "record":
+        kind = getattr(args, "kind", "") or ""
+        data_raw = getattr(args, "data", None)
+        data: dict[str, object] = {}
+        if data_raw:
+            try:
+                parsed = json.loads(data_raw)
+            except json.JSONDecodeError as exc:
+                print(_style.error_box(f"invalid --data JSON: {exc}"), file=sys.stderr)
+                return 2
+            if not isinstance(parsed, dict):
+                print(
+                    _style.error_box(f"--data must be a JSON object, got {type(parsed).__name__}"),
+                    file=sys.stderr,
+                )
+                return 2
+            data = parsed
+        try:
+            path = append_event(target, kind, data)
+        except (OSError, ValueError) as exc:
+            print(_style.error_box(f"advisor live record failed: {exc}"), file=sys.stderr)
+            return 1
+        if getattr(args, "json", False):
+            print(
+                json.dumps(
+                    {
+                        "schema_version": JSON_SCHEMA_VERSION,
+                        "path": str(path),
+                        "seq": latest_seq(target),
+                        "kind": kind,
+                    },
+                    indent=2,
+                )
+            )
+        elif not getattr(args, "quiet", False):
+            print(_style.dim(f"recorded {kind} (seq {latest_seq(target)}) → {path}"))
+        return 0
+    if sub == "tail":
+        limit = max(1, min(int(getattr(args, "limit", 50)), 1000))
+        since_arg = getattr(args, "since", None)
+        since = None
+        if since_arg is not None:
+            try:
+                since = max(0, int(since_arg))
+            except (TypeError, ValueError):
+                print(
+                    _style.error_box(f"--since must be an integer, got {since_arg!r}"),
+                    file=sys.stderr,
+                )
+                return 2
+        events = load_recent_events(target, since=since, limit=limit)
+        if getattr(args, "json", False):
+            print(
+                json.dumps(
+                    {
+                        "schema_version": JSON_SCHEMA_VERSION,
+                        "target": str(target),
+                        "count": len(events),
+                        "next_token": latest_seq(target),
+                        "events": events,
+                    },
+                    indent=2,
+                )
+            )
+            return 0
+        if not events:
+            print(_style.dim(f"no live events yet at {live_events_path(target)}"))
+            return 0
+        for ev in events:
+            ts = ev.get("ts", "")
+            kind = ev.get("kind", "event")
+            data_payload = ev.get("data", {})
+            data_str = json.dumps(data_payload, separators=(",", ":")) if data_payload else ""
+            print(f"{ts} {kind} {data_str}".rstrip())
+        return 0
+    if sub == "clear":
+        path = live_events_path(target)
+        if path.exists():
+            try:
+                path.unlink()
+            except OSError as exc:
+                print(_style.error_box(f"advisor live clear failed: {exc}"), file=sys.stderr)
+                return 1
+            if not getattr(args, "quiet", False):
+                print(_style.dim(f"removed {path}"))
+        elif not getattr(args, "quiet", False):
+            print(_style.dim(f"no live events file at {path}"))
+        return 0
+    # Unknown subcommand value (shouldn't happen — argparse constrains the
+    # choice to record/tail/clear or None). Stay defensive.
+    print(
+        _style.error_box(f"advisor live: unknown subcommand {sub!r}. See `advisor live --help`."),
+        file=sys.stderr,
+    )
+    return 2
+
+
 def cmd_version(args: argparse.Namespace) -> int:
     """Print version + environment details (lighter-weight than ``doctor``).
 
@@ -3382,6 +3521,97 @@ def build_parser() -> argparse.ArgumentParser:
     p_history.add_argument("--quiet", action="store_true", help="Suppress CTA/tip lines")
     p_history.set_defaults(func=cmd_history)
 
+    # `advisor live` — ephemeral event-stream tap for the dashboard's Live
+    # tab. Separate from `advisor history` because the two stores have
+    # different semantics (see cmd_live's docstring). Each subcommand
+    # takes its own ``target`` positional (last) so the typical shape
+    # ``advisor live record --kind X --data Y .`` works out of the box —
+    # putting ``target`` on the parent parser confuses argparse about
+    # whether the next token is the subcommand or the target.
+    p_live = sub.add_parser(
+        "live",
+        help=(
+            "Record / inspect events in <target>/.advisor/live/events.jsonl. "
+            "Subscribed to by the optional web dashboard's Live tab."
+        ),
+    )
+    p_live_sub = p_live.add_subparsers(dest="live_sub")
+    p_live_record = p_live_sub.add_parser(
+        "record",
+        help="Append one event to the live stream",
+    )
+    p_live_record.add_argument(
+        "--kind",
+        required=True,
+        help=(
+            "Event kind. Core kinds the dashboard renders specially: "
+            "run_start, runner_spawn, report_relay, fix_dispatch, run_end. "
+            "Other kinds render as generic informational rows."
+        ),
+    )
+    p_live_record.add_argument(
+        "--data",
+        default="",
+        help=(
+            "Optional JSON object payload (e.g. "
+            '--data \'{"run_id": "r1", "runner_name": "runner-1"}\')'
+        ),
+    )
+    p_live_record.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the recorded event metadata as JSON",
+    )
+    p_live_record.add_argument("--quiet", action="store_true", help="Suppress CTA/tip lines")
+    p_live_record.add_argument(
+        "target",
+        nargs="?",
+        default=".",
+        help="Target directory (default: current directory)",
+    )
+    p_live_tail = p_live_sub.add_parser(
+        "tail",
+        help="Print recent events from the live stream",
+    )
+    p_live_tail.add_argument(
+        "--limit",
+        type=_pos_int_arg,
+        default=50,
+        help="Maximum number of events to print (default: 50, max: 1000)",
+    )
+    p_live_tail.add_argument(
+        "--since",
+        type=str,
+        default=None,
+        help="Only show events whose seq is strictly greater than this cursor",
+    )
+    p_live_tail.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit events as a JSON array",
+    )
+    p_live_tail.add_argument(
+        "target",
+        nargs="?",
+        default=".",
+        help="Target directory (default: current directory)",
+    )
+    p_live_clear = p_live_sub.add_parser(
+        "clear",
+        help="Delete the events file (cursor preserved for resumption)",
+    )
+    p_live_clear.add_argument("--quiet", action="store_true", help="Suppress CTA/tip lines")
+    p_live_clear.add_argument(
+        "target",
+        nargs="?",
+        default=".",
+        help="Target directory (default: current directory)",
+    )
+    p_live.set_defaults(func=cmd_live)
+    p_live_record.set_defaults(func=cmd_live, live_sub="record")
+    p_live_tail.set_defaults(func=cmd_live, live_sub="tail")
+    p_live_clear.set_defaults(func=cmd_live, live_sub="clear")
+
     p_version = sub.add_parser(
         "version",
         help="Print version + environment details (like a lighter `doctor`)",
@@ -3591,6 +3821,12 @@ _NUDGE_SKIP_COMMANDS = {
     "presets",
     "suppressions",
     "baseline",
+    # `live` fires from the team-lead at every checkpoint (run_start +
+    # one per report_relay + run_end), so a single /advisor run can emit
+    # 10+ `advisor live record` calls. Re-parsing ~/.claude/CLAUDE.md on
+    # each one would add latency on the team-lead's hot path AND open a
+    # write race against any background install flow.
+    "live",
 }
 
 

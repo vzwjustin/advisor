@@ -15,6 +15,7 @@ Endpoints
 * ``GET /api/history``       — recent findings from ``.advisor/history.jsonl``
 * ``GET /api/plan``          — ranked files (same data the ``plan`` command emits)
 * ``GET /api/cost``          — token/cost estimate for the current plan
+* ``GET /api/events``        — live event stream from ``.advisor/live/events.jsonl``
 
 All responses are JSON (application/json) except static assets.
 """
@@ -40,6 +41,7 @@ from .._fs import validate_file_types as _validate_file_types
 from ..cost import estimate_cost
 from ..focus import FocusTask, create_focus_tasks
 from ..history import HISTORY_SCHEMA_VERSION, history_path, load_recent
+from ..live import LIVE_SCHEMA_VERSION, latest_seq, load_recent_events
 from ..orchestrate.config import POOL_SIZE_CEILING
 from ..rank import load_advisorignore, rank_files
 from .assets import APP_CSS, APP_JS, INDEX_HTML
@@ -277,6 +279,54 @@ def _history_payload(state: AppState, qs: dict[str, list[str]]) -> dict[str, Any
     }
 
 
+def _events_payload(state: AppState, qs: dict[str, list[str]]) -> dict[str, Any]:
+    """Return live events for the dashboard's Live tab.
+
+    Cursor-based: ``?since=<seq>`` returns events strictly newer than that
+    cursor. The first poll (no ``since``) returns the tail of the file so
+    the client immediately sees recent activity. Subsequent polls advance
+    the cursor via the ``next_token`` field in the response.
+
+    ``?limit=N`` caps the per-poll batch. The default of 200 is generous
+    for a 2-second poll interval and well below the in-memory cap inside
+    :func:`load_recent_events`.
+
+    Always returns ``next_token`` (the highest seq in the file or 0 when
+    empty) so the client's cursor can advance even when the response has
+    no events — otherwise an idle gap would leave the cursor at its last
+    non-empty value and replay the same tail on every poll once activity
+    resumes.
+    """
+    # ``since=-1`` (or any negative) collapses to "from the start" by
+    # leaving ``since`` as None — _first_int's min_value guards against
+    # accidentally pinning the cursor below zero.
+    since_raw = _first(qs, "since", "")
+    since: int | None
+    if since_raw == "":
+        since = None
+    else:
+        try:
+            since = max(0, int(since_raw))
+        except (TypeError, ValueError):
+            since = None
+    limit = _first_int(qs, "limit", 200, min_value=1, max_value=1000)
+    events = load_recent_events(state.target, since=since, limit=limit)
+    # next_token is the max seq seen on disk, NOT the max in the returned
+    # window — the client polls with this token next time, even if the
+    # current response was clipped by ``limit``. Pass-through ``since``
+    # when the file is currently empty (no events) so the client keeps
+    # its prior cursor instead of resetting to 0.
+    file_latest = latest_seq(state.target)
+    next_token = file_latest if file_latest > 0 else (since if since is not None else 0)
+    return {
+        "schema_version": LIVE_SCHEMA_VERSION,
+        "target": str(state.target),
+        "count": len(events),
+        "events": events,
+        "next_token": next_token,
+    }
+
+
 def _status_payload(state: AppState) -> dict[str, Any]:
     """Cheap "has anything changed?" probe for the live dashboard poller.
 
@@ -448,6 +498,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
             if route == "/api/cost":
                 self._send_json(_cost_payload(self.state, qs))
+                return
+            if route == "/api/events":
+                self._send_json(_events_payload(self.state, qs))
                 return
             self._send_error(HTTPStatus.NOT_FOUND, f"no route {route!r}")
         except BrokenPipeError:

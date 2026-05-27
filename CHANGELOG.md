@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-05-26
+
+Real-time dashboard feed. The web dashboard previously surfaced only
+historical findings (`history.jsonl`) and prospective cost estimates,
+so a `/advisor` run in progress wasn't visible from the browser. This
+release adds a **Live** tab that polls a new ephemeral event stream
+the team-lead Claude session emits at three checkpoints
+(`run_start`, every `report_relay`, `run_end`, plus optional
+`runner_spawn` / `fix_dispatch`). Strictly additive: no existing
+endpoint, tab, or schema changed.
+
+### Added
+
+- `advisor live record / tail / clear` — new CLI subcommands that
+  append / inspect / remove events in
+  `<target>/.advisor/live/events.jsonl`. The `record` form is what the
+  `/advisor` skill invokes via `Bash` at each pipeline checkpoint;
+  `tail` is for ad-hoc terminal inspection. JSON output via `--json`.
+- New module `advisor.live` exposes `append_event`,
+  `load_recent_events`, and `latest_seq` for in-process callers. File
+  format is JSONL, one `{schema_version, ts, seq, kind, data}` record
+  per line, with a cursor-based polling protocol (`?since=<seq>`) the
+  dashboard's Live tab uses to advance without losing events under
+  burst load.
+- `GET /api/events` — new dashboard endpoint reading the same file.
+  Returns `{schema_version, target, count, events, next_token}`.
+  Idle polls still advance `next_token` so the client cursor never
+  resets to zero when activity resumes after a quiet gap.
+- **Live** tab in the optional web dashboard (`advisor ui`). Live-pill
+  with idle / active / paused / error states (same component as the
+  Findings tab's poller). Per-event row renders core kinds
+  (`run_start`, `runner_spawn`, `report_relay`, `fix_dispatch`,
+  `run_end`) with a short summary; unknown kinds fall through to a raw
+  JSON payload line. FIFO-trimmed at 500 rows so a long session
+  stays bounded. Newly-arrived rows briefly flash, respecting
+  `prefers-reduced-motion`.
+- SKILL.md now documents the three live-event checkpoints with the
+  exact `advisor live record ... || true` invocations the team-lead
+  should fire. Always best-effort: a failed write must NOT halt the
+  pipeline. Users who haven't started `advisor ui` see no behavior
+  change — the events file just accumulates in `.advisor/live/` and
+  is harmless.
+- `tests/test_live.py` — 36 new tests covering append round-trip,
+  cursor semantics, oversize-line rejection, malformed-line skip,
+  CLI argparse wiring, and `/api/events` payload shape.
+
+### Why a minor bump
+
+`history.jsonl` and `live/events.jsonl` are deliberately separate
+stores with different semantics (CONFIRMED findings vs. ephemeral
+event stream). History is the authoritative source for analytics,
+ranker boosts, and SARIF emission; live events are advisory and never
+consulted by the orchestrator. Keeping them in separate files means
+the next CLI-based run that writes real findings can't accidentally
+land in the live feed and vice versa.
+
 ## [0.7.4] - 2026-05-26
 
 Two combined fix waves. The first (six advisor self-review findings,
