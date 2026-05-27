@@ -89,6 +89,14 @@ _MAX_LINE = 65536
 # rather than a typical working set.
 _MAX_TAIL = 5000
 
+# Tail-read chunk size for ``_next_seq`` and ``append_event``. Must be at
+# least ``_MAX_LINE + 1`` bytes so the tail always spans one complete record.
+# A value of ``8192`` (one typical disk block) was the original choice, but
+# records up to ``_MAX_LINE`` (64 KiB) are legal; a large-but-valid record
+# ending the file would be partially read, fail JSON parsing, and cause
+# ``_last_seq_from_tail`` to return 0 — resetting the sequence counter to 1.
+_TAIL_READ_BYTES = _MAX_LINE + 1
+
 # Allowlisted event kinds. The list is open in spirit — the dashboard
 # renders any string — but the canonical set is documented here so the
 # team-lead and the dashboard JS agree on which kinds get specialized
@@ -161,16 +169,16 @@ def _next_seq(path: Path) -> int:
         return 1
     try:
         with path.open("rb") as f:
-            # Tail-read: read the last 8 KiB and scan back for the last
-            # ``\n``. 8 KiB is comfortably larger than any well-formed
-            # event line (capped at 64 KiB but typical << 1 KiB), and
-            # avoids reading the whole file just to find the tail.
+            # Tail-read: read the last ``_TAIL_READ_BYTES`` bytes and scan
+            # back for the last complete record. The chunk is ``_MAX_LINE + 1``
+            # bytes — large enough to always cover one full record, since
+            # ``append_event`` rejects lines exceeding ``_MAX_LINE``.
             try:
                 f.seek(0, 2)  # end
                 size = f.tell()
             except OSError:
                 return 1
-            chunk_size = min(size, 8192)
+            chunk_size = min(size, _TAIL_READ_BYTES)
             if chunk_size <= 0:
                 return 1
             f.seek(size - chunk_size, 0)
@@ -242,7 +250,7 @@ def append_event(
                 size = f.tell()
             except OSError:
                 size = 0
-            chunk_size = min(size, 8192)
+            chunk_size = min(size, _TAIL_READ_BYTES)
             if chunk_size > 0:
                 f.seek(size - chunk_size, 0)
                 tail_text = f.read(chunk_size)

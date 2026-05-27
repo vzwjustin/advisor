@@ -18,7 +18,9 @@ def validate_file_types(pattern: str) -> None:
     """Reject path-traversal, NUL bytes, or absolute-path patterns in user-supplied
     file_types globs.
 
-    ``..`` blocks directory traversal (``../../../etc/*.conf``).
+    ``..`` as a path segment blocks directory traversal
+    (``../../../etc/*.conf``, ``a/../b``). A filename like ``foo..bar.py``
+    is accepted because ``..`` is not a standalone path segment there.
     A leading ``/`` or ``\\`` blocks absolute paths on POSIX and Windows.
     A leading drive letter (``C:``) blocks absolute Windows paths whose
     rejection would otherwise depend on ``pathlib.rglob`` raising — and
@@ -40,7 +42,7 @@ def validate_file_types(pattern: str) -> None:
         if "\x00" in piece:
             raise ValueError(f"file_types pattern contains NUL byte: {piece!r}")
         if (
-            ".." in piece
+            ".." in piece.split("/")
             or piece.startswith("/")
             or piece.startswith("\\")
             or (len(piece) >= 2 and piece[1] == ":" and piece[0].isalpha())

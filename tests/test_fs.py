@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from advisor._fs import normalize_path, read_text_capped, safe_rglob_paths
+from advisor._fs import normalize_path, read_text_capped, safe_rglob_paths, validate_file_types
 
 
 def test_safe_rglob_paths_returns_deterministic_order(tmp_path: Path) -> None:
@@ -128,3 +128,22 @@ class TestReadTextCapped:
         underlying FileNotFoundError so they keep that signal."""
         with pytest.raises(FileNotFoundError):
             read_text_capped(tmp_path / "absent.txt", max_bytes=100)
+
+
+
+class TestValidateFileTypes:
+    """``validate_file_types`` must distinguish path-traversal ``..`` segments
+    from legitimate filenames that contain ``..`` as a substring."""
+
+    def test_allows_double_dot_in_filename(self) -> None:
+        """``foo..bar.py`` is a legal filename — ``..`` is a substring, not a
+        path segment, so it must not be rejected."""
+        validate_file_types("foo..bar.py")  # must not raise
+
+    def test_rejects_parent_segment(self) -> None:
+        """``../etc/passwd`` and ``a/../b`` contain ``..`` as a standalone
+        path segment and must be rejected."""
+        with pytest.raises(ValueError, match="unsafe"):
+            validate_file_types("../etc/passwd")
+        with pytest.raises(ValueError, match="unsafe"):
+            validate_file_types("a/../b")
