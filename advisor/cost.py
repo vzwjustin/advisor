@@ -20,7 +20,7 @@ import os
 import warnings
 from dataclasses import dataclass
 from datetime import date
-from functools import cache, lru_cache
+from functools import lru_cache
 from pathlib import Path
 
 from ._fs import read_text_capped
@@ -86,13 +86,15 @@ def _family_of(model: str) -> str:
     return "sonnet"
 
 
-@cache
+@lru_cache(maxsize=64)
 def _warn_unknown_family(model: str) -> None:
     """Issue a once-per-model warning for unclassifiable model names.
 
-    ``cache`` dedupes so repeated calls for the same model during a
-    single ``estimate_cost`` invocation (advisor + N runners of the same
-    family) emit exactly one line.
+    ``lru_cache(maxsize=64)`` dedupes so repeated calls for the same
+    model during a single ``estimate_cost`` invocation emit exactly one
+    line, while bounding memory use to at most 64 distinct model strings
+    (an unbounded ``@cache`` would grow without limit if callers pass
+    many distinct unknown names).
     """
     warnings.warn(
         f"cost: unknown model family for {model!r}; pricing as 'sonnet' — "

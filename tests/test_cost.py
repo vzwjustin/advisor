@@ -227,6 +227,18 @@ class TestEstimateCost:
 
         assert cost._tokens_for_file(str(p)) > first
 
+    def test_warn_unknown_family_is_bounded(self) -> None:
+        """A-10: ``_warn_unknown_family`` cache must not grow beyond maxsize=64."""
+        import warnings
+
+        cost._warn_unknown_family.cache_clear()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            for i in range(100):
+                cost._warn_unknown_family(f"unknown-model-{i}")
+
+        assert cost._warn_unknown_family.cache_info().currsize <= 64
+
 
 class TestLoadPricing:
     """``load_pricing`` parses both object and array shapes."""
