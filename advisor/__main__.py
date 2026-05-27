@@ -2921,6 +2921,8 @@ def _load_findings_from_input(
             if not isinstance(raw, list):
                 wrong_findings_type = type(raw).__name__
                 raw = []
+            from .verify import INCOMPLETE_FILE_PATH as _INCOMPLETE_JSON
+
             findings: list[object] = []
             for f in raw:
                 if not isinstance(f, dict):
@@ -2932,9 +2934,22 @@ def _load_findings_from_input(
                         if isinstance(raw_rule_id, str) and raw_rule_id.strip()
                         else None
                     )
+                    # Filter the partial-drop sentinel here too. The
+                    # ``_audit_scope_drift`` filter catches it on the
+                    # transcript path; the markdown parser at
+                    # ``parse_findings_with_drift(None)`` filters its
+                    # ``kept`` list. The JSON path was the third entry
+                    # point (``advisor baseline create --from x.json``,
+                    # ``advisor audit --json | downstream``) and used to
+                    # let ``"file_path": "<incomplete>"`` flow through
+                    # to SARIF / baseline / PR-comment sinks where
+                    # consumers mistake it for a real path.
+                    file_path = str(f["file_path"])
+                    if file_path == _INCOMPLETE_JSON:
+                        continue
                     findings.append(
                         Finding(
-                            file_path=str(f["file_path"]),
+                            file_path=file_path,
                             severity=_canonical_severity(
                                 str(f["severity"]), context="<json-import>"
                             ),

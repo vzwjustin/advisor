@@ -238,6 +238,21 @@ class TestOutOfBatch:
         normalized = normalize_batch_files({"src/auth.py"})
         assert out_of_batch(anchor, normalized) is True
 
+    def test_empty_batch_returns_false(self) -> None:
+        """Regression: an empty ``batch_files`` collection previously
+        flagged every anchored reply as drift, which would gate the
+        entire session if a runner ever received an empty batch
+        (misconfiguration, or a public-API caller bypassing the
+        dispatch-layer non-empty check). Empty batch = no scope to
+        drift from, so out_of_batch returns False."""
+        anchor = parse_scope_anchor("SCOPE: src/anything.py · reading")
+        # Plain set path.
+        assert out_of_batch(anchor, set()) is False
+        # Plain list path.
+        assert out_of_batch(anchor, []) is False
+        # Frozenset fast-path.
+        assert out_of_batch(anchor, frozenset()) is False
+
 
 class TestNormalizeBatchFiles:
     def test_strips_dot_slash(self) -> None:

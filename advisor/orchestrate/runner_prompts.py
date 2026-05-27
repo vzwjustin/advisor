@@ -59,10 +59,17 @@ def _fix_count_trigger(cap: int) -> str:
     that one in sync if you change the wording here.
     """
     if cap <= 1:
+        # Interpolate ``cap`` rather than hardcoding "Cap of 1" — a
+        # caller passing ``cap=0`` (the explore-only configuration,
+        # reachable when ``TeamConfig`` is constructed directly) would
+        # otherwise see "Cap of 1" in their spawn prompt followed by a
+        # ValueError on the first fix assignment ("fix_number=1 >
+        # cap=0"). Showing the actual cap keeps the spawn prompt
+        # consistent with the assignment-time enforcement.
         return (
             "**The moment your first fix is assigned — send "
-            "`CONTEXT_PRESSURE` immediately after completing it.** Cap of 1 "
-            "leaves no runway otherwise.\n\n"
+            "`CONTEXT_PRESSURE` immediately after completing it.** "
+            f"Cap of {max(cap, 1)} leaves no runway otherwise.\n\n"
         )
     return (
         f"**The moment you finish fix #{cap - 1} of {cap} — BEFORE "
@@ -653,6 +660,21 @@ def build_fix_assignment_message(
     """
     if fix_number < 1:
         raise ValueError(f"fix_number must be >= 1 (got {fix_number}); fix numbering is 1-indexed")
+
+    # Reject whitespace-only payload — the prior shape silently emitted
+    # an empty fenced block (e.g. ``Problem:\n```\n\n```\n``) and the
+    # runner received a fix assignment with no instructions. The
+    # validators below mirror the ``fix_number`` check above: a fix
+    # assignment without a usable Problem/Change/Acceptance is a
+    # programmer error in the caller, not a runtime path to silently
+    # tolerate. ``strip()`` first so trailing whitespace doesn't pass.
+    for label, value in (("problem", problem), ("change", change), ("acceptance", acceptance)):
+        if not value.strip():
+            raise ValueError(
+                f"{label} must not be empty or whitespace-only — a fix assignment "
+                f"with no {label!r} text would render as an empty fenced block "
+                f"and leave runner-{runner_id} with nothing to act on."
+            )
 
     effective_cap = large_file_max_fixes if is_large_file else max_fixes
     cap_label = "large-file cap" if is_large_file else "cap"

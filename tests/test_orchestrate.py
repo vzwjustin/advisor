@@ -833,6 +833,29 @@ class TestBuildFixAssignmentMessage:
             )
         assert "large-file" in str(excinfo.value).lower()
 
+    @pytest.mark.parametrize(
+        "field",
+        ["problem", "change", "acceptance"],
+    )
+    def test_whitespace_only_payload_raises(self, field):
+        """Regression: a whitespace-only ``problem`` / ``change`` /
+        ``acceptance`` used to be silently fence-wrapped, leaving the
+        runner with an empty fenced block to act on. Now rejected at
+        construction time so the caller can't dispatch a no-op fix
+        message."""
+        kwargs = self._kwargs()
+        kwargs[field] = "   \n\t  "
+        with pytest.raises(ValueError, match=f"{field} must not be empty"):
+            build_fix_assignment_message(**kwargs)
+
+    def test_empty_string_payload_raises(self):
+        """The ``str.strip()`` guard also catches the empty-string case
+        (one branch in the validator covers both)."""
+        kwargs = self._kwargs()
+        kwargs["change"] = ""
+        with pytest.raises(ValueError, match="change must not be empty"):
+            build_fix_assignment_message(**kwargs)
+
 
 class TestCheckBatchFixBudget:
     """Pre-flight validator for dispatch plans."""
@@ -1110,6 +1133,28 @@ class TestSanitizationHelpers:
         assert _safe_str("team\r\nname") == "team\\r\\nname"
         # Mixed: quote + newline + backslash all on one input.
         assert _safe_str('a"b\nc\\d') == 'a\\"b\\nc\\\\d'
+
+    def test_safe_str_escapes_unicode_line_terminators(self):
+        """Regression: prior shape escaped only ``\\n`` / ``\\r`` — a
+        ``team_name`` containing U+2028 (LINE SEPARATOR), U+2029
+        (PARAGRAPH SEPARATOR), U+0085 (NEL), VT, or FF would visually
+        shatter the rendered ``TeamCreate(name="...")`` line in any
+        Unicode-aware renderer (GitHub Markdown, VS Code preview).
+        All five are now escaped using conventional Python literal
+        forms so the snippet stays a single visible line AND the
+        original character round-trips on un-escape."""
+        from advisor.orchestrate.pipeline import _safe_str
+
+        assert _safe_str("team name") == "team\\u2028name"
+        assert _safe_str("team name") == "team\\u2029name"
+        assert _safe_str("team\x85name") == "team\\x85name"
+        assert _safe_str("team\x0bname") == "team\\x0bname"
+        assert _safe_str("team\x0cname") == "team\\x0cname"
+        # No raw line-terminator survives in the output — confirm by
+        # checking each is gone.
+        out = _safe_str("a b c\x85d\x0be\x0cf\nx\ry")
+        for ch in (" ", " ", "\x85", "\x0b", "\x0c", "\n", "\r"):
+            assert ch not in out
 
     def test_fence_safe_lang_strips_line_separator(self):
         """U+2028 / U+2029 / U+0085 split a single-line fence info-string on

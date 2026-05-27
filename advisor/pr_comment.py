@@ -141,6 +141,22 @@ def format_pr_comment(findings: list[Finding]) -> str:
     # GitHub API's body validator.
     findings = [_sanitize(f) for f in findings]
 
+    # Sort by severity so HIGH/CRITICAL findings always appear first in
+    # the rendered detail list. The body is truncated at
+    # ``_GITHUB_BODY_LIMIT`` UTF-8 bytes when it would exceed GitHub's
+    # cap — without this sort, a long-evidence LOW finding could push
+    # CRITICAL findings off the bottom of the comment. Reviewers reading
+    # the PR body see the most-actionable items first; the truncation
+    # message at the bottom names how many got cut. Unknown severities
+    # sort last (they're clamped to LOW for table counts but render
+    # with their original string). Stable sort preserves the caller's
+    # original ordering within each severity bucket.
+    _sev_rank = {sev: i for i, sev in enumerate(_SEVERITY_ORDER)}
+    findings = sorted(
+        findings,
+        key=lambda f: _sev_rank.get(f.severity.upper(), len(_SEVERITY_ORDER)),
+    )
+
     # Unknown severities are clamped to LOW so the per-severity table rows
     # sum to ``len(findings)``. Without this, a finding tagged ``"INFO"``
     # (or any non-canonical severity) would increment the total headline

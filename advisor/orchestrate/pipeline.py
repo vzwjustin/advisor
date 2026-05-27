@@ -4,18 +4,41 @@ from __future__ import annotations
 
 from .config import TeamConfig
 
+# Extra line-terminating code points beyond ``\n`` / ``\r`` that any
+# Unicode-aware renderer (GitHub Markdown, VS Code preview, ``less -R``)
+# treats as line breaks. The prior shape escaped only ``\n`` / ``\r``,
+# so a hostile or autocorrected ``team_name`` containing U+2028 would
+# visually shatter the rendered ``TeamCreate(name="...")`` line. Escape
+# each to its conventional Python literal form so the rendered snippet
+# stays a single visible line AND the original character round-trips
+# losslessly if a downstream consumer un-escapes (matches the
+# semantic of the pre-existing ``\\n`` / ``\\r`` escaping).
+_EXTRA_LINEBREAK_ESCAPES: tuple[tuple[str, str], ...] = (
+    ("\x0b", "\\x0b"),  # VT
+    ("\x0c", "\\x0c"),  # FF
+    ("\x85", "\\x85"),  # NEL (C1 line terminator)
+    (" ", "\\u2028"),  # LS
+    (" ", "\\u2029"),  # PS
+)
+
 
 def _safe_str(value: str) -> str:
     """Escape a value rendered inside a double-quoted reference snippet.
 
     The output of :func:`render_pipeline` contains pseudo-code like
     ``TeamCreate(name="{config.team_name}")``. A team name containing a
-    literal ``"`` would close the string early; a literal newline would
-    shatter the snippet across lines and corrupt the reference that users
-    paste/copy. Backslash-escape backslash, quote, and CR/LF so the
-    rendered snippet stays a single syntactically valid line.
+    literal ``"`` would close the string early; any line-terminating
+    code point would shatter the snippet across lines and corrupt the
+    reference that users paste/copy. Backslash-escape backslash, quote,
+    CR/LF, AND the five additional Unicode line-terminator code points
+    so the rendered snippet stays a single syntactically valid line on
+    every renderer.
     """
-    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r")
+    value = value.replace("\\", "\\\\").replace('"', '\\"')
+    value = value.replace("\n", "\\n").replace("\r", "\\r")
+    for raw, escaped in _EXTRA_LINEBREAK_ESCAPES:
+        value = value.replace(raw, escaped)
+    return value
 
 
 def render_pipeline(config: TeamConfig) -> str:

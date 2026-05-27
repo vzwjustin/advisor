@@ -146,7 +146,14 @@ def get_preset(name: str) -> RulePack:
     Raises :class:`ValueError` with the list of available presets when
     ``name`` is unknown — so the CLI's error message tells the user what
     *is* valid without a separate lookup.
+
+    Strips surrounding whitespace before lookup so that a copy-pasted or
+    shell-completion-quirked value like ``"python-web "`` (trailing
+    space) succeeds instead of producing the confusing
+    ``"unknown preset 'python-web '"`` error where the quoted name
+    looks correct at a glance.
     """
+    name = name.strip()
     if name not in PRESETS:
         available = ", ".join(sorted(PRESETS))
         raise ValueError(f"unknown preset {name!r}. available: {available}")

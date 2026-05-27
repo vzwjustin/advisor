@@ -15,6 +15,18 @@ The description hash uses the first 120 chars so a trivial rewording of
 the same underlying finding still matches. More aggressive matching
 (e.g. line-number tolerance) is deliberately out of scope — baselines
 should be tight enough that a genuine new finding surfaces.
+
+.. warning::
+
+    **120-character collision boundary.** Two genuinely distinct findings
+    on the same file whose descriptions share the same first 120
+    characters are treated as the same baseline entry — the second is
+    silently suppressed on every subsequent run and never surfaces as
+    "new". This is rare in practice (most findings differ within the
+    first sentence), but can bite users whose runners emit verbose
+    template-based descriptions. Mitigation: attach an explicit
+    ``rule_id`` to each finding (the rule_id participates in the
+    identity key), or write more specific first-sentence descriptions.
 """
 
 from __future__ import annotations

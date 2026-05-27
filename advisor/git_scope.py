@@ -44,6 +44,15 @@ def _require_git() -> None:
 # tradeoff between "works on a large repo" and "bails quickly on a hang".
 _GIT_TIMEOUT_SECONDS = 30
 
+# Hard ceiling on git stdout bytes. ``git diff --name-only`` returns one
+# path per line — typical: a few KB; pathological monorepo with 50k+
+# files changed: tens of MB. ``subprocess.communicate()`` buffers all
+# stdout in memory with no cap. 50 MiB matches advisor's other
+# pipe-data ceilings (``__main__._STDIN_LIMIT``) and is well above any
+# realistic repo's name-only diff while still bounding worst-case
+# allocation if something runs away.
+_GIT_MAX_STDOUT_BYTES = 50 * 1024 * 1024
+
 # Characters legal in a git ref or revspec we want to support
 # (branch/tag names, ``HEAD~N``, ``main^``, ``origin/foo``, reflog
 # ``@{2.weeks.ago}``). Anything outside this class is rejected at the
@@ -118,6 +127,22 @@ def _run_git(cwd: Path, *args: str) -> list[str]:
     if proc.returncode != 0:
         stderr_text = stderr.strip() or "(no stderr)"
         raise GitScopeError(f"git {' '.join(args)} failed: {stderr_text}")
+    # Defense-in-depth: ``proc.communicate()`` buffered everything in
+    # memory with no cap. A pathological monorepo or a misconfigured
+    # ``--since`` (e.g. against an ancient root commit) could deliver
+    # tens of MB of paths and dominate process memory. Refuse to
+    # propagate runaway output as a path list — the resulting plan
+    # would have been unusable anyway. The byte-length check is on
+    # the decoded string (post ``errors="replace"`` substitution),
+    # which over-counts wide-replacement-char inputs but is correct
+    # for an upper-bound check.
+    if len(stdout.encode("utf-8", errors="replace")) > _GIT_MAX_STDOUT_BYTES:
+        raise GitScopeError(
+            f"git {' '.join(args)} produced more than "
+            f"{_GIT_MAX_STDOUT_BYTES // (1024 * 1024)} MiB of output — "
+            "refusing to load. Narrow the scope (e.g. a more recent "
+            "``--since`` ref) or run advisor against a smaller subtree."
+        )
     return [line for line in stdout.splitlines() if line.strip()]
 
 

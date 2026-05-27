@@ -278,8 +278,18 @@ def out_of_batch(anchor: ScopeAnchor | None, batch_files: Iterable[str]) -> bool
 
     An empty / missing anchor returns ``False`` — no file claim is
     neither drifting nor confirming.
+
+    An empty ``batch_files`` collection returns ``False`` — a runner
+    with no assigned files can't meaningfully be "off-batch"; flagging
+    every anchored reply as drift would gate the entire session. The
+    dispatch layer already rejects empty batches at construction time
+    (``build_runner_dispatch_messages``), but this public API may be
+    called independently and should not surface as an alarm-on-empty
+    behavioral trap.
     """
     if anchor is None or not anchor.file_path:
+        return False
+    if not batch_files:
         return False
     key = _normalize(anchor.file_path)
     if isinstance(batch_files, frozenset):
