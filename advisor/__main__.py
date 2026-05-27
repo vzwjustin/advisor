@@ -17,6 +17,7 @@ import time
 import warnings
 from collections.abc import Callable, Sequence
 from dataclasses import fields as _dc_fields
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, cast
 
@@ -44,6 +45,9 @@ from .focus import (
 )
 from .git_scope import GitScopeError, resolve_git_scope
 from .history import (
+    HISTORY_SCHEMA_VERSION,
+    HistoryEntry,
+    append_entries,
     file_repeat_scores,
     format_history_block,
     history_path,
@@ -99,6 +103,8 @@ from .orchestrate._fence import sanitize_inline
 from .orchestrate.config import DEFAULT_ADVISOR_MODEL, DEFAULT_RUNNER_MODEL, POOL_SIZE_CEILING
 from .rank import load_advisorignore, rank_files
 from .sarif import findings_to_sarif
+
+UTC = timezone.utc
 
 # Top-level schema version for JSON outputs. Bump when the shape of any
 # ``--json`` payload changes in a way that would break downstream parsers.
@@ -2456,6 +2462,158 @@ def cmd_history(args: argparse.Namespace) -> int:
     return 0
 
 
+# Severity / status allowlists for ``advisor history-append`` input.
+# Mirrors history._ALLOWED_SEVERITIES / _ALLOWED_STATUSES but kept local
+# so we reject bad input AT WRITE TIME rather than coercing it to
+# "UNKNOWN" at read time (which is the right behavior for legacy files
+# but the wrong behavior for fresh writes — the advisor agent should
+# get a non-zero exit code so it can correct the call).
+_APPEND_SEVERITIES = frozenset({"CRITICAL", "HIGH", "MEDIUM", "LOW"})
+_APPEND_STATUSES = frozenset({"CONFIRMED", "FIXED", "REJECTED"})
+
+
+def _coerce_finding_for_append(
+    payload: object, *, default_run_id: str, default_ts: str
+) -> HistoryEntry:
+    """Validate and normalize one incoming finding dict into a HistoryEntry.
+
+    Raises ValueError with a precise message on bad input so the CLI can
+    print it and exit non-zero — the agent prompt should see actionable
+    errors, not silently-dropped findings.
+    """
+    if not isinstance(payload, dict):
+        raise ValueError(f"expected JSON object, got {type(payload).__name__}")
+    for required in ("file_path", "severity", "description"):
+        v = payload.get(required)
+        if not isinstance(v, str) or not v.strip():
+            raise ValueError(f"missing or empty required field: {required!r}")
+    severity = str(payload["severity"]).upper().strip()
+    if severity not in _APPEND_SEVERITIES:
+        raise ValueError(f"severity {payload['severity']!r} not in {sorted(_APPEND_SEVERITIES)}")
+    status = str(payload.get("status", "CONFIRMED")).upper().strip()
+    if status not in _APPEND_STATUSES:
+        raise ValueError(f"status {payload.get('status')!r} not in {sorted(_APPEND_STATUSES)}")
+    run_id = str(payload.get("run_id") or default_run_id).strip()
+    if not run_id:
+        raise ValueError("run_id resolved to empty string")
+    timestamp = str(payload.get("timestamp") or default_ts).strip()
+    if not timestamp:
+        raise ValueError("timestamp resolved to empty string")
+    return HistoryEntry(
+        timestamp=timestamp,
+        file_path=str(payload["file_path"]).strip(),
+        severity=severity,
+        description=str(payload["description"]).strip(),
+        status=status,
+        run_id=run_id,
+        schema_version=str(payload.get("schema_version", HISTORY_SCHEMA_VERSION)),
+    )
+
+
+def cmd_history_append(args: argparse.Namespace) -> int:
+    """Append CONFIRMED findings to ``<target>/.advisor/history.jsonl``.
+
+    Reads newline-delimited JSON from stdin — one finding per line, or a
+    single JSON array. Designed to be called by the advisor agent at
+    CONFIRM-time and again at end-of-run as a reconciliation pass.
+
+    Each finding requires ``file_path``, ``severity`` (CRITICAL/HIGH/
+    MEDIUM/LOW), and ``description``. Optional: ``status`` (default
+    CONFIRMED), ``run_id`` (defaults to one stable run_id for this
+    invocation), ``timestamp`` (defaults to now-UTC).
+
+    ``--dedup`` skips entries whose (run_id, file_path, severity,
+    description) tuple already exists in the last 500 entries — lets the
+    agent call this multiple times in one run (per-CONFIRM + end-of-run
+    reconciliation) without duplicating rows.
+    """
+    target = Path(args.target)
+    # _read_stdin_capped enforces the project-wide 50 MiB stdin cap and
+    # exits 2 on overflow with a styled message — consistent with the
+    # other piped-stdin subcommands (audit, baseline create, etc.).
+    raw = _read_stdin_capped(source_label="advisor history-append")
+    if not raw.strip():
+        print(_style.err("no JSON input on stdin"), file=sys.stderr)
+        return 2
+    # Accept either a JSON array or NDJSON (one object per non-blank line).
+    raw_stripped = raw.lstrip()
+    payloads: list[object] = []
+    if raw_stripped.startswith("["):
+        try:
+            arr = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            print(_style.err(f"invalid JSON array: {exc}"), file=sys.stderr)
+            return 2
+        if not isinstance(arr, list):
+            print(_style.err("top-level JSON must be array or object"), file=sys.stderr)
+            return 2
+        payloads = list(arr)
+    else:
+        for line_no, line in enumerate(raw.splitlines(), start=1):
+            s = line.strip()
+            if not s:
+                continue
+            try:
+                payloads.append(json.loads(s))
+            except json.JSONDecodeError as exc:
+                print(_style.err(f"line {line_no}: invalid JSON: {exc}"), file=sys.stderr)
+                return 2
+    if not payloads:
+        print(_style.err("no findings parsed from stdin"), file=sys.stderr)
+        return 2
+    default_run_id = (args.run_id or new_run_id()).strip()
+    default_ts = datetime.now(UTC).isoformat()
+    try:
+        entries = [
+            _coerce_finding_for_append(p, default_run_id=default_run_id, default_ts=default_ts)
+            for p in payloads
+        ]
+    except ValueError as exc:
+        print(_style.err(str(exc)), file=sys.stderr)
+        return 2
+    if args.dedup:
+        # Read recent entries to build a dedup set. The 500-entry window
+        # matches the ranker window — anything older than that already
+        # can't influence ranking, so re-adding it is harmless.
+        existing = load_recent_findings(history_path(target), limit=500)
+        seen = {(e.run_id, e.file_path, e.severity, e.description) for e in existing}
+        deduped: list[HistoryEntry] = []
+        skipped = 0
+        for e in entries:
+            key = (e.run_id, e.file_path, e.severity, e.description)
+            if key in seen:
+                skipped += 1
+                continue
+            seen.add(key)
+            deduped.append(e)
+        entries = deduped
+        if not args.quiet and skipped:
+            print(_style.dim(f"deduped {skipped} duplicate finding(s)"), file=sys.stderr)
+    if not entries:
+        # All deduped out — exit success, the agent gets confirmation
+        # that everything it intended to write was already present.
+        if getattr(args, "json", False):
+            print(json.dumps({"appended": 0, "run_id": default_run_id}))
+        elif not args.quiet:
+            print(_style.dim("nothing to append (all entries deduped)"))
+        return 0
+    path = append_entries(target, entries)
+    if getattr(args, "json", False):
+        print(
+            json.dumps(
+                {
+                    "schema_version": JSON_SCHEMA_VERSION,
+                    "appended": len(entries),
+                    "run_id": default_run_id,
+                    "history_path": str(path),
+                }
+            )
+        )
+    elif not args.quiet:
+        print(_style.ok(f"appended {len(entries)} finding(s) to {path}"))
+    return 0
+
+
 def cmd_live(args: argparse.Namespace) -> int:
     """Emit / inspect events in ``<target>/.advisor/live/events.jsonl``.
 
@@ -4003,6 +4161,58 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_history.add_argument("--quiet", action="store_true", help="Suppress CTA/tip lines")
     p_history.set_defaults(func=cmd_history)
+
+    # `advisor history-append` — write path for the advisor agent. Reads
+    # NDJSON (or a JSON array) from stdin and appends each finding to
+    # ``<target>/.advisor/history.jsonl``. Kept as a separate top-level
+    # subcommand rather than a flag on `advisor history` because the
+    # input shape is fundamentally different (stdin-driven write vs
+    # read-only formatted output) and bundling them would mean every
+    # `--help` listing the read flags alongside the write flags.
+    p_history_append = sub.add_parser(
+        "history-append",
+        help=(
+            "Append CONFIRMED findings (NDJSON on stdin) to "
+            "<target>/.advisor/history.jsonl. Called by the advisor agent."
+        ),
+    )
+    p_history_append.add_argument(
+        "target",
+        nargs="?",
+        default=".",
+        help="Target directory containing the .advisor/ tree (default: current directory)",
+    )
+    p_history_append.add_argument(
+        "--run-id",
+        default=None,
+        help=(
+            "Override the run_id used when a finding's payload omits it. "
+            "Defaults to a fresh timestamped run_id per invocation — pass "
+            "the same value across multiple history-append calls in the "
+            "same /advisor run so --dedup can suppress duplicate writes."
+        ),
+    )
+    p_history_append.add_argument(
+        "--dedup",
+        action="store_true",
+        help=(
+            "Skip entries whose (run_id, file_path, severity, description) "
+            "tuple already exists in the last 500 entries. Use this when "
+            "calling history-append more than once per run (per-finding + "
+            "end-of-run reconciliation) so a finding isn't written twice."
+        ),
+    )
+    p_history_append.add_argument(
+        "--json",
+        action="store_true",
+        help="Print a JSON summary of the append on stdout",
+    )
+    p_history_append.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress the human-readable success line",
+    )
+    p_history_append.set_defaults(func=cmd_history_append)
 
     # `advisor live` — ephemeral event-stream tap for the dashboard's Live
     # tab. Separate from `advisor history` because the two stores have

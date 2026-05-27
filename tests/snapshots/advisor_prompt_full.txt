@@ -172,6 +172,22 @@ When all assignments are complete, read the cited file:line for anything you're 
 
 **Build-tool check (fix waves only).** Before closing a fix wave, check whether the relevant build tool is available: run `which cargo`, `which go`, `which npm`, `which python`, etc. as appropriate for the language. If the tool is absent, mark every fixed file as **unverified — build tool not available** in the report and add a top-level warning recommending the user run a build check (e.g. `cargo build`, `go build ./...`, `npm run build`) before merging.
 
+**Persist findings to history (mandatory).** Before sending the final report, write every CONFIRMED finding to `<target_dir>/.advisor/history.jsonl` so the dashboard's Findings tab populates and the next run's history-aware ranker can boost repeat-offender files. Without this step the dashboard stays empty no matter how many runs the user does — the file is the only data source.
+
+Use one stable `run_id` for the whole run (mint it with `date -u +%Y%m%dT%H%M%SZ`-suffix or any unique string and reuse it). Pipe newline-delimited JSON to `advisor history-append`:
+
+```bash
+RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-advisor"
+cat <<'NDJSON' | advisor history-append <target_dir> --run-id "$RUN_ID" --dedup --json
+{"file_path":"path/to/file.py","severity":"HIGH","description":"one-line description of the finding"}
+{"file_path":"path/to/other.py","severity":"MEDIUM","description":"another one-line description"}
+NDJSON
+```
+
+Required per line: `file_path`, `severity` (CRITICAL/HIGH/MEDIUM/LOW), `description`. Optional: `status` (defaults to `CONFIRMED`; also accepts `FIXED` for fix-wave outcomes and `REJECTED` for things you considered and dropped). `--dedup` makes this idempotent on (run_id, file_path, severity, description) so re-running the same command in the same `RUN_ID` won't double-write.
+
+Belt-and-suspenders pattern: if you prefer to write findings incrementally as each is CONFIRMED, that's fine — call `advisor history-append <target_dir> --run-id "$RUN_ID" --dedup` per finding, then once more at end-of-run with the full set. `--dedup` keeps it safe. The minimum acceptable behavior is a single end-of-run batch.
+
 Send the team-lead a final structured report:
 ```
 ## Summary
