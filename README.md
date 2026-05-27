@@ -353,3 +353,7 @@ no-op or unhealthy install · `2` argparse / user error · `1` unexpected.
   runtime flow, data contract, design invariants
 - [`docs/prompts.md`](docs/prompts.md) — prompt engineering notes for
   contributors modifying prompt templates
+
+## License
+
+[MIT](LICENSE) — Copyright (c) 2025–2026 Justin Adams ([@vzwjustin](https://github.com/vzwjustin)).
