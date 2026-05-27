@@ -140,10 +140,11 @@ def _strip_fenced_blocks(text: str) -> str:
     # ``PROTOCOL_VIOLATION`` lines that appear after the open marker.
     # That sentinel is the audit's primary safety signal — a false
     # negative there is worse than a stray code-fenced quote slipping
-    # through. Restore the original lines from one past the fence-open
-    # onward (the open marker line itself stays blanked) so violations
-    # after a forgotten ``\`\`\`` are still detected.
+    # through. Restore the original lines from the fence-open marker
+    # onward (including the open marker itself) so violations after a
+    # forgotten closing ``\`\`\`` are still detected.
     if in_fence and fence_open_line is not None:
+        out[fence_open_line] = lines[fence_open_line]
         for idx in range(fence_open_line + 1, len(lines)):
             out[idx] = lines[idx]
     return "\n".join(out)

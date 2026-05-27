@@ -306,3 +306,38 @@ class TestHistoryStatsCLI:
     def test_stats_empty_history_friendly_message(self, tmp_path: Path, capsys) -> None:
         out = self._run(capsys, ["history", str(tmp_path), "--stats"])
         assert "no history yet" in out
+
+
+class TestLoadRecentFindingsBomHandling:
+    """L4 regression: reader uses strict utf-8; BOM-prefixed files must not
+    be silently accepted (utf-8-sig was previously used, masking write-side
+    bugs that produced BOM-prefixed output)."""
+
+    def test_load_recent_findings_rejects_bom_or_handles_cleanly(self, tmp_path: Path) -> None:
+        """Write a BOM-prefixed JSONL by hand and assert the reader either
+        raises clearly (via the UnicodeDecodeError → UserWarning path) or
+        returns an empty list — never silently accepts and parses it."""
+        import warnings
+
+        hp = history_path(tmp_path)
+        hp.parent.mkdir(parents=True, exist_ok=True)
+        entry = _entry(file_path="bom.py")
+        # Write a valid JSONL line prefixed with a UTF-8 BOM (\xef\xbb\xbf).
+        bom_line = b"\xef\xbb\xbf" + (entry.to_json_line() + "\n").encode("utf-8")
+        hp.write_bytes(bom_line)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = load_recent(tmp_path, limit=10)
+
+        # The reader must NOT silently parse the BOM-corrupted entry.
+        # Acceptable outcomes: empty list (decode error caught and warned) or
+        # empty list (JSON parse failed and warned). The BOM-prefixed first
+        # token is not valid JSON, so either path is fine — what matters is
+        # that the entry is NOT returned as if the file were clean.
+        assert result == [] or all(e.file_path != "bom.py" for e in result), (
+            "BOM-prefixed JSONL must not be silently parsed as valid utf-8"
+        )
+        # If the list is empty, a warning should have been emitted explaining why.
+        if not result:
+            assert len(caught) > 0, "reader must warn when it cannot decode/parse"

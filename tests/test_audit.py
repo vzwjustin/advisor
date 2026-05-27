@@ -652,3 +652,24 @@ def test_unclosed_fence_does_not_blind_protocol_violation():
     assert any("scope" in v for v in report.protocol_violations), (
         "PROTOCOL_VIOLATION after unclosed fence must still be detected"
     )
+
+
+def test_strip_fenced_blocks_restores_open_marker_on_unclosed():
+    """L3 regression: unclosed-fence recovery must also restore the open-marker
+    line itself, not just the lines that follow it.
+
+    The open marker line (e.g. triple-backtick python) was previously left
+    blanked after recovery, which could silently drop a PROTOCOL_VIOLATION
+    that appeared *on* that same line (an unusual but possible edge case).
+    """
+    from advisor.audit import _strip_fenced_blocks
+
+    # Craft input where the open-marker line itself contains the sentinel.
+    # Real transcripts won't do this, but the invariant must hold defensively.
+    text = "normal line\n```PROTOCOL_VIOLATION: on marker\ncontent\nno close"
+    result = _strip_fenced_blocks(text)
+    result_lines = result.split("\n")
+    # The open-marker line must be restored verbatim (not blanked).
+    assert result_lines[1] == "```PROTOCOL_VIOLATION: on marker", (
+        "open-marker line must be restored on unclosed-fence recovery"
+    )

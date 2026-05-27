@@ -883,6 +883,8 @@ def _anchored_keyword_pattern(group: str, kw: str) -> str:
     not for trailing-underscore prefixes — the latter need an unanchored
     right side so ``wp_`` matches inside ``wp_query``.
     """
+    if not kw:
+        raise ValueError("empty keyword")
     escaped = re.escape(kw)
     left = r"(?<!\w)" if not kw[:1].isalnum() and kw[:1] != "_" else r"\b"
     if not kw[-1:].isalnum() and kw[-1:] != "_":

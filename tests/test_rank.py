@@ -513,3 +513,13 @@ class TestLanguageAwareKeywords:
         assert "javascript" in LANGUAGE_EXTRA_KEYWORDS
         assert "go" in LANGUAGE_EXTRA_KEYWORDS
         assert "rust" in LANGUAGE_EXTRA_KEYWORDS
+
+
+class TestAnchoredKeywordPattern:
+    """L1 guard — _anchored_keyword_pattern rejects empty keywords."""
+
+    def test_anchored_keyword_pattern_rejects_empty(self):
+        from advisor.rank import _anchored_keyword_pattern
+
+        with pytest.raises(ValueError, match="empty keyword"):
+            _anchored_keyword_pattern("g", "")

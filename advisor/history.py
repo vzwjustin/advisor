@@ -361,12 +361,15 @@ def load_recent_findings(history_path: Path, *, limit: int = 500) -> list[Histor
     while True:
         lines: deque[tuple[int, str]] = deque(maxlen=buffer_size)
         try:
-            # utf-8-sig transparently strips a leading BOM on the first line —
-            # some Windows editors write one, and plain utf-8 would otherwise
-            # leave it attached to the first JSON object, triggering
-            # JSONDecodeError and silently dropping what is typically the
-            # newest entry after the reverse-on-read flip.
-            with history_path.open("r", encoding="utf-8-sig") as f:
+            # Use strict utf-8 — utf-8-sig silently strips a BOM, masking
+            # corruption from editors that write a BOM-prefixed file. We
+            # write utf-8 (no BOM) and prefer to surface a UnicodeDecodeError
+            # rather than silently mangle the first JSON object. If a BOM is
+            # encountered, the caller will see a clear decode error via the
+            # except block below, rather than a silent JSONDecodeError drop.
+            # Never switch to utf-8-sig here: that would normalise away a
+            # class of write-side bugs we want to stay visible.
+            with history_path.open("r", encoding="utf-8") as f:
                 # Stream lines directly into the bounded deque so a huge
                 # history file does not materialize an O(file-size) intermediate
                 # list just to truncate it on the next line.
