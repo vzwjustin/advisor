@@ -62,11 +62,12 @@ _FIX_ASSIGNMENT_RE = re.compile(
 # Heuristic attribution: a ``runner-N`` mention within this many characters
 # immediately before a fix-assignment header is treated as the recipient.
 # Chosen to span a typical SendMessage(to='runner-N', message='...') call
-# plus a little slack, without reaching across unrelated blocks. The
-# 500-char window is also wide enough that a fenced JSON-like dispatch
-# blob with embedded prose still attributes correctly; tighter windows
-# (≤200) under-attribute on real transcripts.
-_RUNNER_ATTRIBUTION_WINDOW = 500
+# followed by a fenced-JSON dispatch blob before the ``## Fix assignment``
+# marker, without reaching across unrelated blocks. 2 000 chars covers
+# real transcripts where the envelope + blob exceeds the old 500-char
+# limit; tighter windows (≤500) under-attribute when the dispatch blob
+# is verbose.
+_RUNNER_ATTRIBUTION_WINDOW = 2000
 
 _RUNNER_MENTION_RE = re.compile(r"runner-(\d+)")
 
