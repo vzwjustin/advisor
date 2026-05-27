@@ -278,13 +278,38 @@ def out_of_batch(anchor: ScopeAnchor | None, batch_files: Iterable[str]) -> bool
 
     An empty / missing anchor returns ``False`` — no file claim is
     neither drifting nor confirming.
+
+    An empty ``batch_files`` collection returns ``False`` — a runner
+    with no assigned files can't meaningfully be "off-batch"; flagging
+    every anchored reply as drift would gate the entire session. The
+    dispatch layer already rejects empty batches at construction time
+    (``build_runner_dispatch_messages``), but this public API may be
+    called independently and should not surface as an alarm-on-empty
+    behavioral trap.
     """
     if anchor is None or not anchor.file_path:
         return False
+    if not batch_files:
+        return False
+    # ``[""]`` / ``{""}`` is a degenerate "non-empty" collection that
+    # bypasses the truthiness guard above — but normalization yields
+    # ``""``, which won't match any real anchor's file_path. Filter
+    # empty-string entries so a degenerate input behaves the same as
+    # an empty collection (= no scope = no drift). Public-API callers
+    # could construct this; dispatch-layer batches are already rejected
+    # earlier in ``build_runner_dispatch_messages``.
     key = _normalize(anchor.file_path)
     if isinstance(batch_files, frozenset):
+        # frozenset is assumed pre-normalized by ``normalize_batch_files``;
+        # an empty-string entry would only sneak in from a hand-built
+        # frozenset, which is rare but we guard symmetrically.
+        if not any(batch_files):
+            return False
         return key not in batch_files
-    return key not in {_normalize(f) for f in batch_files}
+    normalized = {_normalize(f) for f in batch_files if f}
+    if not normalized:
+        return False
+    return key not in normalized
 
 
 def format_budget_nudge(budget: RunnerBudget) -> tuple[str | None, RunnerBudget]:

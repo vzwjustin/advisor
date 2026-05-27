@@ -96,11 +96,15 @@ default_team_config(
     target_dir: str,           # required - the directory to review
     team_name: str = "review",
     file_types: str = "*.py",
-    max_runners: int = 5,
+    max_runners: int | None = None,   # None → env ADVISOR_MAX_RUNNERS or 5
     min_priority: int = 3,
     context: str = "",          # ← user's request goes HERE (not 'user_request')
     advisor_model: str = "claude-opus-4-7",
     runner_model: str = "claude-sonnet-4-6",
+    # Common optional kwargs — see `advisor plan --help` for the full list
+    preset: str | None = None,        # e.g. "python-web", "node-api"
+    test_command: str = "",           # e.g. "pytest -q" — re-dispatch on failure
+    max_fixes_per_runner: int = 5,    # rotation cap; lower if runners exhaust context
 )
 ```
 

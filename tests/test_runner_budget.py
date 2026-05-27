@@ -238,6 +238,42 @@ class TestOutOfBatch:
         normalized = normalize_batch_files({"src/auth.py"})
         assert out_of_batch(anchor, normalized) is True
 
+    def test_empty_batch_returns_false(self) -> None:
+        """Regression: an empty ``batch_files`` collection previously
+        flagged every anchored reply as drift, which would gate the
+        entire session if a runner ever received an empty batch
+        (misconfiguration, or a public-API caller bypassing the
+        dispatch-layer non-empty check). Empty batch = no scope to
+        drift from, so out_of_batch returns False."""
+        anchor = parse_scope_anchor("SCOPE: src/anything.py · reading")
+        # Plain set path.
+        assert out_of_batch(anchor, set()) is False
+        # Plain list path.
+        assert out_of_batch(anchor, []) is False
+        # Frozenset fast-path.
+        assert out_of_batch(anchor, frozenset()) is False
+
+    def test_empty_string_only_batch_returns_false(self) -> None:
+        """Regression: ``[""]`` / ``{""}`` is a degenerate "non-empty"
+        collection that previously bypassed the empty-guard (truthy
+        list) and then mis-flagged every anchor as drift (empty string
+        normalizes to ``""`` which won't match any real anchor). Now
+        treated equivalently to an empty collection — no scope, no
+        drift."""
+        anchor = parse_scope_anchor("SCOPE: src/anything.py · reading")
+        assert out_of_batch(anchor, [""]) is False
+        assert out_of_batch(anchor, {""}) is False
+        assert out_of_batch(anchor, frozenset({""})) is False
+        # Mixed: ``[""]`` + valid path → behaves as if the empty
+        # string weren't there (valid path is the only one that gates).
+        assert out_of_batch(anchor, ["", "src/anything.py"]) is False
+        assert (
+            out_of_batch(
+                parse_scope_anchor("SCOPE: src/other.py · reading"), ["", "src/anything.py"]
+            )
+            is True
+        )
+
 
 class TestNormalizeBatchFiles:
     def test_strips_dot_slash(self) -> None:

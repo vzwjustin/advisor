@@ -322,6 +322,39 @@ def test_error_box_ascii_fallback_under_no_color(monkeypatch):
     assert "bad input" in out
 
 
+def test_error_box_default_stream_is_stderr(monkeypatch):
+    """Regression: ``error_box`` used to default to ``sys.stdout`` like
+    its sibling box helpers. Errors written via the default-stream
+    helper would silently mix into a caller's piped stdout output (e.g.
+    ``advisor ... --json > out.json`` would put an error box at the
+    head of the JSON file). Default now correctly resolves to
+    ``sys.stderr`` so unhandled errors land on the right stream.
+
+    The helper returns a string regardless — this regression test
+    pins the stream-default by inspecting which encoding is used for
+    Unicode-glyph fallback. ``sys.stderr`` and ``sys.stdout`` both
+    support Unicode in the test environment, so we verify by patching
+    one with a non-Unicode encoding and confirming the helper falls
+    back to the ASCII glyph when the OTHER default would have kept
+    Unicode."""
+    import io
+
+    class _AsciiOnlyStream(io.StringIO):
+        encoding = "ascii"
+
+    # Patch sys.stderr with an ASCII-only stream. The error_box must
+    # introspect THIS stream (the new default), so it should fall back
+    # to ``[x]`` instead of the ``✗`` glyph.
+    fake_stderr = _AsciiOnlyStream()
+    monkeypatch.setattr("sys.stderr", fake_stderr)
+    out = _style.error_box("bad input")
+    assert out.startswith("[x] "), (
+        "error_box should now default to sys.stderr; if it still defaults "
+        "to sys.stdout the patched ASCII-only stream wouldn't gate the "
+        "Unicode glyph"
+    )
+
+
 def test_banner_auto_expands_for_overlong_text():
     """Regression: text longer than ``width - 4`` previously overflowed the
     fixed-width border. The banner now auto-widens so the box always encloses

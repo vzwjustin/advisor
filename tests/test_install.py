@@ -206,6 +206,58 @@ class TestEnsureNudge:
         assert result.action == "unchanged"
         assert stream.getvalue() == ""
 
+    def test_refresh_banner_on_upgrade(self, tmp_path: Path):
+        """Regression: on a post-upgrade run where the bundled SKILL_MD
+        or NUDGE_BODY content has changed (everything UPDATED rather
+        than INSTALLED), the banner used to read "advisor first-run
+        setup" + the full quick-start block — misleading for a returning
+        user. The branch now reads "advisor refreshed" and skips the
+        quick-start clutter.
+
+        To simulate "post-upgrade with stale bundled content", seed the
+        files with the CURRENT markers but DIFFERENT body — that way
+        ensure_nudge sees ``has_block=True`` AND
+        ``expected_block not in current``, which triggers UPDATED
+        rather than INSTALLED."""
+        from advisor.install import (
+            END_MARKER,
+            START_MARKER,
+        )
+
+        target = tmp_path / "CLAUDE.md"
+        skill = tmp_path / "skills" / "advisor" / "SKILL.md"
+        update_skill = tmp_path / "skills" / "advisor-update" / "SKILL.md"
+
+        # Seed CLAUDE.md with the sentinel markers but a STALE body —
+        # this is exactly what a post-upgrade user has on disk before
+        # the next ensure_nudge call refreshes the block.
+        stale_nudge_block = f"{START_MARKER}\n## stale advisor nudge from v0.0.1\n{END_MARKER}\n"
+        target.write_text(stale_nudge_block, encoding="utf-8")
+        # Seed SKILL.md with stale content (different from bundled
+        # SKILL_MD body but file exists, triggering UPDATED).
+        skill.parent.mkdir(parents=True, exist_ok=True)
+        skill.write_text("# stale skill body from a prior version\n", encoding="utf-8")
+        update_skill.parent.mkdir(parents=True, exist_ok=True)
+        update_skill.write_text("# stale update-skill from a prior version\n", encoding="utf-8")
+
+        stream = io.StringIO()
+        ensure_nudge(
+            path=target,
+            env={},
+            stream=stream,
+            skill_path=skill,
+            update_skill_path=update_skill,
+        )
+        notice = stream.getvalue()
+        # Refresh-style banner, not first-run.
+        assert "advisor refreshed" in notice, f"refresh banner missing; got:\n{notice}"
+        assert "advisor first-run setup" not in notice
+        assert "Refreshed bundled assets" in notice
+        # Quick-start block is suppressed on the refresh path so a
+        # returning user doesn't get the new-user clutter.
+        assert "Quick start" not in notice
+        assert "Start a code review" not in notice
+
     @pytest.mark.skipif(
         not hasattr(os, "symlink"),
         reason="creating symlinks requires OS support",

@@ -154,3 +154,82 @@ class TestFormatPrComment:
         assert "…" in out
         # No overflow footer — there was only one finding to render.
         assert "Output truncated" not in out
+
+
+class TestFormatPrCommentSeverityOrder:
+    """Regression: findings are sorted by severity before rendering so
+    HIGH / CRITICAL items always appear in the visible portion of the
+    PR comment even when the body would be truncated. Reviewers reading
+    the PR see actionable items first, not whatever the caller's input
+    order happened to be."""
+
+    def test_critical_appears_before_low_in_details(self) -> None:
+        """The detail list renders in severity order regardless of
+        the input order."""
+        from advisor.pr_comment import format_pr_comment
+        from advisor.verify import Finding
+
+        low = Finding(
+            file_path="src/util.py:1",
+            severity="LOW",
+            description="low-severity finding",
+            evidence="line 1",
+            fix="fix it",
+        )
+        critical = Finding(
+            file_path="src/auth.py:42",
+            severity="CRITICAL",
+            description="critical finding",
+            evidence="line 42",
+            fix="patch immediately",
+        )
+        # Caller passes LOW first, CRITICAL second — output must invert.
+        out = format_pr_comment([low, critical])
+        critical_pos = out.index("critical finding")
+        low_pos = out.index("low-severity finding")
+        assert critical_pos < low_pos, "CRITICAL must render before LOW"
+
+    def test_truncation_preserves_critical_over_low(self) -> None:
+        """When the body truncates, the highest-severity items survive
+        and lower-severity items get cut. Without the sort, a long-
+        evidence LOW finding at the head of the input would push a
+        CRITICAL at the tail off the end of the body."""
+        from advisor.pr_comment import _GITHUB_BODY_LIMIT, format_pr_comment
+        from advisor.verify import Finding
+
+        # 200 LOW findings + 1 CRITICAL — without the sort, the
+        # CRITICAL renders last and gets truncated off. With the sort
+        # it renders first and survives.
+        lows = [
+            Finding(
+                file_path=f"src/util{i}.py:1",
+                severity="LOW",
+                description=f"low #{i}",
+                evidence="x" * 400,
+                fix="fix",
+            )
+            for i in range(200)
+        ]
+        critical = Finding(
+            file_path="src/auth.py:42",
+            severity="CRITICAL",
+            description="must-render critical",
+            evidence="line 42",
+            fix="patch immediately",
+        )
+        out = format_pr_comment([*lows, critical])
+        # Body is under the cap (truncation fired).
+        assert len(out) < _GITHUB_BODY_LIMIT
+        # The CRITICAL survived the truncation despite arriving last.
+        assert "must-render critical" in out
+
+    def test_sort_is_stable_within_severity(self) -> None:
+        """Findings with the same severity preserve the caller's
+        original ordering (Python's sorted() is stable)."""
+        from advisor.pr_comment import format_pr_comment
+        from advisor.verify import Finding
+
+        a = Finding("a.py", "HIGH", "first-high", "ev", "fix")
+        b = Finding("b.py", "HIGH", "second-high", "ev", "fix")
+        out = format_pr_comment([a, b])
+        assert out.index("first-high") < out.index("second-high")

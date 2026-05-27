@@ -743,12 +743,13 @@ def ensure_nudge(
             codex_skill_result_action = InstallAction.UNCHANGED.value
 
     _updated = {InstallAction.INSTALLED.value, InstallAction.UPDATED.value}
-    if (
-        nudge_result.action in _updated
-        or skill_result_action in _updated
-        or update_skill_result_action in _updated
-        or codex_skill_result_action in _updated
-    ):
+    _installed_actions = (
+        nudge_result.action,
+        skill_result_action,
+        update_skill_result_action,
+        codex_skill_result_action,
+    )
+    if any(a in _updated for a in _installed_actions):
         pieces: list[str] = []
         if nudge_result.action in _updated:
             pieces.append(f"  nudge       → {nudge_result.path}")
@@ -759,26 +760,40 @@ def ensure_nudge(
         if codex_skill_result_action in _updated and codex_skill_target is not None:
             pieces.append(f"  codex skill → {codex_skill_target}")
 
+        # Distinguish first install from refresh-on-upgrade. ALL
+        # ``INSTALLED`` actions = brand-new "first-run" — show the
+        # full quick-start. Any ``UPDATED`` mixed in means an existing
+        # user picked up new bundled content (post-upgrade refresh),
+        # for which "first-run setup" is misleading. The narrower
+        # banner says "refreshed" and skips the quick-start clutter.
+        any_install = any(a == InstallAction.INSTALLED.value for a in _installed_actions)
+        any_update = any(a == InstallAction.UPDATED.value for a in _installed_actions)
+        is_refresh = any_update and not any_install
+        title = "advisor refreshed" if is_refresh else "advisor first-run setup"
+        success_msg = "Refreshed bundled assets" if is_refresh else "Setup complete!"
         lines = [
             "",
-            _style.banner("advisor first-run setup", width=35),
+            _style.banner(title, width=35),
             "",
-            _style.success_box("Setup complete!", stream=out),
+            _style.success_box(success_msg, stream=out),
         ]
         lines.extend(pieces)
         lines.append("")
-        rocket = _style.glyph("🚀", ">")
-        lines.append(f"  {_style.paint(f'{rocket} Quick start:', 'cyan', 'bold', stream=out)}")
-        lines.append(_style.cta("/advisor <dir>", "Start a code review", stream=out))
-        lines.append(_style.cta("advisor status", "Check installation", stream=out))
-        lines.append(_style.cta("advisor --help", "See all commands", stream=out))
-        lines.append("")
-        lines.append(
-            _style.dim(
-                f"  opt out: {OPT_OUT_ENV}=1  ·  remove: advisor uninstall",
-                stream=out,
+        if not is_refresh:
+            # Quick-start clutter is high-value for a new user but
+            # noise for a returning user who just upgraded.
+            rocket = _style.glyph("🚀", ">")
+            lines.append(f"  {_style.paint(f'{rocket} Quick start:', 'cyan', 'bold', stream=out)}")
+            lines.append(_style.cta("/advisor <dir>", "Start a code review", stream=out))
+            lines.append(_style.cta("advisor status", "Check installation", stream=out))
+            lines.append(_style.cta("advisor --help", "See all commands", stream=out))
+            lines.append("")
+            lines.append(
+                _style.dim(
+                    f"  opt out: {OPT_OUT_ENV}=1  ·  remove: advisor uninstall",
+                    stream=out,
+                )
             )
-        )
         print("\n".join(lines), file=out)
 
     # If anything failed (nudge or skill), surface it on the returned

@@ -49,6 +49,18 @@ class TestPresetCatalog:
         for name in PRESETS:
             assert name in msg
 
+    def test_get_preset_strips_trailing_whitespace(self) -> None:
+        """Regression: a copy-pasted or shell-completion-quirked value
+        with surrounding whitespace (``"python-web "``) used to raise
+        with a confusing ``"unknown preset 'python-web '"`` error
+        where the quoted name looked correct at a glance. Now stripped."""
+        # Each common pattern of whitespace contamination resolves.
+        assert get_preset("python-web ").name == "python-web"
+        assert get_preset(" python-web").name == "python-web"
+        assert get_preset("  python-web  ").name == "python-web"
+        assert get_preset("python-web\n").name == "python-web"
+        assert get_preset("python-web\t").name == "python-web"
+
     def test_list_presets_sorted(self) -> None:
         names = [p.name for p in list_presets()]
         assert names == sorted(names)

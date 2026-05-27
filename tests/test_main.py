@@ -206,6 +206,55 @@ class TestLoadFindingsFromInput:
         # The error from the helper is on stderr, not the tuple.
         assert "MiB cap" in capsys.readouterr().err
 
+    def test_json_path_filters_incomplete_sentinel(self, tmp_path: Path) -> None:
+        """Regression: a finding with ``file_path: "<incomplete>"`` in a
+        JSON input file (e.g. piped from a prior ``advisor audit --json``
+        whose transcript had partial-drop blocks) must NOT flow through
+        to baseline / SARIF / PR-comment sinks. The sentinel filter at
+        ``_audit_scope_drift`` catches it on the transcript path, the
+        markdown parser catches it on its kept list, and now the JSON
+        path filters it too — closing the third entry point."""
+        import json as _json
+
+        from advisor import __main__ as cli
+        from advisor.verify import INCOMPLETE_FILE_PATH, Finding
+
+        # Synthesize a JSON file containing one real finding + one
+        # sentinel-shaped finding (as ``audit --json`` could have
+        # emitted prior to the round-1 sentinel filter being added).
+        src = tmp_path / "findings.json"
+        src.write_text(
+            _json.dumps(
+                {
+                    "findings": [
+                        {
+                            "file_path": "src/auth.py:42",
+                            "severity": "HIGH",
+                            "description": "real finding",
+                            "evidence": "line 42",
+                            "fix": "patch",
+                        },
+                        {
+                            "file_path": INCOMPLETE_FILE_PATH,
+                            "severity": "HIGH",
+                            "description": "partial — should be dropped",
+                            "evidence": "",
+                            "fix": "",
+                        },
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        findings, rc = cli._load_findings_from_input(src)
+        assert rc is None
+        # Only the real finding survives; sentinel is filtered.
+        assert len(findings) == 1
+        assert isinstance(findings[0], Finding)
+        assert findings[0].file_path == "src/auth.py:42"
+        # Defensive: no Finding in the returned list carries the sentinel.
+        assert all(getattr(f, "file_path", None) != INCOMPLETE_FILE_PATH for f in findings)
+
 
 class TestNudgeSkipCommands:
     """Only commands that explicitly manage the nudge should skip ensure_nudge.

@@ -167,18 +167,49 @@ def atomic_write_text(
       with the tempfile's default mode.
     """
     if reject_symlink:
-        if target.is_symlink():
-            raise OSError(f"refusing to write through symlink: {target} -> {os.readlink(target)}")
+        # ``Path.is_symlink`` calls ``os.lstat`` under the hood, which
+        # raises ``OSError`` on network mounts whose server is down
+        # (ESTALE), on paths the caller lacks permission to stat
+        # (EACCES), or on a stale handle. Treat any lstat failure as
+        # "we can't confirm a symlink here" — don't propagate the
+        # opaque OSError out of the symlink-guard, which would surface
+        # to the user as a confusing install failure with no clue that
+        # the symlink check itself errored. Re-raise the lstat failure
+        # only if it's the leaf path AND the file actually existed
+        # (a missing parent on a network mount is recoverable; a leaf
+        # that errors is a real write target we can't reason about).
+        def _safe_is_symlink(p: Path) -> bool:
+            try:
+                return p.is_symlink()
+            except OSError:
+                return False
+
+        def _safe_readlink(p: Path) -> str:
+            """``os.readlink`` raises the same OSError class as
+            ``is_symlink`` on stale NFS handles. The symlink check
+            already succeeded by the time we call this for the error
+            message, but a transient between-syscalls fault could still
+            crash the diagnostic. Return a sentinel rather than crash
+            the install with an OSError raised mid-error-message."""
+            try:
+                return os.readlink(p)
+            except OSError:
+                return "<unreadable>"
+
+        if _safe_is_symlink(target):
+            raise OSError(
+                f"refusing to write through symlink: {target} -> {_safe_readlink(target)}"
+            )
         # Walk the parent chain and reject if any component is a symlink.
         # ``Path.is_symlink`` returns False on non-existent components, so a
         # not-yet-created parent (``~/.claude/skills/advisor/SKILL.md`` when
         # the skills dir hasn't been made) does not trip the guard.
         _walker = target.parent
         while True:
-            if _walker.is_symlink():
+            if _safe_is_symlink(_walker):
                 raise OSError(
                     f"refusing to write through symlinked parent component: "
-                    f"{_walker} -> {os.readlink(_walker)}"
+                    f"{_walker} -> {_safe_readlink(_walker)}"
                 )
             _next = _walker.parent
             if _next == _walker:
