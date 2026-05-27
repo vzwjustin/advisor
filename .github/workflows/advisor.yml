@@ -1,6 +1,6 @@
 name: Advisor Review
 
-# Reusable workflow: `uses: vzwjustin/advisor/.github/workflows/advisor.yml@v0.7.3`
+# Reusable workflow: `uses: vzwjustin/advisor/.github/workflows/advisor.yml@v0.8.0`
 #
 # Runs `advisor plan` on the caller's repo and uploads the resulting SARIF
 # 2.1.0 document to GitHub Code Scanning. On pull_request events, scope is

@@ -103,29 +103,19 @@ def build_app_state(
 def _display_host(host: str) -> str:
     """Return a URL-safe rendering of ``host`` for the startup banner.
 
-    Two responsibilities, in order:
-
-    1. **Sanitize** with an allow-list of characters legal in a URL host
-       component (alphanumerics, ``.``, ``-``, ``_``, ``:``, ``[``, ``]``).
-       Rejects C0 / C1 control bytes (ESC, CR, LF, the C1 CSI ``\\x9b``)
-       AND printable-but-URL-significant bytes like space, ``@``, ``?``,
-       ``#`` that would otherwise produce a banner URL whose authority a
-       browser parses differently than the bound socket.
-    2. **Rewrite wildcard binds** (``0.0.0.0``, ``::``, ``[::]``) to
-       ``127.0.0.1`` so the printed URL is actually clickable. Chrome
-       M128+ refuses to navigate to ``http://0.0.0.0:<port>/`` from the
-       address bar, and Safari has historically done the same — the
-       bound socket on ``0.0.0.0`` does accept loopback traffic, but the
-       banner needs to surface the address the browser will actually
-       reach. Bare IPv6 addresses get wrapped in ``[...]`` so the
-       ``:<port>`` suffix isn't read as another IPv6 colon segment.
+    Sanitize with an allow-list of characters legal in a URL host component
+    (alphanumerics, ``.``, ``-``, ``_``, ``:``, ``[``, ``]``). Rejects C0 / C1
+    control bytes (ESC, CR, LF, the C1 CSI ``\\x9b``) AND
+    printable-but-URL-significant bytes like space, ``@``, ``?``, ``#`` that
+    would otherwise produce a banner URL whose authority a browser parses
+    differently than the bound socket. Bare IPv6 addresses get wrapped in
+    ``[...]`` so the ``:<port>`` suffix isn't read as another IPv6 colon
+    segment.
 
     NOTE: display only — the bind already happened with the original
     ``host`` string and either succeeded or failed on its own merits.
     """
     safe = "".join(ch for ch in host if ch.isalnum() or ch in "._-:[]")
-    if safe in ("0.0.0.0", "::", "[::]"):
-        return "127.0.0.1"
     # Bare IPv6 (e.g. ``::1`` from ``--host ::1``) needs bracket-wrapping
     # so the ``:<port>`` suffix isn't misread as another IPv6 segment.
     # IPv4 contains no colons, so ``":" in safe`` reliably distinguishes
@@ -557,13 +547,9 @@ def run_server(
     the OS pick, and the bound port is printed after the fact.
 
     ``host`` must be a loopback address (``127.0.0.1``, ``localhost``,
-    ``::1``, ``[::1]``) or a wildcard bind (``0.0.0.0``, ``::``, ``[::]``).
-    Wildcard binds are accepted because loopback clients still send
-    ``Host: 127.0.0.1:{port}`` which matches the DNS-rebinding allowlist
-    in :meth:`DashboardHandler.do_GET`. Any other bind address would
-    successfully accept the connection but then 403 every request, since
-    the browser would send ``Host: <bound-ip>:{port}`` which is not in
-    the allowlist. Surfacing the constraint at bind time beats a
+    ``::1``, ``[::1]``). Wildcard and routable binds are rejected because the
+    dashboard exposes read-only local project state and the DNS-rebinding
+    allowlist is loopback-only. Surfacing the constraint at bind time beats a
     silently-403-every-request server that looks like it's running fine.
     """
     if not isinstance(port, int) or isinstance(port, bool):
@@ -576,18 +562,14 @@ def run_server(
     if not 0 <= port <= 65535:
         raise OSError(f"could not bind {host}:{port} (port out of range 0..65535)")
     # DNS-rebinding defense's Host allowlist is loopback-only. Binding to a
-    # routable interface would silently 403 every request after a successful
-    # bind. Reject those binds at entry with a clear error rather than let
-    # the user troubleshoot a phantom-failure dashboard.
-    _ALLOWED_BIND_HOSTS = frozenset(
-        {"127.0.0.1", "localhost", "::1", "[::1]", "0.0.0.0", "::", "[::]"}
-    )
+    # routable or wildcard interface would either expose local state to the
+    # network or silently 403 normal remote requests. Reject those binds at
+    # entry so the documented loopback-only policy is the actual behavior.
+    _ALLOWED_BIND_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "[::1]"})
     if host not in _ALLOWED_BIND_HOSTS:
         raise OSError(
             f"refusing to bind non-loopback host {host!r}: only loopback "
-            f"and wildcard binds are supported (the DNS-rebinding Host "
-            f"allowlist is loopback-only, so any other bind 403's every "
-            f"request). Pass one of {sorted(_ALLOWED_BIND_HOSTS)}."
+            f"binds are supported. Pass one of {sorted(_ALLOWED_BIND_HOSTS)}."
         )
 
     handler_cls = _make_handler_class(state, log_requests=log_requests)

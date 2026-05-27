@@ -394,6 +394,53 @@ class TestCmdPlanJson:
         names = sorted(Path(t["file_path"]).name for t in data["tasks"])
         assert names == ["auth.py"]
 
+    def test_plan_preset_file_types_drive_discovery(self, tmp_path, capsys):
+        from advisor.__main__ import cmd_plan
+
+        (tmp_path / "server.js").write_text("function login(req, res) { return res.end('ok'); }\n")
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "plan",
+                str(tmp_path),
+                "--preset",
+                "node-api",
+                "--json",
+                "--quiet",
+                "--no-history",
+            ]
+        )
+
+        assert cmd_plan(args) == 0
+        import json
+
+        data = json.loads(capsys.readouterr().out)
+        names = sorted(Path(t["file_path"]).name for t in data["tasks"])
+        assert names == ["server.js"]
+
+    def test_plan_env_min_priority_drives_task_filtering(self, tmp_path, capsys, monkeypatch):
+        from advisor.__main__ import cmd_plan
+
+        monkeypatch.setenv("ADVISOR_MIN_PRIORITY", "1")
+        (tmp_path / "util.py").write_text("x = 1\n")
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "plan",
+                str(tmp_path),
+                "--json",
+                "--quiet",
+                "--no-history",
+            ]
+        )
+
+        assert cmd_plan(args) == 0
+        import json
+
+        data = json.loads(capsys.readouterr().out)
+        names = sorted(Path(t["file_path"]).name for t in data["tasks"])
+        assert names == ["util.py"]
+
 
 class TestCmdStatusStrict:
     """``advisor status --strict`` returns 3 when install is unhealthy."""

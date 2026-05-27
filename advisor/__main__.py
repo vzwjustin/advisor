@@ -95,6 +95,7 @@ from .orchestrate import (
     default_team_config,
     render_pipeline,
 )
+from .orchestrate._fence import sanitize_inline
 from .orchestrate.config import DEFAULT_ADVISOR_MODEL, DEFAULT_RUNNER_MODEL, POOL_SIZE_CEILING
 from .rank import load_advisorignore, rank_files
 from .sarif import findings_to_sarif
@@ -686,6 +687,8 @@ def _plan_to_dict(
 def _resolve_plan_files(
     target: Path,
     args: argparse.Namespace,
+    *,
+    file_types: str | None = None,
 ) -> tuple[list[str] | None, str | None]:
     """Resolve the file list for ``cmd_plan`` — git-scoped or full rglob.
 
@@ -706,6 +709,7 @@ def _resolve_plan_files(
     since = getattr(args, "since", None)
     staged = getattr(args, "staged", False)
     branch = getattr(args, "branch", None)
+    effective_file_types = args.file_types if file_types is None else file_types
     if any([since, staged, branch]):
         try:
             files = resolve_git_scope(target, since=since, staged=staged, branch=branch)
@@ -713,7 +717,7 @@ def _resolve_plan_files(
             return None, str(exc)
         if files is None:
             return [], None
-        pattern = args.file_types
+        pattern = effective_file_types
         if pattern and pattern != "*":
             import fnmatch
 
@@ -728,7 +732,7 @@ def _resolve_plan_files(
         target_resolved = target.resolve()
         files = [p for p in files if Path(p).resolve().is_relative_to(target_resolved)]
         return files, None
-    return _safe_rglob(target, args.file_types)
+    return _safe_rglob(target, effective_file_types)
 
 
 def cmd_plan(args: argparse.Namespace) -> int:
@@ -830,12 +834,31 @@ def cmd_plan(args: argparse.Namespace) -> int:
             resolved_config=checkpoint_cfg,
         )
 
+    preset_name = getattr(args, "preset", None)
+    # Reject an explicit empty-string preset (e.g. ``--preset=``) before
+    # discovery so the command does not scan files and then fail later.
+    if preset_name == "":
+        print(
+            _style.error_box(
+                "--preset requires a non-empty value; "
+                "run 'advisor presets' to list available packs",
+                stream=sys.stderr,
+            ),
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        cfg = _config_from_args(args)
+    except ValueError as exc:
+        print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
+        return 2
+
     _quiet = getattr(args, "quiet", False)
     if not _quiet and sys.stderr.isatty():
         sys.stderr.write(_style.dim(f"scanning {target}…") + "\r")
         sys.stderr.flush()
 
-    paths, glob_err = _resolve_plan_files(target, args)
+    paths, glob_err = _resolve_plan_files(target, args, file_types=cfg.file_types)
 
     if not _quiet and sys.stderr.isatty():
         sys.stderr.write("\033[2K\r")
@@ -875,29 +898,10 @@ def cmd_plan(args: argparse.Namespace) -> int:
     # merging happens in default_team_config; the keyword overlay is
     # applied here because rank_files takes it as a parameter.
     preset_extras: dict[int, tuple[str, ...]] | None = None
-    preset_name = getattr(args, "preset", None)
-    # Reject an explicit empty-string preset (e.g. ``--preset=``) instead of
-    # silently skipping — argparse's default is None, so an empty string here
-    # means the caller typed ``--preset=`` and almost certainly wants an
-    # error, not a stealth "no preset applied".
-    if preset_name == "":
-        print(
-            _style.error_box(
-                "--preset requires a non-empty value; "
-                "run 'advisor presets' to list available packs",
-                stream=sys.stderr,
-            ),
-            file=sys.stderr,
-        )
-        return 2
     if preset_name:
         from .presets import get_preset
 
-        try:
-            rule_pack = get_preset(preset_name)
-        except ValueError as exc:
-            print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
-            return 2
+        rule_pack = get_preset(preset_name)
         preset_extras = dict(rule_pack.extra_keywords_by_tier)
 
     ranked = rank_files(
@@ -911,19 +915,12 @@ def cmd_plan(args: argparse.Namespace) -> int:
     tasks = create_focus_tasks(
         ranked,
         max_tasks=None,  # no hard cap; advisor decides in the live pipeline
-        min_priority=args.min_priority,
+        min_priority=cfg.min_priority,
     )
 
     batches: list[FocusBatch] | None = None
     if args.batch_size:
         batches = create_focus_batches(tasks, files_per_batch=args.batch_size)
-
-    # Resolve config exactly once. _config_from_args may consume stdin
-    # (when ``--context -``); a second resolution would silently see an
-    # empty context. Building it up-front lets every downstream caller
-    # — checkpoint write, SARIF stub, _emit_plan's cost estimate — share
-    # one resolved view of the args.
-    cfg = _config_from_args(args)
 
     # Optional persistence: ``--checkpoint`` writes the full plan to
     # ``.advisor/run-<id>.json`` so a later invocation can ``--resume``.
@@ -1002,7 +999,24 @@ def cmd_codex_plan_csv(args: argparse.Namespace) -> int:
         )
         return 2
 
-    paths, glob_err = _resolve_plan_files(target, args)
+    preset_name = getattr(args, "preset", None)
+    if preset_name == "":
+        print(
+            _style.error_box(
+                "--preset requires a non-empty value; "
+                "run 'advisor presets' to list available packs",
+                stream=sys.stderr,
+            ),
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        cfg = _config_from_args(args)
+    except ValueError as exc:
+        print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
+        return 2
+
+    paths, glob_err = _resolve_plan_files(target, args, file_types=cfg.file_types)
     if glob_err is not None:
         print(_style.error_box(glob_err, stream=sys.stderr), file=sys.stderr)
         return 2
@@ -1011,15 +1025,22 @@ def cmd_codex_plan_csv(args: argparse.Namespace) -> int:
     if exclude_patterns and paths:
         paths = _apply_exclude_patterns(target, paths, exclude_patterns)
 
+    preset_extras: dict[int, tuple[str, ...]] | None = None
+    if preset_name:
+        from .presets import get_preset
+
+        preset_extras = dict(get_preset(preset_name).extra_keywords_by_tier)
+
     ranked = rank_files(
         paths or [],
         read_fn=_read_head,
         ignore_patterns=load_advisorignore(target),
+        extra_keywords=preset_extras,
     )
     tasks = create_focus_tasks(
         ranked,
         max_tasks=None,
-        min_priority=args.min_priority,
+        min_priority=cfg.min_priority,
     )
 
     if not tasks:
@@ -1028,7 +1049,7 @@ def cmd_codex_plan_csv(args: argparse.Namespace) -> int:
         # surface it to the user instead of silently fanning out nothing.
         print(
             _style.error_box(
-                f"no files matched under {target} at min_priority={args.min_priority}; "
+                f"no files matched under {target} at min_priority={cfg.min_priority}; "
                 "nothing to dispatch",
                 stream=sys.stderr,
             ),
@@ -1073,7 +1094,9 @@ def cmd_codex_plan_csv(args: argparse.Namespace) -> int:
         writer.writerow(["runner_id", "batch_id", "file_count", "max_priority", "files", "prompt"])
         for i, batch in enumerate(batches, start=1):
             runner_id = f"runner-{i}"
-            file_lines = [f"- `{t.file_path}` (P{t.priority})" for t in batch.tasks]
+            file_lines = [
+                f"- `{sanitize_inline(t.file_path)}` (P{t.priority})" for t in batch.tasks
+            ]
             prompt = build_codex_runner_prompt(runner_id, file_lines)
             writer.writerow(
                 [

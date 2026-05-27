@@ -284,7 +284,7 @@ on:
 
 jobs:
   advisor:
-    uses: vzwjustin/advisor/.github/workflows/advisor.yml@v0.7.3
+    uses: vzwjustin/advisor/.github/workflows/advisor.yml@v0.8.0
     with:
       target: "."
       min-priority: 3

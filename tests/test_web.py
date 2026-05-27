@@ -503,6 +503,19 @@ class TestLiveEndpoints:
         assert "error" in json.loads(body)
 
 
+class TestRunServerBindPolicy:
+    def test_rejects_wildcard_bind_before_opening_socket(self, tmp_path, monkeypatch):
+        from advisor.web import server as web_server
+
+        def fail_http_server(*_args, **_kwargs):
+            raise AssertionError("wildcard bind should be rejected before socket bind")
+
+        monkeypatch.setattr(web_server, "ThreadingHTTPServer", fail_http_server)
+
+        with pytest.raises(OSError, match="refusing to bind non-loopback host"):
+            web_server.run_server(tmp_path, host="0.0.0.0", port=0)
+
+
 # ---------------------------------------------------------------------------
 # Static UI behavior
 # ---------------------------------------------------------------------------
@@ -577,10 +590,9 @@ class TestStaticUiState:
 class TestDisplayHost:
     """``_display_host`` renders the banner URL after the bind has succeeded.
 
-    It must (a) sanitize untrusted characters, (b) rewrite wildcard binds
-    to a navigable loopback so Chrome M128+'s ``0.0.0.0`` block doesn't
-    leave the printed URL un-clickable, and (c) bracket-wrap bare IPv6
-    so the ``:<port>`` suffix isn't misread.
+    It must (a) sanitize untrusted characters and (b) bracket-wrap bare IPv6
+    so the ``:<port>`` suffix isn't misread. Wildcard binds are rejected
+    before this helper is used.
     """
 
     def test_loopback_passes_through(self):
@@ -588,19 +600,16 @@ class TestDisplayHost:
 
         assert _display_host("127.0.0.1") == "127.0.0.1"
 
-    def test_wildcard_ipv4_rewritten_to_loopback(self):
+    def test_wildcard_ipv4_is_not_special_cased(self):
         from advisor.web.server import _display_host
 
-        # Chrome M128+ refuses to navigate to http://0.0.0.0:<port>/.
-        # The bound socket still accepts loopback traffic, but the
-        # printed URL must surface the address the browser will reach.
-        assert _display_host("0.0.0.0") == "127.0.0.1"
+        assert _display_host("0.0.0.0") == "0.0.0.0"
 
-    def test_wildcard_ipv6_rewritten_to_loopback(self):
+    def test_wildcard_ipv6_gets_bracket_wrapped(self):
         from advisor.web.server import _display_host
 
-        assert _display_host("::") == "127.0.0.1"
-        assert _display_host("[::]") == "127.0.0.1"
+        assert _display_host("::") == "[::]"
+        assert _display_host("[::]") == "[::]"
 
     def test_bare_ipv6_gets_bracket_wrapped(self):
         from advisor.web.server import _display_host
