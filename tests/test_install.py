@@ -222,7 +222,6 @@ class TestEnsureNudge:
         from advisor.install import (
             END_MARKER,
             START_MARKER,
-            install_update_skill,
         )
 
         target = tmp_path / "CLAUDE.md"

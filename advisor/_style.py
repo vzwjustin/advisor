@@ -68,7 +68,24 @@ def _compute_supports_color() -> bool:
 
 
 def _stream_supports_unicode(stream: IO[str] | None) -> bool:
-    """True when ``stream`` can encode the glyphs used by styled helpers."""
+    """True when ``stream`` can encode the glyphs used by styled helpers.
+
+    Optimistic-by-design: when we can't introspect the stream's
+    encoding (``stream is None`` or ``stream.encoding`` is None — the
+    latter happens with ``io.StringIO`` and certain captured streams),
+    we return True. The helpers in this module RETURN STRINGS; they
+    don't write. If a downstream caller writes the returned string
+    into a stream that can't encode Unicode, the UnicodeEncodeError is
+    raised at the caller's ``print()`` site, not here — caller's
+    responsibility to either pass an introspectable encoding-aware
+    stream or wrap the write in their own encoding handling.
+
+    Returning False here would break the documented contract that
+    ``foo(text, stream=X) == foo(text, stream=None)`` for default-
+    color streams (used by several existing tests), since callers
+    legitimately pass a no-encoding stream just to disable color via
+    ``CLICOLOR=0`` without changing helper output.
+    """
     if stream is None:
         return True
     encoding = getattr(stream, "encoding", None)
@@ -221,8 +238,16 @@ def warning_box(text: str, stream: IO[str] | None = None) -> str:
 
 
 def error_box(text: str, stream: IO[str] | None = None) -> str:
-    """Draw a red error line with an error glyph — symmetric with success/info/warning_box."""
-    stream = stream if stream is not None else sys.stdout
+    """Draw a red error line with an error glyph — symmetric with success/info/warning_box.
+
+    Stream default is ``sys.stderr`` (not stdout like the other box
+    helpers) because errors should not contaminate piped stdout output
+    or be swallowed when a caller does ``advisor ... > out.txt``.
+    Almost all internal call sites already pass ``stream=sys.stderr``
+    explicitly — the corrected default catches the few that didn't AND
+    matches what external library consumers would intuitively expect.
+    """
+    stream = stream if stream is not None else sys.stderr
     mark = glyph("✗", "[x]", stream=stream)
     if not supports_color(stream):
         return f"{mark} {text}"

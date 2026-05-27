@@ -396,7 +396,11 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
         type=int,
         choices=range(1, 6),
         default=3,
-        help="Minimum priority tier (1=utilities, 5=auth/secrets, default: %(default)s)",
+        help=(
+            "Minimum priority tier — higher = fewer but riskier files. "
+            "1 (utils/tests) includes everything; 5 (auth/secrets) only "
+            "the highest-risk surface. Default: %(default)s."
+        ),
     )
     parser.add_argument("--context", default="", help="Extra goal context")
     parser.add_argument(
@@ -3823,7 +3827,15 @@ def build_parser() -> argparse.ArgumentParser:
         "update",
         help="Self-upgrade advisor — preview latest changelog, confirm, then upgrade",
     )
-    p_update.add_argument("--quiet", action="store_true", help="Suppress CTA + install banner")
+    p_update.add_argument(
+        "--quiet",
+        action="store_true",
+        help=(
+            "Suppress progress output, changelog preview, and the "
+            "post-upgrade banner. The confirmation prompt still appears — "
+            "add -y/--yes for a fully non-interactive run."
+        ),
+    )
     p_update.add_argument(
         "-y",
         "--yes",

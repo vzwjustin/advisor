@@ -1140,8 +1140,12 @@ def _normalize_history_key(path: str) -> str:
     Cached because ``rank_files`` calls this O(N*M) times where N is the
     scanned-file count and M is the history-entry count — at 5000 files
     × 1000 entries the unconditional re-normalization was ~4 seconds.
-    The cache (maxsize=8192) covers any realistic file-count × history
-    union; pure-function so caching is safe.
+    The cache (maxsize=8192) is sized to cover typical small-to-medium
+    repos in one warm-up; large monorepos with more than 8192 unique
+    (scanned-path ∪ history-key) entries see LRU evictions, which are
+    correct (the function is pure — recompute returns the same value)
+    and add only ~0.5 µs per missed lookup. Pure function so caching
+    is safe.
     """
     normalized = path.lstrip("﻿").strip().strip("`").replace("\\", "/")
     while normalized.startswith("./"):

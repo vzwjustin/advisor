@@ -7,6 +7,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-05-27
+
+Second full sub-agent self-audit cycle on top of v0.8.1. Four rounds
+× 2–3 parallel runners each → 15 fixes spanning real bugs, UX polish,
+and one documentation correction in the bundled SKILL.md that was
+misleading Claude Code. 1091 → 1105 tests; ruff + mypy clean.
+
+### Fixed
+
+- **`_load_findings_from_input` JSON path filters ``<incomplete>``
+  sentinel.** A user piping ``advisor audit --json`` into
+  ``advisor baseline create --from x.json`` (or any JSON re-ingestion)
+  no longer flows ``"file_path": "<incomplete>"`` into SARIF /
+  baseline / PR-comment sinks where consumers would mistake the
+  sentinel for a real path. Closes the third entry point (the
+  transcript and markdown paths were filtered in v0.8.1).
+- **`build_fix_assignment_message` rejects whitespace-only payload.**
+  Whitespace-only ``problem`` / ``change`` / ``acceptance`` used to
+  produce a valid-but-empty fenced block, leaving the runner with
+  nothing to act on. Now raises ``ValueError`` at construction.
+- **`_fix_count_trigger(cap=0)` interpolates the actual cap.** Was
+  hardcoded to "Cap of 1" — a caller passing ``cap=0`` (explore-only
+  mode) saw a spawn prompt that disagreed with assignment-time
+  enforcement. Now shows the real value.
+- **`_safe_str` (pipeline renderer) escapes 5 additional line
+  terminators.** U+2028 / U+2029 / U+0085 / VT / FF now escape to
+  Python literal forms. Was escaping only ``\n`` / ``\r`` — a
+  hostile or autocorrected ``team_name`` containing U+2028 visually
+  shattered the rendered ``TeamCreate(name="...")`` line.
+- **`out_of_batch` empty-batch guard.** An empty or empty-string-only
+  ``batch_files`` used to flag every anchored reply as drift — a
+  misconfigured runner with no assigned files would gate the entire
+  session. Now correctly returns False.
+- **`get_preset` strips whitespace.** ``--preset "python-web "``
+  (trailing space from copy-paste) used to raise the confusing
+  ``"unknown preset 'python-web '"`` where the quoted name looked
+  correct. Now strips.
+- **`atomic_write_text` symlink walk is OSError-safe.** Both
+  ``Path.is_symlink()`` AND ``os.readlink()`` can raise on stale NFS
+  handles / restricted filesystems. The prior walk propagated the
+  OSError as an opaque install failure. Wrapped both in helpers
+  (``_safe_is_symlink`` / ``_safe_readlink``) so the guard fails
+  gracefully.
+- **`_run_git` stdout cap (50 MiB).** ``proc.communicate()`` buffered
+  all stdout in memory with no cap; a pathological monorepo with
+  50k+ changed files could deliver tens of MB. Now raises
+  ``GitScopeError`` with a clear "narrow the scope" hint.
+- **`error_box` defaults to ``sys.stderr``, not ``sys.stdout``.**
+  Errors written via the default-stream helper used to mix into
+  piped stdout output (``advisor ... --json > out.json`` could land
+  an error box at the head of the JSON file). The other box helpers
+  continue to default to stdout.
+
+### UX
+
+- **PR comment sorts findings by severity before truncation.**
+  Reviewers see CRITICAL / HIGH first. Without the sort, a
+  long-evidence LOW finding could push CRITICAL items off the
+  bottom when the body hit the 60k-byte cap. Stable sort preserves
+  caller's within-severity ordering.
+- **Banner distinguishes first-install from post-upgrade refresh.**
+  Returning users on upgrade see "advisor refreshed" instead of
+  "advisor first-run setup" + the quick-start clutter. Brand-new
+  installs still get the full quick-start block.
+- **CLI help text refresh**: ``--min-priority`` explains "higher =
+  fewer but riskier files" (was a bare "1=utilities, 5=auth/secrets"
+  which left readers unsure which direction is more inclusive).
+  ``advisor update --quiet`` help now mentions the confirmation
+  prompt still appears (add ``-y`` to skip).
+
+### Docs / SKILL.md
+
+- **Bundled SKILL.md ``default_team_config`` signature fixed.**
+  Example showed ``max_runners: int = 5``; actual signature is
+  ``int | None = None`` (``None`` reads ``ADVISOR_MAX_RUNNERS`` or
+  defaults to 5 internally). Three commonly-needed kwargs
+  (``preset``, ``test_command``, ``max_fixes_per_runner``) added
+  with inline comments so Claude Code sees the full call shape.
+- **`baseline.py`** module docstring now carries a ``.. warning::``
+  block documenting the 120-char description-hash collision
+  boundary plus the two mitigations (explicit ``rule_id`` or more
+  specific first-sentence descriptions).
+- **`_normalize_history_key`** docstring honestly describes the
+  lru_cache (8192) eviction behavior for large monorepos.
+
+### Tests
+
+15 new regression tests across ``test_verify``, ``test_main``,
+``test_pr_comment``, ``test_orchestrate``, ``test_runner_budget``,
+``test_presets``, ``test_install``, ``test_style``.
+
 ## [0.8.1] - 2026-05-27
 
 A rolling, 6-round self-audit using the advisor's own sub-agent pattern.
