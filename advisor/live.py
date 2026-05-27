@@ -89,6 +89,14 @@ _MAX_LINE = 65536
 # rather than a typical working set.
 _MAX_TAIL = 5000
 
+# Tail-read chunk size for ``_next_seq`` and ``append_event``. Must be at
+# least ``_MAX_LINE + 1`` bytes so the tail always spans one complete record.
+# A value of ``8192`` (one typical disk block) was the original choice, but
+# records up to ``_MAX_LINE`` (64 KiB) are legal; a large-but-valid record
+# ending the file would be partially read, fail JSON parsing, and cause
+# ``_last_seq_from_tail`` to return 0 — resetting the sequence counter to 1.
+_TAIL_READ_BYTES = _MAX_LINE + 1
+
 # Allowlisted event kinds. The list is open in spirit — the dashboard
 # renders any string — but the canonical set is documented here so the
 # team-lead and the dashboard JS agree on which kinds get specialized
@@ -153,7 +161,7 @@ def _read_final_line_tail(fh: BinaryIO) -> bytes:
         return b""
     if size <= 0:
         return b""
-    chunk_size = min(size, _MAX_LINE + 1)
+    chunk_size = min(size, _TAIL_READ_BYTES)
     try:
         fh.seek(size - chunk_size, 0)
         return fh.read(chunk_size)

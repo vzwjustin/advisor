@@ -157,22 +157,22 @@ def new_budget(
     )
 
 
-def parse_scope_anchor(text: str) -> ScopeAnchor | None:
-    """Return the first ``SCOPE: <file> · <stage>`` anchor in ``text``.
+def parse_scope_anchor(text: str) -> list[ScopeAnchor]:
+    """Return **all** ``SCOPE: <file> · <stage>`` anchors in ``text``.
 
-    Returns ``None`` when the header is missing — absence itself is a
-    signal the caller can act on (soft-remind the runner). Only the
-    *first* anchor on a reply is considered authoritative; callers that
-    care about every file the runner touched should consume the
-    per-message file list another way.
+    Returns an empty list when no anchor is present — absence itself is
+    a signal the caller can act on (soft-remind the runner). Returning
+    all anchors lets callers detect drift on any file a runner touched
+    mid-reply, not just the first. Use ``anchors[0]`` when you only
+    need the leading anchor.
     """
-    m = _SCOPE_RE.search(text)
-    if m is None:
-        return None
-    return ScopeAnchor(
-        file_path=m.group("file").strip().strip("`"),
-        stage=m.group("stage").strip().lower(),
-    )
+    return [
+        ScopeAnchor(
+            file_path=m.group("file").strip().strip("`"),
+            stage=m.group("stage").strip().lower(),
+        )
+        for m in _SCOPE_RE.finditer(text)
+    ]
 
 
 def update_budget(
@@ -201,22 +201,28 @@ def update_budget(
     nudge. :func:`format_budget_nudge` inspects the resulting budget
     and gates on the ``_nudge_sent`` flags to prevent duplicate nudges.
     """
-    anchor = parse_scope_anchor(message_text)
+    anchors = parse_scope_anchor(message_text)
     new_files = budget.files_read
-    anchor_path = _normalize(anchor.file_path) if anchor and anchor.file_path else None
-    if anchor_path and anchor_path not in new_files:
-        new_files = (*new_files, anchor_path)
+    last_anchor: ScopeAnchor | None = None
+    for a in anchors:
+        if a.file_path:
+            ap = _normalize(a.file_path)
+            if ap not in new_files:
+                new_files = (*new_files, ap)
+        last_anchor = a
     file_read_path = _normalize(file_read) if file_read else None
     if file_read_path and file_read_path not in new_files:
         new_files = (*new_files, file_read_path)
-
+    last_anchor_path = (
+        _normalize(last_anchor.file_path) if last_anchor and last_anchor.file_path else None
+    )
     return replace(
         budget,
         output_chars=budget.output_chars + len(message_text),
         files_read=new_files,
         fixes_done=budget.fixes_done + (1 if fix_completed else 0),
-        last_stage=anchor.stage if anchor else budget.last_stage,
-        last_file=anchor_path if anchor_path else budget.last_file,
+        last_stage=last_anchor.stage if last_anchor else budget.last_stage,
+        last_file=last_anchor_path if last_anchor_path else budget.last_file,
     )
 
 

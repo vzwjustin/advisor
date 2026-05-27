@@ -191,6 +191,7 @@ def banner(text: str, width: int = 50, stream: IO[str] | None = None) -> str:
     width=50 box would overflow the border, producing a broken banner.
     """
     stream = stream if stream is not None else sys.stdout
+    text = strip_ansi(text)
     if not supports_color(stream):
         return f"== {text} =="
     # +4 accounts for the two-space pad on each side of the centered text.
@@ -213,6 +214,7 @@ def banner(text: str, width: int = 50, stream: IO[str] | None = None) -> str:
 def success_box(text: str, stream: IO[str] | None = None) -> str:
     """Draw a green success box with checkmark."""
     stream = stream if stream is not None else sys.stdout
+    text = strip_ansi(text)
     mark = glyph("✓", "[OK]", stream=stream)
     if not supports_color(stream):
         return f"{mark} {text}"
@@ -222,6 +224,7 @@ def success_box(text: str, stream: IO[str] | None = None) -> str:
 def info_box(text: str, stream: IO[str] | None = None) -> str:
     """Draw a blue info box with info symbol."""
     stream = stream if stream is not None else sys.stdout
+    text = strip_ansi(text)
     mark = glyph("ℹ", "[i]", stream=stream)
     if not supports_color(stream):
         return f"{mark} {text}"
@@ -231,6 +234,7 @@ def info_box(text: str, stream: IO[str] | None = None) -> str:
 def warning_box(text: str, stream: IO[str] | None = None) -> str:
     """Draw a yellow warning box with warning symbol."""
     stream = stream if stream is not None else sys.stdout
+    text = strip_ansi(text)
     mark = glyph("⚠", "[!]", stream=stream)
     if not supports_color(stream):
         return f"{mark} {text}"
@@ -248,6 +252,7 @@ def error_box(text: str, stream: IO[str] | None = None) -> str:
     matches what external library consumers would intuitively expect.
     """
     stream = stream if stream is not None else sys.stderr
+    text = strip_ansi(text)
     mark = glyph("✗", "[x]", stream=stream)
     if not supports_color(stream):
         return f"{mark} {text}"
@@ -257,6 +262,7 @@ def error_box(text: str, stream: IO[str] | None = None) -> str:
 def tip(text: str, stream: IO[str] | None = None) -> str:
     """Inline hint line — dim body with a bold cyan lightbulb lead."""
     stream = stream if stream is not None else sys.stdout
+    text = strip_ansi(text)
     mark = glyph("💡", "tip:", stream=stream)
     if not supports_color(stream):
         return f"  {mark} {text}"
@@ -266,6 +272,7 @@ def tip(text: str, stream: IO[str] | None = None) -> str:
 def cta(action: str, description: str = "", stream: IO[str] | None = None) -> str:
     """Call-to-action row — bold primary `action` plus optional dim description."""
     stream = stream if stream is not None else sys.stdout
+    action, description = strip_ansi(action), strip_ansi(description)
     bullet = glyph("→", ">", stream=stream)
     if not supports_color(stream):
         sep = "  " if description else ""

@@ -114,6 +114,13 @@ def multi_subdir_repo(tmp_path: Path) -> Path:
     return tmp_path
 
 
+class TestRefAllowedRejectsTrailingNewline:
+    def test_ref_allowed_rejects_trailing_newline(self, git_repo: Path) -> None:
+        """B5: a ref value with a trailing newline must be rejected."""
+        with pytest.raises(GitScopeError):
+            resolve_git_scope(git_repo, since="main\n")
+
+
 class TestResolvePlanFilesTargetIntersection:
     def test_git_scope_intersects_with_target_subdir(self, multi_subdir_repo: Path) -> None:
         # ``advisor plan src --since HEAD~1`` must return ONLY paths under

@@ -89,15 +89,30 @@ _KNOWN_ENV_VARS = (
     OPT_OUT_ENV,
 )
 
-# Env vars whose values must NOT be surfaced verbatim by the doctor report.
-# ``ADVISOR_TEST_COMMAND`` is a free-form shell string a user might embed a
-# credential into (``pytest --token=secret``); since ``advisor doctor``
-# output is a paste-friendly diagnostic, a literal value here would leak
-# silently. We preserve the *presence* of the variable (key still appears
-# in the report) but substitute the literal placeholder ``<set>`` for the
-# value, so a user can ``echo $ADVISOR_TEST_COMMAND`` themselves when
-# debugging without the diagnostic doing the leak for them.
-_REDACT_ENV_VARS = frozenset({"ADVISOR_TEST_COMMAND"})
+# Allow-list of env vars whose values are safe to surface verbatim.
+# Every key in ``_KNOWN_ENV_VARS`` that is NOT listed here is redacted to
+# ``_REDACTED_VALUE`` by ``_collect_env_overrides``.  The allow-list
+# approach is future-proof: a new env var added to ``_KNOWN_ENV_VARS``
+# that carries sensitive data (tokens, secrets, passwords, URLs with
+# credentials) will be redacted by default unless it is explicitly
+# reviewed and added here.  ``ADVISOR_TEST_COMMAND`` is intentionally
+# absent — it is a free-form shell string a user may have embedded a
+# credential into (``pytest --token=secret``); ``advisor doctor`` output
+# is a paste-friendly diagnostic, so the literal value must not leak
+# through it.  Users can ``echo $ADVISOR_TEST_COMMAND`` themselves.
+_KNOWN_SAFE_ENV_VARS: frozenset[str] = frozenset(
+    {
+        "ADVISOR_MODEL",
+        "ADVISOR_RUNNER_MODEL",
+        "ADVISOR_MAX_RUNNERS",
+        "ADVISOR_FILE_TYPES",
+        "ADVISOR_MIN_PRIORITY",
+        "ADVISOR_QUIET",
+        "ADVISOR_RUNNER_OUTPUT_CHAR_CEILING",
+        "ADVISOR_RUNNER_FILE_READ_CEILING",
+        OPT_OUT_ENV,
+    }
+)
 _REDACTED_VALUE = "<set>"
 
 
@@ -150,103 +165,64 @@ def _check_claude_cli() -> Check:
     )
 
 
-def _check_codex_home() -> Check:
-    codex_dir = Path.home() / ".codex"
-    if codex_dir.is_symlink():
-        # ``install.py`` resolves the symlink and accepts the target as
-        # long as it stays under ``$HOME`` (dotfiles managers like
-        # stow/chezmoi are a common legitimate use). Warn only when the
-        # resolved target escapes $HOME — that's the actual condition
-        # that breaks the install. ``resolve(strict=False)`` doesn't
-        # raise on broken targets, mirroring ``install.py``'s behavior.
+def _check_home_dir(check_name: str, dir_path: Path) -> Check:
+    """Shared symlink + directory health check for ``~/.claude`` and ``~/.codex``.
+
+    ``install.py`` resolves symlinks and accepts targets that stay under
+    ``$HOME`` (dotfiles managers like stow/chezmoi are a common legitimate
+    use). ``resolve(strict=False)`` does not raise on broken targets,
+    mirroring ``install.py``'s behaviour.  The ``is_symlink()`` test is
+    performed once; broken-symlink detection is nested inside that branch
+    so the second ``is_symlink()`` call is not duplicated.
+    """
+    if dir_path.is_symlink():
         try:
-            resolved = codex_dir.resolve()
+            resolved = dir_path.resolve()
             home_resolved = Path.home().resolve()
             if not resolved.is_relative_to(home_resolved):
                 return Check(
-                    "codex-home",
+                    check_name,
                     "warn",
-                    f"{codex_dir} resolves to {resolved} (outside $HOME); "
+                    f"{dir_path} resolves to {resolved} (outside $HOME); "
                     "advisor install refuses to write outside $HOME",
                 )
         except OSError as exc:
             return Check(
-                "codex-home",
+                check_name,
                 "warn",
-                f"{codex_dir} is a symlink that could not be resolved: {exc}",
+                f"{dir_path} is a symlink that could not be resolved: {exc}",
             )
-        # Fall through to the directory checks below — a within-$HOME
-        # symlink to a regular dir is healthy.
-    if codex_dir.is_symlink() and not codex_dir.exists():
-        # Broken symlink (resolved to within-$HOME above, but target is
-        # missing). ``advisor install`` will fail until the target exists
-        # or the symlink is removed — mirror ``_check_claude_home``'s
-        # explicit message so the diagnostic doesn't claim the dir
-        # "will be created on first install" when in fact install will
-        # refuse to write through the dead link.
-        try:
-            target = os.readlink(codex_dir)
-        except OSError as exc:
-            target = f"<unreadable: {exc}>"
+        # Within $HOME — check for a broken target (exists() is False when
+        # the symlink destination is missing). ``advisor install`` will fail
+        # until the target exists or the symlink is removed.
+        if not dir_path.exists():
+            try:
+                target = os.readlink(dir_path)
+            except OSError as exc:
+                target = f"<unreadable: {exc}>"
+            return Check(
+                check_name,
+                "warn",
+                f"{dir_path} is a broken symlink (target: {target})",
+            )
+        # Fall through — a within-$HOME symlink to a real dir is healthy.
+    if not dir_path.exists():
         return Check(
-            "codex-home",
+            check_name,
             "warn",
-            f"{codex_dir} is a broken symlink (target: {target})",
+            f"{dir_path} does not exist (will be created on first `advisor install`)",
         )
-    if not codex_dir.exists():
-        return Check(
-            "codex-home",
-            "warn",
-            f"{codex_dir} does not exist (will be created on first `advisor install`)",
-        )
-    if not codex_dir.is_dir():
-        return Check("codex-home", "fail", f"{codex_dir} exists but is not a directory")
-    return Check("codex-home", "ok", f"{codex_dir} is a regular directory")
+    if not dir_path.is_dir():
+        return Check(check_name, "fail", f"{dir_path} exists but is not a directory")
+    return Check(check_name, "ok", f"{dir_path} is a regular directory")
+
+
+def _check_codex_home() -> Check:
+    return _check_home_dir("codex-home", Path.home() / ".codex")
 
 
 def _check_claude_home() -> Check:
-    claude_dir = Path.home() / ".claude"
-    if claude_dir.is_symlink():
-        try:
-            resolved = claude_dir.resolve()
-            home_resolved = Path.home().resolve()
-            if not resolved.is_relative_to(home_resolved):
-                return Check(
-                    "claude-home",
-                    "warn",
-                    f"{claude_dir} resolves to {resolved} (outside $HOME); "
-                    "advisor install refuses to write outside $HOME",
-                )
-        except OSError as exc:
-            return Check(
-                "claude-home",
-                "warn",
-                f"{claude_dir} is a symlink that could not be resolved: {exc}",
-            )
-        # Fall through to the directory checks below — a within-$HOME
-        # symlink to a regular dir is healthy.
-    if claude_dir.is_symlink() and not claude_dir.exists():
-        # Broken symlink (resolved to within-$HOME above, but target is
-        # missing). ``advisor install`` will fail until the target exists
-        # or the symlink is removed.
-        try:
-            target = os.readlink(claude_dir)
-        except OSError as exc:
-            target = f"<unreadable: {exc}>"
-        return Check(
-            "claude-home",
-            "warn",
-            f"{claude_dir} is a broken symlink (target: {target})",
-        )
-    if not claude_dir.exists():
-        return Check(
-            "claude-home",
-            "warn",
-            f"{claude_dir} does not exist (will be created on first `advisor install`)",
-        )
-    if not claude_dir.is_dir():
-        return Check("claude-home", "fail", f"{claude_dir} exists but is not a directory")
-    return Check("claude-home", "ok", f"{claude_dir} is a regular directory")
+    return _check_home_dir("claude-home", Path.home() / ".claude")
 
 
 def _check_codex_skill_install() -> Check | None:
@@ -332,20 +308,18 @@ def _collect_env_overrides() -> dict[str, str]:
     ``"false"`` — doctor reports what the environment contains; it does
     not interpret the values.
 
-    Values for keys in :data:`_REDACT_ENV_VARS` are replaced with the
-    literal placeholder ``"<set>"`` (presence is preserved, the actual
-    value is not). ``ADVISOR_TEST_COMMAND`` is the current redacted key
-    because it is a free-form shell string a user may have embedded a
-    secret into (``pytest --token=...``); ``advisor doctor`` output is a
-    paste-friendly diagnostic, so the value must not leak through it.
-    Users can ``echo $ADVISOR_TEST_COMMAND`` themselves when debugging.
+    Only keys in :data:`_KNOWN_SAFE_ENV_VARS` are surfaced verbatim; all
+    others are replaced with the literal placeholder ``"<set>"`` (presence
+    is preserved, the actual value is not).  The allow-list approach means
+    any new key added to ``_KNOWN_ENV_VARS`` is redacted by default until
+    it is explicitly reviewed and added to ``_KNOWN_SAFE_ENV_VARS``.
     """
     overrides: dict[str, str] = {}
     for k in _KNOWN_ENV_VARS:
         val = os.environ.get(k)
         if val is None:
             continue
-        overrides[k] = _REDACTED_VALUE if k in _REDACT_ENV_VARS else val
+        overrides[k] = val if k in _KNOWN_SAFE_ENV_VARS else _REDACTED_VALUE
     return overrides
 
 

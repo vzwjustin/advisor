@@ -663,7 +663,10 @@ def install(path: Path | None = None, body: str = NUDGE_BODY) -> InstallResult:
             raise OSError(f"refusing to install nudge outside $HOME: {resolved}")
         target = resolved
     target.parent.mkdir(parents=True, exist_ok=True)
-    current = _read_text_capped_lf(target, _CLAUDE_MD_MAX_BYTES) if target.exists() else ""
+    try:
+        current = _read_text_capped_lf(target, _CLAUDE_MD_MAX_BYTES)
+    except FileNotFoundError:
+        current = ""
     new_contents, action = apply_nudge(current, body)
     if action != InstallAction.UNCHANGED.value:
         _atomic_write_text(target, new_contents)
@@ -704,7 +707,13 @@ def ensure_nudge(
       any piece is freshly installed.
     - Swallows filesystem and decode errors so CLI commands never fail here.
     """
-    target = path or default_claude_md()
+    try:
+        target = path or default_claude_md()
+    except RuntimeError:
+        # Path.home() unavailable (hostile/minimal env) — skip silently per contract.
+        return InstallResult(
+            path=Path(".claude") / "CLAUDE.md", action=InstallAction.UNCHANGED.value
+        )
     if not should_auto_nudge(env):
         return InstallResult(path=target, action=InstallAction.UNCHANGED.value)
 
@@ -739,7 +748,7 @@ def ensure_nudge(
             or expected_block not in current
         ):
             nudge_result = install(path=target, body=NUDGE_BODY)
-    except (OSError, UnicodeDecodeError, ValueError) as exc:
+    except (OSError, UnicodeDecodeError, ValueError, RuntimeError) as exc:
         # Warnings for auto-install failures are non-fatal by design — we
         # don't want `advisor plan` to bail because ~/.claude is readonly.
         # But stay visible: use the warning glyph, not dim text, so a user

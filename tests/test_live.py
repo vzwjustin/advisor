@@ -24,6 +24,7 @@ from advisor.__main__ import build_parser, cmd_live
 from advisor.live import (
     EVENT_KINDS_CORE,
     LIVE_SCHEMA_VERSION,
+    _next_seq,
     append_event,
     latest_seq,
     live_events_path,
@@ -157,6 +158,27 @@ class TestLatestSeq:
         append_event(tmp_path, "a", {})
         append_event(tmp_path, "b", {})
         assert latest_seq(tmp_path) == 2
+
+
+class TestNextSeqLargeRecord:
+    def test_next_seq_handles_large_last_record(self, tmp_path):
+        """``_next_seq`` must return the correct next seq even when the last
+        record's serialized line exceeds the old 8 KiB tail-read chunk.
+
+        With the old ``chunk_size = min(size, 8192)`` the tail of a 9 KiB line
+        would be cut mid-JSON, ``_last_seq_from_tail`` would return 0, and
+        ``_next_seq`` would return 1 — resetting the sequence counter instead
+        of advancing it. With ``_TAIL_READ_BYTES = _MAX_LINE + 1`` (65537)
+        the full record is always captured.
+        """
+        # Build a payload whose JSON serialization is between 8 KiB and 64 KiB.
+        # 9 KiB of ASCII padding gives ~9.2 KiB total after JSON overhead.
+        big_payload = "x" * (9 * 1024)
+        append_event(tmp_path, "big", {"blob": big_payload})
+
+        path = live_events_path(tmp_path)
+        # seq 1 was written; next should be 2.
+        assert _next_seq(path) == 2
 
 
 class TestCoreKindsContract:

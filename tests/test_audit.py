@@ -477,7 +477,7 @@ class TestFormatAuditReport:
         """
         transcript = (
             "SendMessage(to='runner-1', message='## Fix assignment (fix 1 of 5)')\n"
-            + "garbage " * 200
+            + "garbage " * 300  # 2400 chars — exceeds the 2000-char attribution window
             + "\n## Fix assignment (fix 1 of 5)\n"  # unattributed
             + "SendMessage(to='runner-2', message='## Fix assignment (fix 1 of 5)')\n"
         )
@@ -602,6 +602,35 @@ class TestAuditCLI:
         assert rc == 2
 
 
+def test_runner_attribution_spans_large_dispatch_blob():
+    """Regression: a SendMessage envelope followed by a >500-char dispatch
+    blob before the ``## Fix assignment`` marker must still be attributed
+    to the correct runner.
+
+    The old 500-char window missed the ``to='runner-3'`` token when the
+    blob pushed it beyond the window boundary. The new 2 000-char window
+    covers the full envelope + blob.
+    """
+    # Build a transcript where SendMessage(to='runner-3', ...) is followed
+    # by a blob that is longer than the old 500-char window.
+    envelope = "SendMessage(to='runner-3', message='"
+    blob = "A" * 550  # 550 chars of filler — total distance > 500
+    close = "')"
+    marker = "\n## Fix assignment (fix 1 of 5)\n"
+    transcript = envelope + blob + close + marker
+
+    # Sanity: envelope-to-marker distance is >500 but well within 2000.
+    distance = len(envelope) + len(blob) + len(close)
+    assert distance > 500
+    assert distance < 2000
+
+    report = audit_transcript(transcript, _mk_checkpoint())
+    assert report.fix_counts.get("runner-3") == 1, (
+        "fix must be attributed to runner-3, not runner-?"
+    )
+    assert "runner-?" not in report.fix_counts
+
+
 def test_unclosed_fence_does_not_blind_protocol_violation():
     """Regression: an unclosed fenced block in the transcript previously
     blanked every line through end-of-text, silently suppressing any
@@ -622,4 +651,25 @@ def test_unclosed_fence_does_not_blind_protocol_violation():
     report = audit_transcript(transcript, cp)
     assert any("scope" in v for v in report.protocol_violations), (
         "PROTOCOL_VIOLATION after unclosed fence must still be detected"
+    )
+
+
+def test_strip_fenced_blocks_restores_open_marker_on_unclosed():
+    """L3 regression: unclosed-fence recovery must also restore the open-marker
+    line itself, not just the lines that follow it.
+
+    The open marker line (e.g. triple-backtick python) was previously left
+    blanked after recovery, which could silently drop a PROTOCOL_VIOLATION
+    that appeared *on* that same line (an unusual but possible edge case).
+    """
+    from advisor.audit import _strip_fenced_blocks
+
+    # Craft input where the open-marker line itself contains the sentinel.
+    # Real transcripts won't do this, but the invariant must hold defensively.
+    text = "normal line\n```PROTOCOL_VIOLATION: on marker\ncontent\nno close"
+    result = _strip_fenced_blocks(text)
+    result_lines = result.split("\n")
+    # The open-marker line must be restored verbatim (not blanked).
+    assert result_lines[1] == "```PROTOCOL_VIOLATION: on marker", (
+        "open-marker line must be restored on unclosed-fence recovery"
     )

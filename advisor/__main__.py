@@ -10,7 +10,6 @@ import argparse
 import csv
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -19,6 +18,7 @@ import warnings
 from collections.abc import Callable, Sequence
 from dataclasses import fields as _dc_fields
 from pathlib import Path
+from typing import Literal, cast
 
 from . import _style
 from ._fs import atomic_write_text as _atomic_write
@@ -578,6 +578,34 @@ def _valid_port(raw: str) -> int:
     if not 0 <= n <= 65535:
         raise argparse.ArgumentTypeError(f"port {n} out of range — must be between 0 and 65535")
     return n
+
+
+def _valid_host(raw: str) -> str:
+    """argparse ``type=`` validator for ``--host``.
+
+    Only accepts loopback addresses (``127.0.0.1``, ``::1``, ``localhost``)
+    to prevent accidentally exposing the local dashboard to the network.
+    F-1: because this validator runs before ``cmd_ui`` is called, ``--json``
+    mode also rejects non-loopback hosts at parse time — no separate guard
+    needed in the JSON branch.
+    """
+    import ipaddress
+
+    normalized = raw.strip()
+    if normalized == "localhost":
+        return normalized
+    try:
+        addr = ipaddress.ip_address(normalized)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"invalid host {raw!r}: must be a loopback address (127.0.0.1, ::1, localhost)"
+        ) from None
+    if not addr.is_loopback:
+        raise argparse.ArgumentTypeError(
+            f"host {raw!r} is not a loopback address — "
+            "only 127.0.0.1, ::1, and localhost are accepted"
+        )
+    return normalized
 
 
 def _apply_exclude_patterns(target: Path, paths: list[str], patterns: list[str]) -> list[str]:
@@ -1210,9 +1238,9 @@ def _batches_from_checkpoint(cp: Checkpoint) -> list[FocusBatch]:
                 UserWarning,
                 stacklevel=2,
             )
-            batch_complexity = "medium"
+            batch_complexity: Literal["low", "medium", "high"] = "medium"
         else:
-            batch_complexity = raw_complexity
+            batch_complexity = cast(Literal["low", "medium", "high"], raw_complexity)
         out.append(
             FocusBatch(
                 batch_id=batch_id_val,
@@ -1237,6 +1265,8 @@ def _count_lines(target: Path, file_path: str) -> int:
             len(file_path) >= 2 and file_path[1] == ":" and file_path[0].isalpha()
         )
         p = fp if is_abs else (target / file_path)
+        if not p.resolve().is_relative_to(target.resolve()):
+            return 0
         with p.open("r", encoding="utf-8", errors="replace") as fh:
             return sum(1 for _ in fh)
     except OSError:
@@ -1393,6 +1423,7 @@ def _emit_plan(
             max_fixes_per_runner=cfg.max_fixes_per_runner,
             max_runners=cfg.max_runners,
             pricing=pricing_override,
+            target=target,
         )
         print()
         print(_style.colorize_markdown(format_estimate(est)))
@@ -1998,7 +2029,27 @@ def _detect_install_method() -> tuple[str, list[str]] | None:
 
     Returns ``(label, command_argv)`` or ``None`` if we can't tell. Used by
     ``advisor update`` to pick the right upgrade command.
+
+    Prefers the ``INSTALLER`` file from ``importlib.metadata`` — it survives
+    renamed virtualenvs and symlink farms that can fool path-based heuristics.
+    Falls back to the executable-path heuristic when the metadata hint is
+    absent or unrecognised.
     """
+    import importlib.metadata as _meta
+
+    try:
+        dist = _meta.distribution("advisor-agent")
+        installer_text = dist.read_text("INSTALLER")
+        if installer_text:
+            installer = installer_text.strip().lower()
+            if installer == "uv":
+                return "uv tool", ["uv", "tool", "install", "--reinstall", "advisor-agent"]
+            if installer == "pipx":
+                return "pipx", ["pipx", "upgrade", "advisor-agent"]
+    except Exception:
+        pass
+
+    # Fall back to executable-path heuristic.
     exe = Path(sys.argv[0]).resolve() if sys.argv and sys.argv[0] else None
     if exe is None or not exe.exists():
         return None
@@ -2137,7 +2188,13 @@ def cmd_update(args: argparse.Namespace) -> int:
         print()
         print(_style.cta(label, " ".join(cmd)))
     try:
-        completed = subprocess.run(cmd, check=False)
+        completed = subprocess.run(cmd, check=False, timeout=300)
+    except subprocess.TimeoutExpired:
+        print(
+            _style.error_box("upgrade timed out after 300 s", stream=sys.stderr),
+            file=sys.stderr,
+        )
+        return 1
     except KeyboardInterrupt:
         print()
         print(_style.dim("  aborted"))
@@ -2161,19 +2218,20 @@ def cmd_update(args: argparse.Namespace) -> int:
     if not quiet and latest is not None and latest != current:
         print()
         print(_style.banner(f"Updated: v{current} → v{latest}"))
-    # Locate the advisor entry-point by name rather than trusting
-    # ``sys.argv[0]`` — under ``python -m advisor update`` that path
-    # resolves to the Python interpreter, which would re-exec as
-    # ``python install`` (a no-op or error) instead of ``advisor install``.
-    advisor_bin = shutil.which("advisor")
-    if advisor_bin:
-        install_cmd = [advisor_bin, "install"]
-    else:
-        install_cmd = [sys.executable, "-m", "advisor", "install"]
+    # Use sys.executable unconditionally so we always invoke the just-installed
+    # package rather than a potentially stale PATH shim that could be hijacked
+    # by an earlier entry on PATH.
+    install_cmd = [sys.executable, "-m", "advisor", "install"]
     if quiet:
         install_cmd.append("--quiet")
     try:
-        rc = subprocess.run(install_cmd, check=False).returncode
+        rc = subprocess.run(install_cmd, check=False, timeout=300).returncode
+    except subprocess.TimeoutExpired:
+        print(
+            _style.error_box("post-upgrade install timed out after 300 s", stream=sys.stderr),
+            file=sys.stderr,
+        )
+        return 1
     except KeyboardInterrupt:
         print()
         print(_style.dim("  aborted"))
@@ -2483,6 +2541,16 @@ def cmd_live(args: argparse.Namespace) -> int:
             if not isinstance(parsed, dict):
                 print(
                     _style.error_box(f"--data must be a JSON object, got {type(parsed).__name__}"),
+                    file=sys.stderr,
+                )
+                return 2
+            _JSON_DATA_LIMIT = 256 * 1024
+            if len(json.dumps(parsed, separators=(",", ":"))) > _JSON_DATA_LIMIT:
+                print(
+                    _style.error_box(
+                        f"--data JSON exceeds {_JSON_DATA_LIMIT // 1024} KiB limit; "
+                        "pass a smaller payload"
+                    ),
                     file=sys.stderr,
                 )
                 return 2
@@ -2851,6 +2919,15 @@ def _load_findings_from_input(
             text = _read_stdin_capped(source_label="findings input")
         else:
             src_path = Path(source)
+            if not src_path.is_file():
+                print(
+                    _style.error_box(
+                        f"findings input {src_path} is not a regular file",
+                        stream=sys.stderr,
+                    ),
+                    file=sys.stderr,
+                )
+                return [], 2
             # Bounded binary read closes the stat-then-read TOCTOU where a
             # concurrent appender could grow the file past _STDIN_LIMIT between
             # the size guard and the read. Mirrors ``_fs.read_text_capped`` but
@@ -3861,7 +3938,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_ui.add_argument(
         "--host",
         default="127.0.0.1",
-        help="Host to bind (default: 127.0.0.1 — loopback only)",
+        type=_valid_host,
+        help="Host to bind (default: 127.0.0.1 — loopback only; 127.0.0.1, ::1, localhost only)",
     )
     p_ui.add_argument(
         "--port",

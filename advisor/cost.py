@@ -20,7 +20,7 @@ import os
 import warnings
 from dataclasses import dataclass
 from datetime import date
-from functools import cache, lru_cache
+from functools import lru_cache
 from pathlib import Path
 
 from ._fs import read_text_capped
@@ -86,13 +86,15 @@ def _family_of(model: str) -> str:
     return "sonnet"
 
 
-@cache
+@lru_cache(maxsize=64)
 def _warn_unknown_family(model: str) -> None:
     """Issue a once-per-model warning for unclassifiable model names.
 
-    ``cache`` dedupes so repeated calls for the same model during a
-    single ``estimate_cost`` invocation (advisor + N runners of the same
-    family) emit exactly one line.
+    ``lru_cache(maxsize=64)`` dedupes so repeated calls for the same
+    model during a single ``estimate_cost`` invocation emit exactly one
+    line, while bounding memory use to at most 64 distinct model strings
+    (an unbounded ``@cache`` would grow without limit if callers pass
+    many distinct unknown names).
     """
     warnings.warn(
         f"cost: unknown model family for {model!r}; pricing as 'sonnet' — "
@@ -148,8 +150,19 @@ def _tokens_for_file_stat(path: str, size: int, mtime_ns: int) -> int:
     return int(size / CHARS_PER_TOKEN)
 
 
-def _tokens_for_file(path: str) -> int:
-    """Best-effort token estimate for a file's content (single stat call)."""
+def _tokens_for_file(path: str, target: Path | None = None) -> int:
+    """Best-effort token estimate for a file's content (single stat call).
+
+    When *target* is provided, paths that resolve outside *target* are
+    silently rejected (returns 0) to prevent tampered checkpoints or
+    imported JSON from escaping the sandbox.
+    """
+    if target is not None:
+        try:
+            if not Path(path).resolve().is_relative_to(target.resolve()):
+                return 0
+        except OSError:
+            return 0
     try:
         stat = os.stat(path)
     except OSError:
@@ -197,6 +210,7 @@ def estimate_cost(
     max_fixes_per_runner: int,
     max_runners: int | None = None,
     pricing: dict[str, tuple[int, int]] | None = None,
+    target: Path | None = None,
 ) -> CostEstimate:
     """Estimate token usage + USD cost for a planned run.
 
@@ -278,7 +292,7 @@ def estimate_cost(
     content_tokens = 0
     for task in tasks:
         if task.file_path not in token_cache:
-            token_cache[task.file_path] = _tokens_for_file(task.file_path)
+            token_cache[task.file_path] = _tokens_for_file(task.file_path, target)
         content_tokens += token_cache[task.file_path]
 
     # ---- MIN: one explore pass, no fixes ----

@@ -23,6 +23,28 @@ from dataclasses import dataclass
 from ._fs import normalize_path as _normalize_path_impl
 from .orchestrate._fence import fence as _fence
 
+# Control-stripping constants for _safe_inline.  Logic mirrors
+# sarif._strip_controls(keep_block_whitespace=False) but is inlined here
+# to avoid a circular import: sarif.py imports Finding from this module,
+# so verify.py cannot import from sarif at module load time.
+_SAFE_INLINE_STRIP_EXTRA = frozenset({0x85, 0x2028, 0x2029})  # NEL, LS, PS
+_SAFE_INLINE_BIDI = frozenset(
+    {
+        0x202A,  # LRE
+        0x202B,  # RLE
+        0x202C,  # PDF
+        0x202D,  # LRO
+        0x202E,  # RLO
+        0x2060,  # WJ
+        0x200E,  # LRM
+        0x200F,  # RLM
+        0x2066,  # LRI
+        0x2067,  # RLI
+        0x2068,  # FSI
+        0x2069,  # PDI
+    }
+)
+
 _log = logging.getLogger(__name__)
 
 
@@ -160,27 +182,30 @@ def _safe_inline(s: str) -> str:
     fence-escape attacks but does NOT prevent a runner from forging additional
     finding fields *inside* the fenced block by embedding ``\\n- **Severity**:``
     or a stray backtick that closes an inline-code span. Strip backticks
-    (replace with ``'``) and collapse newlines/CRs to spaces so the rendered
-    text stays on one line and can never inject another bullet.
+    (replace with ``'``) so the rendered text can never inject another bullet.
 
-    Also collapse Unicode line separators U+2028 / U+2029 — advisor's own
-    parser splits on ``\\n`` only and is safe, but the downstream verifier
-    LLM consuming this block may render those code points as visual
-    newlines and be confused about which severity to confirm. Defense in
-    depth against verifier-LLM injection rather than against advisor's parser.
-    NUL (U+0000) and zero-width code points (U+200B / U+200C / U+200D /
-    U+FEFF / U+00AD) are dropped entirely so a runner cannot smuggle
-    invisible bytes into a finding field.
+    All C0 controls (U+0000–U+001F, including BEL/U+0007, VT/U+000B,
+    FF/U+000C, and every other code point the old ``.replace()`` chain
+    missed), DEL (U+007F), NEL (U+0085), Unicode line separators U+2028 /
+    U+2029, and bidi formatting controls are stripped via
+    :data:`_SAFE_INLINE_STRIP_EXTRA` / :data:`_SAFE_INLINE_BIDI` — logic
+    mirrors ``sarif._strip_controls(keep_block_whitespace=False)`` but is
+    inlined here to avoid a circular import (``sarif`` imports ``Finding``
+    from this module).  Zero-width code points (U+200B / U+200C / U+200D /
+    U+FEFF / U+00AD) are also dropped so a runner cannot smuggle invisible
+    bytes into a finding field.
     """
+    stripped = "".join(
+        c
+        for c in s
+        if ord(c) >= 0x20
+        and ord(c) != 0x7F
+        and ord(c) not in _SAFE_INLINE_STRIP_EXTRA
+        and ord(c) not in _SAFE_INLINE_BIDI
+    )
     return (
-        s.replace("`", "'")
-        .replace("\n", " ")
-        .replace("\r", " ")
-        .replace(" ", " ")
-        .replace(" ", " ")
-        .replace("", " ")
-        .replace("\x00", "")
-        .replace("\u200b", "")
+        stripped.replace("`", "'")
+        .replace("​", "")
         .replace("\u200c", "")
         .replace("\u200d", "")
         .replace("\ufeff", "")

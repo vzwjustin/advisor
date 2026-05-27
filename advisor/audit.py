@@ -62,11 +62,12 @@ _FIX_ASSIGNMENT_RE = re.compile(
 # Heuristic attribution: a ``runner-N`` mention within this many characters
 # immediately before a fix-assignment header is treated as the recipient.
 # Chosen to span a typical SendMessage(to='runner-N', message='...') call
-# plus a little slack, without reaching across unrelated blocks. The
-# 500-char window is also wide enough that a fenced JSON-like dispatch
-# blob with embedded prose still attributes correctly; tighter windows
-# (≤200) under-attribute on real transcripts.
-_RUNNER_ATTRIBUTION_WINDOW = 500
+# followed by a fenced-JSON dispatch blob before the ``## Fix assignment``
+# marker, without reaching across unrelated blocks. 2 000 chars covers
+# real transcripts where the envelope + blob exceeds the old 500-char
+# limit; tighter windows (≤500) under-attribute when the dispatch blob
+# is verbose.
+_RUNNER_ATTRIBUTION_WINDOW = 2000
 
 _RUNNER_MENTION_RE = re.compile(r"runner-(\d+)")
 
@@ -139,10 +140,11 @@ def _strip_fenced_blocks(text: str) -> str:
     # ``PROTOCOL_VIOLATION`` lines that appear after the open marker.
     # That sentinel is the audit's primary safety signal — a false
     # negative there is worse than a stray code-fenced quote slipping
-    # through. Restore the original lines from one past the fence-open
-    # onward (the open marker line itself stays blanked) so violations
-    # after a forgotten ``\`\`\`` are still detected.
+    # through. Restore the original lines from the fence-open marker
+    # onward (including the open marker itself) so violations after a
+    # forgotten closing ``\`\`\`` are still detected.
     if in_fence and fence_open_line is not None:
+        out[fence_open_line] = lines[fence_open_line]
         for idx in range(fence_open_line + 1, len(lines)):
             out[idx] = lines[idx]
     return "\n".join(out)

@@ -2133,7 +2133,6 @@ class TestCmdUpdate:
         monkeypatch.setattr(cli.subprocess, "run", _fake_run)
         monkeypatch.setattr(cli, "invalidate_update_check_cache", lambda: None)
         monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
-        monkeypatch.setattr(cli.shutil, "which", lambda _name: None)
 
         rc = cli.cmd_update(self._make_args(quiet=True, yes=True))
         assert rc == 0
@@ -2180,7 +2179,6 @@ class TestCmdUpdate:
         monkeypatch.setattr(cli, "fetch_pypi_latest_version", lambda: "0.7.2")
         monkeypatch.setattr(cli, "fetch_remote_changelog", lambda: None)
         monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
-        monkeypatch.setattr(cli.shutil, "which", lambda _name: None)
 
         class _C:
             returncode = 0
@@ -2248,7 +2246,6 @@ class TestCmdUpdate:
         )
         monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
         monkeypatch.setattr(cli, "invalidate_update_check_cache", lambda: None)
-        monkeypatch.setattr(cli.shutil, "which", lambda _name: None)
 
         def _boom(prompt: str) -> str:
             raise AssertionError(f"unexpected prompt: {prompt!r}")
@@ -2270,3 +2267,346 @@ class TestCmdUpdate:
         rc = cli.cmd_update(self._make_args(quiet=True, yes=False))
         assert rc == 0
         assert any(c == ["true"] for c in ran), ran
+
+
+class TestCmdLiveRecordJsonLimit:
+    """M1 regression: --data JSON payloads exceeding 256 KiB must be rejected."""
+
+    def _make_args(self, tmp_path: Path, data: str | None = None) -> object:
+        import argparse
+
+        return argparse.Namespace(
+            live_sub="record",
+            target=str(tmp_path),
+            kind="test_event",
+            data=data,
+            json=False,
+        )
+
+    def test_cmd_live_record_rejects_oversized_json(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Payload whose re-serialized length exceeds 256 KiB returns exit code 2."""
+        import argparse
+
+        from advisor import __main__ as cli
+
+        # Build a dict that serializes to just over 256 KiB.
+        big_value = "x" * (256 * 1024 + 1)
+        import json
+
+        payload = json.dumps({"k": big_value})
+
+        args = argparse.Namespace(
+            live_sub="record",
+            target=str(tmp_path),
+            kind="test_event",
+            data=payload,
+            json=False,
+        )
+        rc = cli.cmd_live(args)
+        assert rc == 2
+        _, err = capsys.readouterr()
+        assert "256" in err or "limit" in err.lower()
+
+        # No events file should have been written.
+        events_file = tmp_path / ".advisor" / "live" / "events.jsonl"
+        assert not events_file.exists()
+
+    def test_cmd_live_record_accepts_normal_json(self, tmp_path: Path) -> None:
+        """Small payloads are not rejected by the size guard."""
+        import argparse
+        import json
+
+        from advisor import __main__ as cli
+
+        payload = json.dumps({"k": "v"})
+        args = argparse.Namespace(
+            live_sub="record",
+            target=str(tmp_path),
+            kind="test_event",
+            data=payload,
+            json=False,
+        )
+        rc = cli.cmd_live(args)
+        assert rc == 0
+
+        events_file = tmp_path / ".advisor" / "live" / "events.jsonl"
+        assert events_file.exists()
+
+
+class TestCmdUpdateReexecUsesSysExecutable:
+    """M3 regression: post-upgrade re-exec must use sys.executable, not PATH lookup."""
+
+    def _make_args(self, **overrides: object) -> object:
+        import argparse
+
+        ns = argparse.Namespace(quiet=True, yes=True, no_preview=False)
+        for k, v in overrides.items():
+            setattr(ns, k, v)
+        return ns
+
+    def test_cmd_update_reexec_uses_sys_executable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """install re-exec argv must start with [sys.executable, '-m', 'advisor', 'install']."""
+        from advisor import __main__ as cli
+
+        monkeypatch.setattr(cli, "_detect_install_method", lambda: ("uv tool", ["true"]))
+        monkeypatch.setattr(cli, "_get_version", lambda: "0.1.0")
+        monkeypatch.setattr(cli, "fetch_pypi_latest_version", lambda: "0.99.0")
+        monkeypatch.setattr(cli, "fetch_remote_changelog", lambda: None)
+        monkeypatch.setattr(cli, "invalidate_update_check_cache", lambda: None)
+        monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
+
+        install_calls: list[list[str]] = []
+
+        class _Done:
+            returncode = 0
+
+        def _fake_run(cmd: list[str], check: bool = False, **_kw: object) -> _Done:
+            install_calls.append(list(cmd))
+            return _Done()
+
+        monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+
+        rc = cli.cmd_update(self._make_args())
+        assert rc == 0
+
+        # At least one subprocess.run call must be the install re-exec.
+        import sys
+
+        install_argv = [sys.executable, "-m", "advisor", "install"]
+        assert any(cmd[: len(install_argv)] == install_argv for cmd in install_calls), (
+            f"expected install re-exec with sys.executable; got: {install_calls}"
+        )
+
+
+class TestCountLinesSandbox:
+    """M2 regression: _count_lines must reject paths that escape the target."""
+
+    def test_count_lines_rejects_path_outside_target(self, tmp_path: Path) -> None:
+        """A tampered file_path pointing outside target must return 0."""
+        from advisor.__main__ import _count_lines
+
+        # Create a real file outside of tmp_path/target so the guard is the
+        # only thing standing between us and a successful read.
+        outside = tmp_path / "outside.txt"
+        outside.write_text("line1\nline2\nline3\n")
+
+        target = tmp_path / "target"
+        target.mkdir()
+
+        # file_path is an absolute path escaping the target directory.
+        result = _count_lines(target, str(outside))
+        assert result == 0
+
+    def test_count_lines_allows_path_inside_target(self, tmp_path: Path) -> None:
+        """A legitimate file inside target must be counted normally."""
+        from advisor.__main__ import _count_lines
+
+        target = tmp_path / "target"
+        target.mkdir()
+        real_file = target / "real.py"
+        real_file.write_text("a\nb\nc\n")
+
+        result = _count_lines(target, str(real_file))
+        assert result == 3
+
+
+class TestCmdUpdateSubprocessTimeout:
+    """A-4: subprocess.run calls in cmd_update must have timeout=300."""
+
+    def _make_args(self, **overrides: object) -> object:
+        import argparse
+
+        ns = argparse.Namespace(quiet=True, yes=True, no_preview=False)
+        for k, v in overrides.items():
+            setattr(ns, k, v)
+        return ns
+
+    def test_upgrade_timeout_exits_nonzero(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """When the upgrade subprocess times out, cmd_update exits with code 1."""
+        from advisor import __main__ as cli
+
+        monkeypatch.setattr(cli, "_detect_install_method", lambda: ("uv tool", ["true"]))
+        monkeypatch.setattr(cli, "_get_version", lambda: "0.1.0")
+        monkeypatch.setattr(cli, "fetch_pypi_latest_version", lambda: "0.99.0")
+        monkeypatch.setattr(cli, "fetch_remote_changelog", lambda: None)
+        monkeypatch.setattr(cli, "invalidate_update_check_cache", lambda: None)
+        monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
+
+        def _fake_run(cmd: list[str], check: bool = False, **_kw: object) -> object:
+            raise cli.subprocess.TimeoutExpired(cmd, 300)
+
+        monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+
+        rc = cli.cmd_update(self._make_args())
+        assert rc == 1
+        captured = capsys.readouterr()
+        assert "timed out" in captured.err.lower()
+
+    def test_install_reexec_timeout_exits_nonzero(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """When the post-upgrade install re-exec times out, cmd_update exits with code 1."""
+        from advisor import __main__ as cli
+
+        monkeypatch.setattr(cli, "_detect_install_method", lambda: ("uv tool", ["true"]))
+        monkeypatch.setattr(cli, "_get_version", lambda: "0.1.0")
+        monkeypatch.setattr(cli, "fetch_pypi_latest_version", lambda: "0.99.0")
+        monkeypatch.setattr(cli, "fetch_remote_changelog", lambda: None)
+        monkeypatch.setattr(cli, "invalidate_update_check_cache", lambda: None)
+        monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
+
+        call_count = 0
+
+        class _Done:
+            returncode = 0
+
+        def _fake_run(cmd: list[str], check: bool = False, **_kw: object) -> _Done:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return _Done()  # upgrade succeeds
+            raise cli.subprocess.TimeoutExpired(cmd, 300)  # install re-exec times out
+
+        monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+
+        rc = cli.cmd_update(self._make_args())
+        assert rc == 1
+        captured = capsys.readouterr()
+        assert "timed out" in captured.err.lower()
+
+
+class TestCmdUiHostValidator:
+    """A-5/F-1: _valid_host validator rejects non-loopback hosts at argparse level."""
+
+    def test_accepts_127_0_0_1(self) -> None:
+        from advisor.__main__ import _valid_host
+
+        assert _valid_host("127.0.0.1") == "127.0.0.1"
+
+    def test_accepts_localhost(self) -> None:
+        from advisor.__main__ import _valid_host
+
+        assert _valid_host("localhost") == "localhost"
+
+    def test_accepts_ipv6_loopback(self) -> None:
+        from advisor.__main__ import _valid_host
+
+        assert _valid_host("::1") == "::1"
+
+    def test_rejects_0_0_0_0(self) -> None:
+        import argparse
+
+        from advisor.__main__ import _valid_host
+
+        with pytest.raises(argparse.ArgumentTypeError, match="loopback"):
+            _valid_host("0.0.0.0")
+
+    def test_rejects_public_ip(self) -> None:
+        import argparse
+
+        from advisor.__main__ import _valid_host
+
+        with pytest.raises(argparse.ArgumentTypeError, match="loopback"):
+            _valid_host("192.168.1.1")
+
+    def test_rejects_garbage(self) -> None:
+        import argparse
+
+        from advisor.__main__ import _valid_host
+
+        with pytest.raises(argparse.ArgumentTypeError):
+            _valid_host("not-an-ip")
+
+    def test_argparse_rejects_non_loopback_host(self) -> None:
+        """argparse raises SystemExit when --host 0.0.0.0 is passed."""
+        from advisor.__main__ import build_parser
+
+        parser = build_parser()
+        with pytest.raises(SystemExit) as exc_info:
+            parser.parse_args(["ui", "--host", "0.0.0.0"])
+        assert exc_info.value.code != 0
+
+
+class TestLoadFindingsFromInputRejectsDirectory:
+    """A-7: _load_findings_from_input rejects directories before open()."""
+
+    def test_rejects_directory(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        from advisor.__main__ import _load_findings_from_input
+
+        findings, code = _load_findings_from_input(tmp_path)
+        assert code == 2
+        assert findings == []
+        captured = capsys.readouterr()
+        assert "not a regular file" in captured.err
+
+    def test_accepts_regular_file(self, tmp_path: Path) -> None:
+        from advisor.__main__ import _load_findings_from_input
+
+        findings_file = tmp_path / "findings.json"
+        findings_file.write_text("[]")
+        _findings, code = _load_findings_from_input(findings_file)
+        # No file-type error — code may be 0 or None (empty findings list is valid)
+        assert code != 2
+
+
+class TestDetectInstallMethodMetadata:
+    """A-6: _detect_install_method prefers importlib.metadata INSTALLER file."""
+
+    def test_prefers_uv_from_metadata(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import importlib.metadata as _meta
+
+        from advisor.__main__ import _detect_install_method
+
+        class _FakeDist:
+            def read_text(self, fname: str) -> str | None:
+                return "uv\n" if fname == "INSTALLER" else None
+
+        monkeypatch.setattr(_meta, "distribution", lambda name: _FakeDist())
+        result = _detect_install_method()
+        assert result is not None
+        label, cmd = result
+        assert "uv" in label.lower()
+        assert "uv" in cmd[0]
+
+    def test_prefers_pipx_from_metadata(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import importlib.metadata as _meta
+
+        from advisor.__main__ import _detect_install_method
+
+        class _FakeDist:
+            def read_text(self, fname: str) -> str | None:
+                return "pipx\n" if fname == "INSTALLER" else None
+
+        monkeypatch.setattr(_meta, "distribution", lambda name: _FakeDist())
+        result = _detect_install_method()
+        assert result is not None
+        label, _ = result
+        assert "pipx" in label.lower()
+
+    def test_falls_back_to_path_heuristic_when_metadata_missing(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        import importlib.metadata as _meta
+
+        from advisor import __main__ as cli
+
+        # Simulate package not installed (metadata lookup raises)
+        def _not_found(name: str) -> object:
+            raise Exception("not found")
+
+        monkeypatch.setattr(_meta, "distribution", _not_found)
+
+        # Fake a uv-tools-style exe path
+        fake_exe = tmp_path / "uv" / "tools" / "advisor"
+        fake_exe.parent.mkdir(parents=True)
+        fake_exe.touch()
+        monkeypatch.setattr(cli.sys, "argv", [str(fake_exe)])
+
+        result = cli._detect_install_method()
+        assert result is not None
+        label, _ = result
+        assert "uv" in label.lower()

@@ -261,7 +261,7 @@ def resolve_git_scope(
                 f"{label} ref {value!r} cannot begin with '-'; "
                 f"git would parse it as an option, not a ref"
             )
-        if not _REF_ALLOWED.match(value):
+        if not _REF_ALLOWED.fullmatch(value):
             raise GitScopeError(
                 f"{label} ref {value!r} contains characters outside "
                 f"[A-Za-z0-9_./~^@{{}}-]; reject to prevent option-injection"
