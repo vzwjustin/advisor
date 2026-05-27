@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from advisor import git_scope
 from advisor.__main__ import _resolve_plan_files
 from advisor.git_scope import GitScopeError, resolve_git_scope
 
@@ -85,6 +86,11 @@ class TestResolveGitScope:
         # Just checking these don't raise on the allowlist; semantic
         # resolution is exercised by ``test_since_returns_changed_files``.
         resolve_git_scope(git_repo, since="HEAD~1")
+
+    def test_stdout_cap_rejects_runaway_git_output(self, git_repo: Path, monkeypatch) -> None:
+        monkeypatch.setattr(git_scope, "_GIT_MAX_STDOUT_BYTES", 1)
+        with pytest.raises(GitScopeError, match="stdout"):
+            git_scope._run_git(git_repo, "rev-parse", "--show-toplevel")
 
 
 @pytest.fixture

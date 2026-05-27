@@ -641,6 +641,11 @@ class TestStaticUiState:
         assert "data.token !== lastToken" in APP_JS
         assert "data.last_mtime !== lastMtime" in APP_JS
 
+    def test_live_poll_runs_while_other_tabs_are_active(self):
+        assert "document.hidden" in APP_JS
+        assert "fetch('/api/events?' + qs.toString()" in APP_JS
+        assert "activeTab !== 'live'" not in APP_JS
+
 
 # ---------------------------------------------------------------------------
 # Banner host display

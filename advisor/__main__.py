@@ -3587,8 +3587,9 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="CMD",
         help='Shell command to run after each fix wave (e.g. "pytest -q")',
     )
-    # Git-incremental scope — mutually exclusive (enforced in the cmd
-    # function; argparse mutex groups interact poorly with nargs="?").
+    # Git-incremental scope — mutually exclusive (enforced by
+    # git_scope.resolve_git_scope, which raises GitScopeError; argparse
+    # mutex groups interact poorly with nargs="?").
     p_plan.add_argument(
         "--since",
         default=None,
@@ -4026,9 +4027,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--kind",
         required=True,
         help=(
-            "Event kind. Core kinds the dashboard renders specially: "
-            "run_start, runner_spawn, report_relay, fix_dispatch, run_end. "
-            "Other kinds render as generic informational rows."
+            "Event kind. Core kinds rendered specially: "
+            "run_start, runner_spawn, report_relay, fix_dispatch, run_end; "
+            "other non-empty strings are recorded as generic events."
         ),
     )
     p_live_record.add_argument(

@@ -861,10 +861,10 @@ APP_JS = r"""(() => {
   $('#cost-refresh').addEventListener('click', loadCost);
 
   // --- live events tab ---
-  // Polls /api/events?since=<token> while the Live tab is active. Mirrors
-  // the findings poll loop's shape (interval + backoff + pause toggle)
-  // but cursors on the server-issued ``next_token`` so we never miss
-  // events even when polling falls behind a burst.
+  // Polls /api/events?since=<token> while the dashboard page is visible.
+  // Mirrors the findings poll loop's shape (interval + backoff + pause
+  // toggle) but cursors on the server-issued ``next_token`` so the Live
+  // tab is already caught up when the user opens it.
   const LIVE_POLL_INTERVAL_MS = 2000;
   const LIVE_POLL_MAX_BACKOFF_MS = 30000;
   // FIFO bound on how many events live in the DOM. A long-running session
@@ -977,13 +977,6 @@ APP_JS = r"""(() => {
     liveStreamTimer = null;
     if (!liveStreamEnabled) { setLiveStreamState('paused', 'PAUSED'); return; }
     if (document.hidden) { scheduleLiveStreamPoll(LIVE_POLL_INTERVAL_MS); return; }
-    const activeTab = document.querySelector('.tab.active')?.dataset.tab;
-    // Poll only while the Live tab is visible — keeps the dashboard quiet
-    // on the Findings / Plan / Cost tabs and avoids redundant work.
-    if (activeTab !== 'live') {
-      scheduleLiveStreamPoll(LIVE_POLL_INTERVAL_MS);
-      return;
-    }
     let nextDelay = LIVE_POLL_INTERVAL_MS;
     try {
       const qs = new URLSearchParams();
@@ -1088,10 +1081,9 @@ APP_JS = r"""(() => {
   }
 
   // --- init ---
-  // Kick the live-events poll loop once on startup. It runs in the
-  // background regardless of which tab the user is on (the tick gates
-  // network work on the active tab) so the cursor advances steadily and
-  // the Live tab is hot the moment the user clicks it.
+  // Kick the live-events poll loop once on startup. It keeps the cursor
+  // moving while the page is visible so the Live tab is hot the moment
+  // the user clicks it.
   scheduleLiveStreamPoll(0);
 
   (async () => {

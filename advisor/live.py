@@ -59,7 +59,7 @@ import warnings
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO, cast
 
 # Cross-module reuse of the history append-locking primitives. ``live.py``
 # and ``history.py`` both append to JSONL files where concurrent appenders
@@ -147,6 +147,28 @@ def _last_seq_from_tail(tail: bytes) -> int:
     return last_seq
 
 
+def _read_final_line_tail(fh: BinaryIO) -> bytes:
+    """Return enough bytes to include the final valid event line.
+
+    Writers cap each JSONL record at ``_MAX_LINE`` bytes, plus one trailing
+    LF. Reading ``_MAX_LINE + 1`` from EOF is therefore sufficient for any
+    valid final event while keeping the cursor path bounded.
+    """
+    try:
+        fh.seek(0, 2)
+        size = fh.tell()
+    except OSError:
+        return b""
+    if size <= 0:
+        return b""
+    chunk_size = min(size, _TAIL_READ_BYTES)
+    try:
+        fh.seek(size - chunk_size, 0)
+        return fh.read(chunk_size)
+    except OSError:
+        return b""
+
+
 def _next_seq(path: Path) -> int:
     """Return ``last_seq + 1`` by reading only the file's final non-empty line.
 
@@ -169,20 +191,7 @@ def _next_seq(path: Path) -> int:
         return 1
     try:
         with path.open("rb") as f:
-            # Tail-read: read the last ``_TAIL_READ_BYTES`` bytes and scan
-            # back for the last complete record. The chunk is ``_MAX_LINE + 1``
-            # bytes — large enough to always cover one full record, since
-            # ``append_event`` rejects lines exceeding ``_MAX_LINE``.
-            try:
-                f.seek(0, 2)  # end
-                size = f.tell()
-            except OSError:
-                return 1
-            chunk_size = min(size, _TAIL_READ_BYTES)
-            if chunk_size <= 0:
-                return 1
-            f.seek(size - chunk_size, 0)
-            tail = f.read(chunk_size)
+            tail = _read_final_line_tail(f)
     except OSError:
         return 1
     return _last_seq_from_tail(tail) + 1
@@ -227,7 +236,7 @@ def append_event(
         # downstream consumers grepping for "Z" can rely on.
         if ts.endswith("+00:00"):
             ts = ts[:-6] + "Z"
-    # Open in ``a+`` so the file is created on first use AND we can seek-
+    # Open in ``a+b`` so the file is created on first use AND we can seek-
     # read the tail for next-seq computation. Hold an exclusive advisory
     # lock across the tail-read AND the append so concurrent appenders
     # cannot both observe the same ``last_seq`` and write duplicate ``seq``
@@ -236,28 +245,16 @@ def append_event(
     # ``since == the duplicate``. The pre-fix shape (separate ``_next_seq``
     # open + separate append open, no lock) had that race.
     #
-    # ``newline=""`` matches :mod:`advisor.history`'s convention — the JSONL
-    # format stays LF-only across platforms so the dashboard's parser
-    # doesn't see stray ``\r`` bytes inside event records on Windows.
-    with path.open("a+", encoding="utf-8", newline="") as f:
-        _lock_exclusive(f)
+    # Writing encoded bytes keeps the tail seek byte-based and forces LF-only
+    # JSONL across platforms.
+    with path.open("a+b") as f:
+        _lock_exclusive(cast(Any, f))
         try:
             # Tail-read inside the lock so the seq we compute is the truly
-            # latest one. ``a+`` opens with position 0 on POSIX — seek to
+            # latest one. ``a+b`` opens with position 0 on POSIX — seek to
             # the end to learn the size, then back up to read the tail.
-            try:
-                f.seek(0, 2)
-                size = f.tell()
-            except OSError:
-                size = 0
-            chunk_size = min(size, _TAIL_READ_BYTES)
-            if chunk_size > 0:
-                f.seek(size - chunk_size, 0)
-                tail_text = f.read(chunk_size)
-                tail = tail_text.encode("utf-8", errors="replace")
-                seq = _last_seq_from_tail(tail) + 1
-            else:
-                seq = 1
+            tail = _read_final_line_tail(f)
+            seq = _last_seq_from_tail(tail) + 1 if tail else 1
             record = {
                 "schema_version": LIVE_SCHEMA_VERSION,
                 "ts": ts,
@@ -275,10 +272,10 @@ def append_event(
             # current seek position; explicit seek_to_end is belt-and-
             # suspenders for the read above leaving us mid-file.
             f.seek(0, 2)
-            f.write(line + "\n")
+            f.write((line + "\n").encode("utf-8"))
             f.flush()
         finally:
-            _unlock_exclusive(f)
+            _unlock_exclusive(cast(Any, f))
     return path
 
 

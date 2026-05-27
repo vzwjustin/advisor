@@ -26,7 +26,7 @@ the attacker's path into a CI artifact.
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 from urllib.parse import quote as _url_quote
 
@@ -264,6 +264,19 @@ def _parse_file_path(
     return drive_prefix + path, line, start_col, end_col
 
 
+def _windows_path_parts(path: str) -> tuple[str, ...] | None:
+    """Return Windows path parts when ``path`` uses Windows separators."""
+    if "\\" not in path and not (len(path) >= 2 and path[1] == ":" and path[0].isalpha()):
+        return None
+    win = PureWindowsPath(path)
+    if win.drive or win.root:
+        raise ValueError(
+            f"file_path {path!r} is a Windows absolute/rooted path; "
+            "SARIF requires paths to resolve under %SRCROOT%"
+        )
+    return tuple(part for part in win.parts if part not in ("", "."))
+
+
 def _resolve_relative(path: str, target_dir: Path, target_resolved: Path | None = None) -> str:
     """Return ``path`` as a POSIX path relative to ``target_dir``.
 
@@ -288,6 +301,14 @@ def _resolve_relative(path: str, target_dir: Path, target_resolved: Path | None 
                 f"SARIF requires paths to resolve under %SRCROOT%"
             ) from exc
         return rel.as_posix()
+    windows_parts = _windows_path_parts(path)
+    if windows_parts is not None:
+        if any(part == ".." for part in windows_parts):
+            raise ValueError(
+                f"file_path {path!r} escapes target_dir {target_dir!s} via '..'; "
+                f"SARIF requires paths to resolve under %SRCROOT%"
+            )
+        return "/".join(windows_parts)
     # Already relative — normalize to POSIX separators for cross-platform
     # determinism but do NOT resolve (a non-existent file shouldn't fail).
     posix = p.as_posix()
