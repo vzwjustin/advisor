@@ -142,12 +142,22 @@ def atomic_write_text(
 
     Hardening knobs:
 
-    * ``reject_symlink`` (default ``False``) — raise :class:`OSError` if
-      the target path is a symlink. Callers writing under shared
-      directories (``~/.claude``) use this to refuse TOCTOU attacks
-      where an attacker swaps a benign path for a symlink to a sensitive
-      file mid-write. Most advisor callers write under the user's own
-      target directory and do not enable this.
+    * ``reject_symlink`` (default ``False``) — raise :class:`OSError` when
+      EITHER the leaf path OR any component of the parent chain is a
+      symlink. Callers writing under shared directories (``~/.claude``)
+      use this to refuse TOCTOU attacks where an attacker swaps a
+      benign path for a symlink to a sensitive file mid-write. The
+      parent-chain walk closes the gap a leaf-only check left open:
+      a hostile parent symlink would otherwise be silently followed by
+      ``mkdir(parents=True)`` / ``tempfile.mkstemp(dir=parent)`` /
+      ``os.replace``, redirecting the write through the attacker's
+      target. Callers that want to write into a dotfiles-managed
+      directory (``~/.claude`` symlinked to ``~/dotfiles/claude``)
+      should resolve their target first — :func:`Path.resolve` follows
+      every symlink so the path passed in is the physical destination,
+      and this guard then verifies no further symlinks crept in between
+      the caller's resolve and our write. Most advisor callers write
+      under the user's own target directory and do not enable this.
     * ``mode`` (default ``None``) — ``chmod`` the tmpfile to this mode
       before the rename so the final file lands with it.
       :func:`tempfile.mkstemp` defaults to ``0o600`` which would
@@ -156,8 +166,26 @@ def atomic_write_text(
       container mounts) is non-fatal — the write still succeeds, just
       with the tempfile's default mode.
     """
-    if reject_symlink and target.is_symlink():
-        raise OSError(f"refusing to write through symlink: {target} -> {os.readlink(target)}")
+    if reject_symlink:
+        if target.is_symlink():
+            raise OSError(
+                f"refusing to write through symlink: {target} -> {os.readlink(target)}"
+            )
+        # Walk the parent chain and reject if any component is a symlink.
+        # ``Path.is_symlink`` returns False on non-existent components, so a
+        # not-yet-created parent (``~/.claude/skills/advisor/SKILL.md`` when
+        # the skills dir hasn't been made) does not trip the guard.
+        _walker = target.parent
+        while True:
+            if _walker.is_symlink():
+                raise OSError(
+                    f"refusing to write through symlinked parent component: "
+                    f"{_walker} -> {os.readlink(_walker)}"
+                )
+            _next = _walker.parent
+            if _next == _walker:
+                break  # reached filesystem root
+            _walker = _next
 
     parent = target.parent
     parent.mkdir(parents=True, exist_ok=True)

@@ -555,6 +555,16 @@ def run_server(
     alternate port on EADDRINUSE because that would make ``advisor ui``
     invocations non-reproducible; passing ``port=0`` is the opt-in to let
     the OS pick, and the bound port is printed after the fact.
+
+    ``host`` must be a loopback address (``127.0.0.1``, ``localhost``,
+    ``::1``, ``[::1]``) or a wildcard bind (``0.0.0.0``, ``::``, ``[::]``).
+    Wildcard binds are accepted because loopback clients still send
+    ``Host: 127.0.0.1:{port}`` which matches the DNS-rebinding allowlist
+    in :meth:`DashboardHandler.do_GET`. Any other bind address would
+    successfully accept the connection but then 403 every request, since
+    the browser would send ``Host: <bound-ip>:{port}`` which is not in
+    the allowlist. Surfacing the constraint at bind time beats a
+    silently-403-every-request server that looks like it's running fine.
     """
     if not isinstance(port, int) or isinstance(port, bool):
         # Reject non-int (e.g. ``None`` from a caller bug) before the
@@ -565,6 +575,20 @@ def run_server(
         raise OSError(f"could not bind {host}:{port} (port must be an integer)")
     if not 0 <= port <= 65535:
         raise OSError(f"could not bind {host}:{port} (port out of range 0..65535)")
+    # DNS-rebinding defense's Host allowlist is loopback-only. Binding to a
+    # routable interface would silently 403 every request after a successful
+    # bind. Reject those binds at entry with a clear error rather than let
+    # the user troubleshoot a phantom-failure dashboard.
+    _ALLOWED_BIND_HOSTS = frozenset(
+        {"127.0.0.1", "localhost", "::1", "[::1]", "0.0.0.0", "::", "[::]"}
+    )
+    if host not in _ALLOWED_BIND_HOSTS:
+        raise OSError(
+            f"refusing to bind non-loopback host {host!r}: only loopback "
+            f"and wildcard binds are supported (the DNS-rebinding Host "
+            f"allowlist is loopback-only, so any other bind 403's every "
+            f"request). Pass one of {sorted(_ALLOWED_BIND_HOSTS)}."
+        )
 
     handler_cls = _make_handler_class(state, log_requests=log_requests)
     try:
@@ -593,12 +617,26 @@ def run_server(
 
 
 def find_free_port(host: str = DEFAULT_HOST) -> int:
-    """Return a free port assigned by the OS.
+    """Return a free port assigned by the OS — test-only helper.
 
-    Binds with port 0 so the kernel picks an available port atomically,
-    eliminating the bind-close-return TOCTOU race of scanning candidates.
+    Binds with port 0 so the kernel picks an available port without the
+    scanning race of probing candidates by hand. The returned port is
+    then released (the socket is closed on ``with`` exit before return),
+    leaving a brief use-after-close window during which another process
+    can bind the same port before the caller does — on a busy host or
+    CI machine, this manifests as a flaky ``EADDRINUSE`` on the caller's
+    subsequent bind.
 
-    Only used by tests and by the CLI when ``--port 0`` is requested.
+    For production code, prefer the race-free pattern used by
+    :func:`run_server`: pass ``port=0`` directly to
+    ``ThreadingHTTPServer((host, 0), ...)`` and read the bound port
+    back from ``server.server_address[1]`` — the kernel holds the port
+    on the live server socket without an intervening release.
+
+    This helper is used **only by tests** (``tests/test_web.py``); the
+    CLI's ``--port 0`` path runs through :func:`run_server` instead. The
+    function is kept for the test suite's convenience but is not
+    appropriate for new callers.
     """
     # Resolve the address family from ``host`` so an IPv6 literal (``::1``)
     # picks an IPv6 free port; previously hardcoded ``AF_INET`` always

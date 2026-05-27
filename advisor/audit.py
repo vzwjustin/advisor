@@ -454,12 +454,23 @@ def _audit_context_pressure(transcript: str) -> tuple[list[str], int]:
     fix assignments are dispatches *to* a runner. Reusing
     ``_attribute_fix_to_runner`` here would attribute the ping to whichever
     runner the advisor most recently addressed, not the one actually pinging.
+
+    Strip fenced code blocks before scanning, mirroring
+    :func:`_audit_protocol_violations`. Without this, a runner quoting the
+    ``CONTEXT_PRESSURE`` sentinel inside an Evidence ``` block — or the
+    audit report's own re-serialized ``"context_pressure": {...}`` JSON
+    key — inflates the raw count and pollutes ``context_pressure_runners``
+    with false first-mention attributions. The attribution lookup also
+    runs against the stripped transcript so a ``runner-N`` mention buried
+    inside a fenced example doesn't get credited with a ping the runner
+    never actually emitted.
     """
-    cp_matches = list(_CONTEXT_PRESSURE_RE.finditer(transcript))
+    transcript_unfenced = _strip_fenced_blocks(transcript)
+    cp_matches = list(_CONTEXT_PRESSURE_RE.finditer(transcript_unfenced))
     cp_runners_ordered: list[str] = []
     seen: set[str] = set()
     for m in cp_matches:
-        runner = _attribute_context_pressure_to_runner(transcript, m.start())
+        runner = _attribute_context_pressure_to_runner(transcript_unfenced, m.start())
         if runner not in seen:
             seen.add(runner)
             cp_runners_ordered.append(runner)

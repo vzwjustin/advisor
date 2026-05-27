@@ -54,6 +54,17 @@ _LEVEL_MAP: dict[str, str] = {
 # severity string — we want to emit *something* so the finding surfaces.
 _DEFAULT_LEVEL = "warning"
 
+# Upper bound on SARIF region integer fields (startLine, startColumn,
+# endColumn). SARIF 2.1.0 itself is silent on the int range, but several
+# downstream consumers — notably GitHub Code Scanning and the VS Code
+# SARIF viewer — process these as 32-bit signed ints. A runner emitting
+# ``foo.py:9999999999999999999`` (legitimately or via a typo) would
+# otherwise land an unrepresentable startLine in the SARIF output and
+# trigger a silent drop or a hard validator failure downstream. The
+# lower bound stays at 1 (SARIF requires startLine >= 1); the upper
+# bound caps at int32 max for cross-consumer safety.
+_SARIF_INT_MAX = 2_147_483_647
+
 
 # Block-text whitespace we keep when stripping control chars: \t (0x09),
 # \n (0x0A), \r (0x0D). Everything else in U+0000..U+001F and U+007F
@@ -162,6 +173,19 @@ def _rule_id_for(finding: Finding, *, prefix: str) -> str:
 def _level_for(severity: str) -> str:
     """Map an advisor severity string to a SARIF level."""
     return _LEVEL_MAP.get(severity.upper(), _DEFAULT_LEVEL)
+
+
+def _srcroot_uri(target_resolved: Path) -> str:
+    """Return the ``%SRCROOT%`` URI for ``target_resolved`` with a trailing slash.
+
+    ``Path.as_uri()`` already includes a trailing slash for the filesystem
+    root (``file:///``) but not for any other path. Appending unconditionally
+    produces ``file:////`` for the root case — a quadruple-slash some SARIF
+    consumers interpret as a UNC-style network path. Only append when the
+    URI doesn't already end with a slash.
+    """
+    uri = target_resolved.as_uri()
+    return uri if uri.endswith("/") else uri + "/"
 
 
 def _parse_file_path(
@@ -362,14 +386,17 @@ def findings_to_sarif(
             # let a downstream validator reject the whole run. Same clamp
             # rescues malformed ``path:-5`` (negative line) that the
             # parser now extracts as a numeric token rather than leaving
-            # embedded in the URI.
-            region["startLine"] = max(1, line)
+            # embedded in the URI. Upper clamp at int32 max protects
+            # consumers (GitHub Code Scanning, VS Code SARIF viewer) that
+            # process region ints as 32-bit signed values from a runner
+            # emitting a pathological 1e19-magnitude line number.
+            region["startLine"] = min(max(1, line), _SARIF_INT_MAX)
             # Columns are optional in SARIF; emit only when the runner
-            # provided them. Same >=1 clamp as startLine.
+            # provided them. Same clamp range as startLine.
             if start_col is not None:
-                region["startColumn"] = max(1, start_col)
+                region["startColumn"] = min(max(1, start_col), _SARIF_INT_MAX)
             if end_col is not None:
-                region["endColumn"] = max(1, end_col)
+                region["endColumn"] = min(max(1, end_col), _SARIF_INT_MAX)
 
         # SARIF's ``artifactLocation.uri`` is a uri-reference per RFC 3986
         # (per the schema's ``"format": "uri-reference"`` constraint).
@@ -446,7 +473,15 @@ def findings_to_sarif(
             },
         },
         "originalUriBaseIds": {
-            "%SRCROOT%": {"uri": target_dir.resolve().as_uri() + "/"},
+            # ``Path.as_uri()`` returns ``file:///absolute/path`` for non-root
+            # paths (no trailing slash) and ``file:///`` for the filesystem
+            # root. Unconditional ``+ "/"`` would produce ``file:////`` for
+            # the latter — a quadruple-slash that some SARIF consumers
+            # interpret as a UNC-style network path and others reject as a
+            # malformed URI. Append the slash only when it isn't already
+            # present. Reuse the already-resolved ``target_resolved`` so
+            # we don't pay an extra ``resolve()`` syscall.
+            "%SRCROOT%": {"uri": _srcroot_uri(target_resolved)},
         },
         "results": results,
     }

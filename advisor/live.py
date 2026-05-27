@@ -62,6 +62,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# Cross-module reuse of the history append-locking primitives. ``live.py``
+# and ``history.py`` both append to JSONL files where concurrent appenders
+# must not interleave: history can't tolerate partial JSON lines, and live
+# can't tolerate duplicate ``seq`` values (the dashboard's ``?since=<seq>``
+# cursor breaks if two appenders pick the same next-seq). The lock idiom is
+# identical; the helpers stay private in ``history.py`` but the package
+# itself is the right boundary for this reuse.
+from .history import _lock_exclusive, _unlock_exclusive
+
 UTC = timezone.utc
 
 LIVE_DIR_NAME = ".advisor"
@@ -107,6 +116,30 @@ def live_events_path(target: str | Path) -> Path:
     return live_dir(target) / LIVE_FILE_NAME
 
 
+def _last_seq_from_tail(tail: bytes) -> int:
+    """Extract the last ``seq`` value from a JSONL tail chunk, or 0 if absent.
+
+    Returns ``0`` on empty / missing / malformed input so callers compute
+    ``next_seq = last + 1`` and land on ``1`` for a fresh file. Shared
+    between :func:`_next_seq` (path-based) and :func:`append_event`'s
+    locked critical section (open-fd-based) so both parse the tail with
+    identical semantics.
+    """
+    lines = [ln for ln in tail.splitlines() if ln.strip()]
+    if not lines:
+        return 0
+    try:
+        record = json.loads(lines[-1])
+    except (ValueError, json.JSONDecodeError):
+        return 0
+    if not isinstance(record, dict):
+        return 0
+    last_seq = record.get("seq")
+    if not isinstance(last_seq, int) or last_seq < 0:
+        return 0
+    return last_seq
+
+
 def _next_seq(path: Path) -> int:
     """Return ``last_seq + 1`` by reading only the file's final non-empty line.
 
@@ -118,6 +151,12 @@ def _next_seq(path: Path) -> int:
     On a missing or empty file, returns ``1`` (first event in a new run).
     Malformed final lines fall back to ``1`` rather than raising — the
     file is advisory, not load-bearing.
+
+    This function is the read-only path used by :func:`latest_seq` for
+    the dashboard's ``/api/events`` next-token computation. The write
+    path in :func:`append_event` does NOT call this; it holds an
+    exclusive lock across an inline tail-read + append so concurrent
+    appenders cannot pick the same next-seq.
     """
     if not path.exists():
         return 1
@@ -139,20 +178,7 @@ def _next_seq(path: Path) -> int:
             tail = f.read(chunk_size)
     except OSError:
         return 1
-    # Find the last non-empty line in ``tail``.
-    lines = [ln for ln in tail.splitlines() if ln.strip()]
-    if not lines:
-        return 1
-    try:
-        record = json.loads(lines[-1])
-    except (ValueError, json.JSONDecodeError):
-        return 1
-    if not isinstance(record, dict):
-        return 1
-    last_seq = record.get("seq")
-    if not isinstance(last_seq, int) or last_seq < 0:
-        return 1
-    return last_seq + 1
+    return _last_seq_from_tail(tail) + 1
 
 
 def append_event(
@@ -187,7 +213,6 @@ def append_event(
         raise ValueError(f"data must be a dict or None, got {type(data).__name__}")
     path = live_events_path(target)
     path.parent.mkdir(parents=True, exist_ok=True)
-    seq = _next_seq(path)
     if ts is None:
         ts = datetime.now(UTC).isoformat(timespec="milliseconds")
         # ``isoformat`` emits ``+00:00`` — normalize to ``Z`` so the wire
@@ -195,25 +220,58 @@ def append_event(
         # downstream consumers grepping for "Z" can rely on.
         if ts.endswith("+00:00"):
             ts = ts[:-6] + "Z"
-    record = {
-        "schema_version": LIVE_SCHEMA_VERSION,
-        "ts": ts,
-        "seq": seq,
-        "kind": kind,
-        "data": data,
-    }
-    line = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
-    if len(line.encode("utf-8")) > _MAX_LINE:
-        raise ValueError(
-            f"live event too large ({len(line)} chars > {_MAX_LINE} per-line cap); "
-            "trim the data payload"
-        )
+    # Open in ``a+`` so the file is created on first use AND we can seek-
+    # read the tail for next-seq computation. Hold an exclusive advisory
+    # lock across the tail-read AND the append so concurrent appenders
+    # cannot both observe the same ``last_seq`` and write duplicate ``seq``
+    # values. The dashboard's ``?since=<seq>`` cursor breaks if two records
+    # share a seq — one record becomes invisible to filtered reads where
+    # ``since == the duplicate``. The pre-fix shape (separate ``_next_seq``
+    # open + separate append open, no lock) had that race.
+    #
     # ``newline=""`` matches :mod:`advisor.history`'s convention — the JSONL
     # format stays LF-only across platforms so the dashboard's parser
     # doesn't see stray ``\r`` bytes inside event records on Windows.
-    with path.open("a", encoding="utf-8", newline="") as f:
-        f.write(line + "\n")
-        f.flush()
+    with path.open("a+", encoding="utf-8", newline="") as f:
+        _lock_exclusive(f)
+        try:
+            # Tail-read inside the lock so the seq we compute is the truly
+            # latest one. ``a+`` opens with position 0 on POSIX — seek to
+            # the end to learn the size, then back up to read the tail.
+            try:
+                f.seek(0, 2)
+                size = f.tell()
+            except OSError:
+                size = 0
+            chunk_size = min(size, 8192)
+            if chunk_size > 0:
+                f.seek(size - chunk_size, 0)
+                tail_text = f.read(chunk_size)
+                tail = tail_text.encode("utf-8", errors="replace")
+                seq = _last_seq_from_tail(tail) + 1
+            else:
+                seq = 1
+            record = {
+                "schema_version": LIVE_SCHEMA_VERSION,
+                "ts": ts,
+                "seq": seq,
+                "kind": kind,
+                "data": data,
+            }
+            line = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
+            if len(line.encode("utf-8")) > _MAX_LINE:
+                raise ValueError(
+                    f"live event too large ({len(line)} chars > {_MAX_LINE} per-line cap); "
+                    "trim the data payload"
+                )
+            # ``a`` mode always appends at end on POSIX regardless of the
+            # current seek position; explicit seek_to_end is belt-and-
+            # suspenders for the read above leaving us mid-file.
+            f.seek(0, 2)
+            f.write(line + "\n")
+            f.flush()
+        finally:
+            _unlock_exclusive(f)
     return path
 
 
@@ -253,16 +311,28 @@ def load_recent_events(
     keep: deque[dict[str, Any]] = deque(maxlen=cap)
     try:
         with path.open("r", encoding="utf-8", errors="replace") as f:
-            for raw in f:
-                line = raw.rstrip("\n")
-                if not line.strip():
-                    continue
-                if len(line.encode("utf-8")) > _MAX_LINE:
+            # Use ``readline(_MAX_LINE + 1)`` rather than ``for raw in f``
+            # so a single corrupted line without a newline cannot OOM the
+            # reader. The plain iterator buffers the full line BEFORE the
+            # length check fires; the size-bounded readline caps each read
+            # at ``_MAX_LINE + 1`` bytes so an oversized line is detectable
+            # (``len(chunk) > _MAX_LINE``) and we drain its tail before
+            # moving on. Mirrors the same pattern in ``history.py``.
+            while True:
+                raw = f.readline(_MAX_LINE + 1)
+                if not raw:
+                    break
+                if len(raw) > _MAX_LINE:
                     warnings.warn(
                         f"live event line exceeds {_MAX_LINE}-byte cap; skipping",
                         UserWarning,
                         stacklevel=2,
                     )
+                    while raw and not raw.endswith("\n"):
+                        raw = f.readline(_MAX_LINE + 1)
+                    continue
+                line = raw.rstrip("\n")
+                if not line.strip():
                     continue
                 try:
                     record = json.loads(line)

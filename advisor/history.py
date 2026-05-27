@@ -364,16 +364,34 @@ def load_recent_findings(history_path: Path, *, limit: int = 500) -> list[Histor
             # Stream lines directly into the bounded deque so a huge
             # history file does not materialize an O(file-size) intermediate
             # list just to truncate it on the next line.
+            #
+            # Use ``readline(_MAX_LINE + 1)`` instead of ``for _line in f`` so a
+            # single corrupted line without a newline cannot OOM the reader.
+            # The plain iterator delegates to ``readline()`` with no size cap
+            # and buffers the full line BEFORE we can reject it on length —
+            # ``readline(size)`` caps the read at ``size`` bytes, so an
+            # oversized line is observable (``len(chunk) > _MAX_LINE``) and
+            # we drain its tail with further capped reads before moving on.
             lines: deque[tuple[int, str]] = deque(maxlen=buffer_size)
-            for _i, _line in enumerate(f, 1):
-                if len(_line) > _MAX_LINE:
+            _line_no = 0
+            while True:
+                chunk = f.readline(_MAX_LINE + 1)
+                if not chunk:
+                    break
+                _line_no += 1
+                if len(chunk) > _MAX_LINE:
                     warnings.warn(
-                        f"{history_path}:{_i}: line exceeds {_MAX_LINE} bytes, skipping",
+                        f"{history_path}:{_line_no}: line exceeds {_MAX_LINE} bytes, skipping",
                         UserWarning,
                         stacklevel=2,
                     )
+                    # Drain the rest of this oversized line so the next
+                    # readline call returns the start of the NEXT line, not
+                    # this one's tail. EOF mid-drain is fine.
+                    while chunk and not chunk.endswith("\n"):
+                        chunk = f.readline(_MAX_LINE + 1)
                     continue
-                lines.append((_i, _line))
+                lines.append((_line_no, chunk))
     except (OSError, UnicodeDecodeError) as exc:
         warnings.warn(f"could not read {history_path}: {exc}", UserWarning, stacklevel=2)
         return []

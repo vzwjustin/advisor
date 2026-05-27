@@ -120,12 +120,23 @@ def _description_hash(description: str) -> str:
     trivially reworded description still collides — stricter would
     defeat the baseline's "accept known noise" purpose.
 
+    Whitespace is normalized before hashing — runs of whitespace
+    collapse to a single space and leading/trailing whitespace is
+    stripped. Without this, an LLM runner that reformats its output
+    across runs (extra trailing space, double-space, ``\\n`` swapped
+    for `` `` inside the first 120 chars) would produce a different
+    hash for a semantically identical description, defeating the
+    baseline's match and re-surfacing the finding as "new". The
+    stored ``BaselineEntry.description`` field preserves the raw
+    first-120-char display string; only the identity hash normalizes.
+
     The hash is the first 16 hex chars of SHA-1 (64 bits). Birthday-bound
     collision probability stays under 1 in 2^32 even for tens of thousands
     of distinct (file, rule_id) keys, well above any realistic baseline
     size. SHA-1 is used for stability, not security.
     """
-    return hashlib.sha1(description[:120].encode("utf-8")).hexdigest()[:16]
+    normalized = " ".join(description[:120].split())
+    return hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:16]
 
 
 def findings_to_entries(findings: list[Finding]) -> list[BaselineEntry]:

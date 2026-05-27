@@ -617,10 +617,19 @@ def _compile_ignore_patterns(patterns: list[str]) -> tuple[_IgnorePatternMatcher
                     stacklevel=2,
                 )
                 recursive_re = re.compile(r"$.^")
-            except re.error:
+            except re.error as exc:
                 # Malformed translator output — fall back to never-match
-                # so the run continues; the misconfigured rule is silently
-                # skipped (matches the prior behavior).
+                # so the run continues. Surface the cause via warnings.warn
+                # so the user can see why their ``.advisorignore`` rule
+                # isn't taking effect (parallels the ``GlobPatternError``
+                # branch above — silent fallback otherwise made a
+                # misconfigured pattern indistinguishable from a missing
+                # one).
+                warnings.warn(
+                    f"ignoring invalid advisorignore pattern {pattern!r}: {exc}",
+                    UserWarning,
+                    stacklevel=2,
+                )
                 recursive_re = re.compile(r"$.^")
         # Pre-compile slash-bearing patterns (without ``**``) once, here.
         # Previously ``_matches_compiled_pattern`` translated and compiled
@@ -645,8 +654,15 @@ def _compile_ignore_patterns(patterns: list[str]) -> tuple[_IgnorePatternMatcher
                     stacklevel=2,
                 )
                 slash_re = re.compile(r"$.^")
-            except re.error:
+            except re.error as exc:
                 # Malformed translator output — fall back to never-match.
+                # Warn so the misconfigured pattern is visible to the
+                # user (parallels the ``GlobPatternError`` branch above).
+                warnings.warn(
+                    f"ignoring invalid advisorignore pattern {pattern!r}: {exc}",
+                    UserWarning,
+                    stacklevel=2,
+                )
                 slash_re = re.compile(r"$.^")
 
         dir_re: re.Pattern[str] | None = None
@@ -661,7 +677,14 @@ def _compile_ignore_patterns(patterns: list[str]) -> tuple[_IgnorePatternMatcher
                     stacklevel=2,
                 )
                 dir_re = re.compile(r"$.^")
-            except (re.error, TypeError):
+            except (re.error, TypeError) as exc:
+                # Malformed translator output — fall back to never-match
+                # and warn so the misconfigured pattern is visible.
+                warnings.warn(
+                    f"ignoring invalid advisorignore pattern {pattern!r}: {exc}",
+                    UserWarning,
+                    stacklevel=2,
+                )
                 dir_re = re.compile(r"$.^")
 
         filename_re: re.Pattern[str] | None = None
@@ -683,14 +706,28 @@ def _compile_ignore_patterns(patterns: list[str]) -> tuple[_IgnorePatternMatcher
                     stacklevel=2,
                 )
                 filename_re = re.compile(r"$.^")
-            except (re.error, TypeError):
+            except (re.error, TypeError) as exc:
+                # Malformed translator output — fall back to never-match
+                # and warn so the misconfigured pattern is visible.
+                warnings.warn(
+                    f"ignoring invalid advisorignore pattern {pattern!r}: {exc}",
+                    UserWarning,
+                    stacklevel=2,
+                )
                 filename_re = re.compile(r"$.^")
 
         bare_re: re.Pattern[str] | None = None
         if not dir_re and not any(c in pattern for c in "*?[./"):
             try:
                 bare_re = re.compile(fnmatch.translate(pattern))
-            except (re.error, TypeError):
+            except (re.error, TypeError) as exc:
+                # Malformed translator output — fall back to never-match
+                # and warn so the misconfigured pattern is visible.
+                warnings.warn(
+                    f"ignoring invalid advisorignore pattern {pattern!r}: {exc}",
+                    UserWarning,
+                    stacklevel=2,
+                )
                 bare_re = re.compile(r"$.^")
 
         compiled.append(
