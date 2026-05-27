@@ -986,22 +986,6 @@ def cmd_codex_plan_csv(args: argparse.Namespace) -> int:
     from .codex_skill import build_codex_runner_prompt
     from .install import codex_cli_available
 
-    # Soft warning when ``codex`` isn't on PATH — the CSV is the input
-    # to Codex's ``spawn_agents_on_csv``, so producing one on a host
-    # without the Codex CLI is almost always operator error (e.g.
-    # invoked from a Claude-only shell). We still emit the file so
-    # test fixtures and dry-runs work, but the user sees the mismatch.
-    if not getattr(args, "quiet", False) and not codex_cli_available():
-        print(
-            _style.warning_box(
-                "advisor codex-plan-csv: ``codex`` CLI not on PATH. The "
-                "emitted CSV is intended for Codex's ``spawn_agents_on_csv`` "
-                "tool — without Codex installed, nothing will consume it.",
-                stream=sys.stderr,
-            ),
-            file=sys.stderr,
-        )
-
     target = Path(args.target)
     if not target.exists():
         print(_style.error_box(f"target not found: {target}", stream=sys.stderr), file=sys.stderr)
@@ -1032,6 +1016,25 @@ def cmd_codex_plan_csv(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
         return 2
+
+    # Soft warning when ``codex`` isn't on PATH — the CSV is the input
+    # to Codex's ``spawn_agents_on_csv``, so producing one on a host
+    # without the Codex CLI is almost always operator error (e.g.
+    # invoked from a Claude-only shell). Fires AFTER target / preset /
+    # config validation so an invalid-input error isn't paired with a
+    # secondary warning that would just add noise to the user's
+    # diagnosis. We still emit the file so test fixtures and dry-runs
+    # work, but the user sees the mismatch.
+    if not getattr(args, "quiet", False) and not codex_cli_available():
+        print(
+            _style.warning_box(
+                "advisor codex-plan-csv: ``codex`` CLI not on PATH. The "
+                "emitted CSV is intended for Codex's ``spawn_agents_on_csv`` "
+                "tool — without Codex installed, nothing will consume it.",
+                stream=sys.stderr,
+            ),
+            file=sys.stderr,
+        )
 
     paths, glob_err = _resolve_plan_files(target, args, file_types=cfg.file_types)
     if glob_err is not None:
@@ -2390,6 +2393,21 @@ def cmd_live(args: argparse.Namespace) -> int:
                 )
                 return 2
             data_raw = _read_stdin_capped(source_label="--data -").strip()
+            # An empty pipe (closed stdin / broken upstream / typo in
+            # the producer command) is almost always operator error,
+            # not "I meant to record an event with empty data". The
+            # no-dash path treats omitted ``--data`` as empty by design;
+            # explicitly requesting stdin and getting nothing is the
+            # signal we should surface.
+            if not data_raw:
+                print(
+                    _style.error_box(
+                        "--data -: stdin was empty; expected a JSON object",
+                        stream=sys.stderr,
+                    ),
+                    file=sys.stderr,
+                )
+                return 2
         if data_raw:
             try:
                 parsed = json.loads(data_raw)
@@ -2704,12 +2722,23 @@ def _replace_findings(
 
     Separate helper so baseline / suppression wiring doesn't have to
     reach into the report's internals.
+
+    Defensive sentinel guard: ``audit._audit_scope_drift`` already drops
+    :data:`verify.INCOMPLETE_FILE_PATH` findings before they reach the
+    report, so a sentinel cannot reach this helper through the normal
+    pipeline. Re-filtering here makes the invariant unconditional — if
+    a future refactor of the upstream filter regresses, the SARIF /
+    PR-comment / fail-on sinks downstream of ``_replace_findings`` still
+    never see a finding with ``file_path == "<incomplete>"``.
     """
     import dataclasses
 
+    from .verify import INCOMPLETE_FILE_PATH as _INCOMPLETE
     from .verify import Finding as _Finding
 
-    typed: list[_Finding] = [f for f in kept if isinstance(f, _Finding)]
+    typed: list[_Finding] = [
+        f for f in kept if isinstance(f, _Finding) and f.file_path != _INCOMPLETE
+    ]
     return dataclasses.replace(report, findings_in_batch=typed)
 
 

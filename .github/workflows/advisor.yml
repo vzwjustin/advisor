@@ -90,53 +90,16 @@ jobs:
           category: advisor
 
       - name: Gate on findings (--fail-on)
-        # SARIF gate: maps fail-on threshold to SARIF level (CRITICAL/HIGH=error,
-        # MEDIUM=warning, LOW=note via advisor/sarif._LEVEL_MAP) and exits with
-        # status 4 (the same code _fail_on_findings uses) when any result meets
-        # or exceeds the threshold. Runs only after upload so Code Scanning still
-        # gets the artifact even when the job fails.
+        # SARIF gate lives in scripts/sarif_gate.py so the logic is unit-
+        # testable and reusable (a local user can gate their own SARIF
+        # artifact with the same script). Runs only after upload so Code
+        # Scanning still gets the artifact even when the job fails. Exits
+        # 4 when tripped (matches advisor audit --fail-on), 2 when SARIF
+        # is unreadable, 0 otherwise.
         if: always() && inputs.fail-on != 'never' && hashFiles('advisor.sarif') != ''
         env:
-          INPUT_FAIL_ON: ${{ inputs.fail-on }}
-        run: |
-          python - <<'PY'
-          import json, os, sys
-          threshold = os.environ["INPUT_FAIL_ON"].lower()
-          # Match advisor/__main__.py:_FAIL_ON_RANK exactly so the gate's
-          # threshold semantics agree with the audit subcommand.
-          rank = {"never": 99, "low": 1, "medium": 2, "high": 3, "critical": 4}
-          # Fallback for third-party SARIF that lacks ``properties.severity``:
-          # map the SARIF level back to an advisor rank. Lossy — CRITICAL and
-          # HIGH both emit SARIF ``error`` — so this branch cannot distinguish
-          # critical from high. Advisor's own SARIF writer emits
-          # ``properties.severity`` per result (see sarif.py); we prefer that.
-          sarif_to_rank = {"error": 3, "warning": 2, "note": 1, "none": 0}
-          gate = rank.get(threshold, 99)
-          if gate == 99:
-              sys.exit(0)
-          with open("advisor.sarif") as fh:
-              doc = json.load(fh)
-          for run in doc.get("runs", []):
-              for result in run.get("results", []):
-                  props = result.get("properties") or {}
-                  # ``rank`` is keyed lowercase to match the fail-on input
-                  # values; ``properties.severity`` is emitted uppercase by
-                  # advisor's SARIF writer. Lowercase before lookup.
-                  sev = (props.get("severity") or "").strip().lower()
-                  if sev in rank:
-                      result_rank = rank[sev]
-                  else:
-                      result_rank = sarif_to_rank.get(
-                          result.get("level", "warning"), 0
-                      )
-                  if result_rank >= gate:
-                      print(
-                          f"::error::advisor fail-on={threshold} tripped: at "
-                          f"least one finding at/above the threshold "
-                          f"(see Code Scanning)"
-                      )
-                      sys.exit(4)
-          PY
+          ADVISOR_FAIL_ON: ${{ inputs.fail-on }}
+        run: python scripts/sarif_gate.py advisor.sarif
 
       - name: Post PR comment
         if: ${{ always() && inputs.post-pr-comment && github.event_name == 'pull_request' }}

@@ -101,9 +101,20 @@ _KEY_PREFIXES: dict[str, tuple[str, ...]] = {
     "description": ("- **Description**:", "* **Description**:", "**Description**:"),
     "evidence": ("- **Evidence**:", "* **Evidence**:", "**Evidence**:"),
     "expected_vs_actual": (
+        # Unicode arrow (U+2192) — what FINDING_SCHEMA tells runners to
+        # emit. Most runners follow the schema verbatim.
         "- **Expected → Actual**:",
         "* **Expected → Actual**:",
         "**Expected → Actual**:",
+        # ASCII arrow fallback — LLM runners (and humans hand-editing
+        # findings) routinely autocorrect ``→`` to ``->``. Without these
+        # variants the line bleeds into the prior field as continuation
+        # text and the divergence signal is lost. Mirrors the same
+        # tolerance the SCOPE-anchor parser at runner_budget.py extends
+        # to ``·``/``|``/``-`` separators.
+        "- **Expected -> Actual**:",
+        "* **Expected -> Actual**:",
+        "**Expected -> Actual**:",
     ),
     "fix": ("- **Fix**:", "* **Fix**:", "**Fix**:"),
     "rule_id": ("- **Rule**:", "* **Rule**:", "**Rule**:"),

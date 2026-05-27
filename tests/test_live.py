@@ -324,6 +324,53 @@ class TestLiveCli:
         err = capsys.readouterr().err
         assert "no data on stdin" in err
 
+    def test_record_data_dash_rejects_empty_pipe(self, tmp_path, monkeypatch, capsys):
+        """Regression: an empty stdin pipe (broken upstream / typo in
+        the producer) used to silently record an event with empty data
+        because ``if data_raw:`` is falsy for ``""``. The explicit
+        ``--data -`` flag means "I have data on stdin"; empty is now
+        treated as the operator error it almost always is."""
+        import io
+
+        class _FakeStdin:
+            def __init__(self) -> None:
+                self.buffer = io.BytesIO(b"")  # empty pipe
+
+            def isatty(self) -> bool:
+                return False
+
+        monkeypatch.setattr("sys.stdin", _FakeStdin())
+        parser = build_parser()
+        args = parser.parse_args(
+            ["live", "record", "--kind", "report_relay", "--data", "-", str(tmp_path)]
+        )
+        assert cmd_live(args) == 2
+        err = capsys.readouterr().err
+        assert "stdin was empty" in err
+        # No event was recorded.
+        assert load_recent_events(tmp_path) == []
+
+    def test_record_data_dash_rejects_whitespace_only_pipe(self, tmp_path, monkeypatch, capsys):
+        """Stripping whitespace before the empty check means a pipe of
+        just newlines / spaces is also caught — same operator-error
+        class as a fully-empty pipe."""
+        import io
+
+        class _FakeStdin:
+            def __init__(self) -> None:
+                self.buffer = io.BytesIO(b"   \n\n\t  \n")
+
+            def isatty(self) -> bool:
+                return False
+
+        monkeypatch.setattr("sys.stdin", _FakeStdin())
+        parser = build_parser()
+        args = parser.parse_args(
+            ["live", "record", "--kind", "report_relay", "--data", "-", str(tmp_path)]
+        )
+        assert cmd_live(args) == 2
+        assert "stdin was empty" in capsys.readouterr().err
+
     def test_record_json_output(self, tmp_path, capsys):
         parser = build_parser()
         args = parser.parse_args(["live", "record", "--kind", "run_start", "--json", str(tmp_path)])

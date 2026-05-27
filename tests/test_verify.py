@@ -285,6 +285,42 @@ class TestParseFindingsFromText:
         assert len(findings) == 1
         assert findings[0].expected_vs_actual == ""
 
+    def test_parses_expected_vs_actual_ascii_arrow_variant(self):
+        """Regression: LLM runners (and users hand-editing) routinely
+        autocorrect ``→`` (U+2192) to ASCII ``->``. The parser must
+        accept both so the divergence signal isn't lost to a cosmetic
+        glyph substitution that no human would notice in review."""
+        text = """### Finding 1
+- **File**: src/auth.py:42
+- **Severity**: HIGH
+- **Description**: race in token refresh
+- **Evidence**: line 42
+- **Expected -> Actual**: expected single-flight · found two threads racing
+- **Fix**: add a lock
+"""
+        findings = parse_findings_from_text(text)
+        assert len(findings) == 1
+        f = findings[0]
+        assert f.evidence == "line 42"
+        assert f.expected_vs_actual == ("expected single-flight · found two threads racing")
+        assert f.fix == "add a lock"
+
+    def test_parses_expected_vs_actual_asterisk_ascii_arrow(self):
+        """Asterisk bullet + ASCII arrow — the combinatoric variant a
+        runner using ``*`` bullets and autocorrected punctuation would
+        emit."""
+        text = """### Finding 1
+* **File**: src/db.py:5
+* **Severity**: HIGH
+* **Description**: SQL injection
+* **Evidence**: line 5
+* **Expected -> Actual**: parameterized · raw string concat
+* **Fix**: use cursor.execute params
+"""
+        findings = parse_findings_from_text(text)
+        assert len(findings) == 1
+        assert findings[0].expected_vs_actual == "parameterized · raw string concat"
+
 
 class TestSeverityAllowlist:
     """The parser must canonicalize severity to the four allowed values
