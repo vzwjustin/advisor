@@ -454,6 +454,40 @@ def test_banner_cjk_text_border_matches_display_width():
     assert _style._disp_width(mid_plain) == _style._disp_width(top_plain)
 
 
+@pytest.mark.parametrize(
+    "helper",
+    [
+        _style.success_box,
+        _style.info_box,
+        _style.warning_box,
+        _style.error_box,
+        _style.tip,
+        _style.banner,
+    ],
+)
+def test_box_helpers_strip_ansi_from_input(helper):
+    """Each box helper must strip ANSI sequences from its text argument.
+
+    Uses an OSC sequence that none of the helpers generate themselves, so
+    any appearance in the output unambiguously came from unsanitised input.
+    The plain text ("safe") must still be visible after stripping.
+    """
+    # OSC window-title sequence — never emitted by any box helper.
+    ansi_input = "safe\x1b]0;injected title\x07"
+    out = helper(ansi_input)
+    assert "\x1b]0;" not in out, f"{helper.__name__} leaked OSC from input"
+    assert "safe" in _style.strip_ansi(out)
+
+
+def test_cta_strips_ansi_from_action_and_description():
+    """cta() must strip ANSI from both action and description."""
+    # OSC sequence in both slots.
+    ansi = "text\x1b]0;evil\x07"
+    out = _style.cta(ansi, ansi)
+    assert "\x1b]0;" not in out
+    assert "text" in _style.strip_ansi(out)
+
+
 def test_strip_ansi_removes_sgr_csi_and_osc():
     """``strip_ansi`` covers SGR color codes, cursor-control CSIs, and OSC.
 

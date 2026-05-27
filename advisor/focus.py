@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from dataclasses import dataclass
+from typing import Literal, cast
 
 from .rank import RankedFile
 
@@ -34,7 +35,13 @@ class FocusBatch:
 
     batch_id: int
     tasks: tuple[FocusTask, ...]
-    complexity: str  # "low" | "medium" | "high" — advisor's assessment
+    complexity: Literal["low", "medium", "high"]
+
+    def __post_init__(self) -> None:
+        if self.complexity not in ("low", "medium", "high"):
+            raise ValueError(
+                f"FocusBatch.complexity must be 'low', 'medium', or 'high'; got {self.complexity!r}"
+            )
 
     @property
     def file_paths(self) -> tuple[str, ...]:
@@ -143,7 +150,7 @@ def create_focus_tasks(
 AUTO_COMPLEXITY = "auto"
 
 
-def _complexity_for_priority(top_priority: int) -> str:
+def _complexity_for_priority(top_priority: int) -> Literal["low", "medium", "high"]:
     """Map a top-priority tier to a default complexity label.
 
     Covers the offline ``advisor plan --batch-size N`` path — in the
@@ -187,7 +194,7 @@ def create_focus_batches(
             top = max((t.priority for t in chunk), default=1)
             batch_complexity = _complexity_for_priority(top)
         else:
-            batch_complexity = complexity
+            batch_complexity = cast(Literal["low", "medium", "high"], complexity)
         batches.append(
             FocusBatch(
                 batch_id=len(batches) + 1,

@@ -3,6 +3,7 @@
 import pytest
 
 from advisor.focus import (
+    FocusBatch,
     FocusTask,
     create_focus_batches,
     create_focus_tasks,
@@ -238,3 +239,25 @@ class TestDispatchPlanCosmetics:
         assert "(P5 ×1  P3 ×1)" in plan
         # Single batch = singular "runner"; two files = plural "files".
         assert "1 runner across 2 files" in plan
+
+
+class TestFocusBatchComplexityValidation:
+    """FocusBatch.complexity must be one of the three whitelisted literals."""
+
+    _task = FocusTask(file_path="src/a.py", priority=3, prompt="...")
+
+    def test_rejects_invalid_complexity(self):
+        with pytest.raises(ValueError, match="'catastrophic'"):
+            FocusBatch(batch_id=1, tasks=(self._task,), complexity="catastrophic")  # type: ignore[arg-type]
+
+    def test_accepts_low(self):
+        b = FocusBatch(batch_id=1, tasks=(self._task,), complexity="low")
+        assert b.complexity == "low"
+
+    def test_accepts_medium(self):
+        b = FocusBatch(batch_id=1, tasks=(self._task,), complexity="medium")
+        assert b.complexity == "medium"
+
+    def test_accepts_high(self):
+        b = FocusBatch(batch_id=1, tasks=(self._task,), complexity="high")
+        assert b.complexity == "high"
