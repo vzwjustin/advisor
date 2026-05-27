@@ -2286,6 +2286,7 @@ def cmd_ui(args: argparse.Namespace) -> int:
             host=args.host,
             port=args.port,
             log_requests=args.verbose,
+            quiet=getattr(args, "quiet", False),
         )
     except OSError as exc:
         print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
@@ -3846,6 +3847,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Log every HTTP request to stderr (off by default)",
     )
     p_ui.add_argument("--json", action="store_true", help="Print server URL as JSON and exit")
+    p_ui.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress startup banner (the bound URL is still printed via --json if set)",
+    )
     p_ui.set_defaults(func=cmd_ui)
 
     p_history = sub.add_parser(

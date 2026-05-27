@@ -7,6 +7,134 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-05-27
+
+A rolling, 6-round self-audit using the advisor's own sub-agent pattern.
+Each round either ran the live tool against the repo or emulated the
+TeamCreate/Agent pattern via parallel sub-agents to surface bugs the
+prior round missed. Combined output: 19 fixes (3 CRITICAL + 4 HIGH +
+12 MEDIUM/LOW) plus 4 user-facing UX wins, all under 1083 → 1090 tests
+green. Highlights:
+
+### Fixed
+
+- **`/api/status` `is_active` now reflects EITHER ``history.jsonl`` OR
+  ``live/events.jsonl`` mtime.** Previously the Findings tab's LIVE
+  pill stayed IDLE during an active ``/advisor`` run (which writes
+  only live events, not confirmed findings yet), so users saw the Live
+  tab buzzing while Findings looked broken. Pill now shows ``RUNNING``
+  when only live activity is firing, ``LIVE`` when findings are being
+  confirmed, ``IDLE`` otherwise. Per-store flags
+  (``history_is_active`` / ``live_is_active``) added to the payload so
+  the client can render a "run in progress" hint on the empty
+  Findings state.
+- **``Expected → Actual`` Finding field is parseable.** The schema
+  shipped in every advisor / runner prompt (``FINDING_SCHEMA``) asked
+  runners to emit this line for MEDIUM+ findings, but
+  ``verify._KEY_PREFIXES`` had no entry for it. The line was silently
+  appended as continuation text into the prior Evidence body and the
+  divergence signal was lost. Added the field to ``Finding``
+  (default ``""`` — backward-compatible), threaded through
+  ``format_findings_block``, ``audit_to_dict``, ``pr_comment``, SARIF
+  result properties, and the JSON-import path. Parser accepts BOTH
+  the Unicode arrow (``→``, U+2192) and the ASCII fallback (``->``)
+  that LLMs and humans routinely autocorrect to.
+- **``cost.estimate_cost`` clamps ``runner_count`` against
+  ``max_runners`` even when ``batches`` is provided.** Previously
+  ``len(batches)`` was used unconditionally; a plan with 20 batches
+  but ``max_runners=5`` inflated the cost estimate 4×. The live
+  dispatch path bounds the pool at ``max_runners``, so the estimate
+  now agrees.
+- **Workflow ``fail-on`` is enforced via a SARIF-parsing gate.**
+  Extracted into ``scripts/sarif_gate.py`` so it's unit-testable
+  (38 cases). Reads ``properties.severity`` (advisor's writer always
+  emits this) so ``fail-on=critical`` correctly distinguishes CRITICAL
+  from HIGH — both map to SARIF ``error`` and the prior heredoc
+  couldn't tell them apart. Defensive type-guards against hostile
+  SARIF (non-dict ``properties``, non-string ``severity``, ``runs``
+  as a dict, etc.) — every malformed entry skips cleanly instead of
+  crashing the workflow with an AttributeError.
+- **``advisor live record --data -`` reads JSON from stdin.** Mirrors
+  the ``--context -`` / ``--from -`` convention elsewhere; lets the
+  team-lead pipe in multi-line ``report_relay.summary`` bodies that
+  don't fit comfortably as a CLI flag. Empty stdin pipe now errors
+  loudly (exit 2 + ``--data -: stdin was empty``) instead of silently
+  recording an event with empty data.
+- **``advisor checkpoints --clear --json`` emits a payload.** Was
+  silently falling into the quiet branch — scripted callers had no
+  way to tell success from no-op.
+- **Audit ``<incomplete>`` sentinel no longer leaks downstream.** The
+  ``_dict_to_finding`` partial-drop sentinel was reaching
+  ``audit_to_dict`` / SARIF / PR-comment / baseline sinks where
+  consumers mistook ``<incomplete>`` for a real file path. Now
+  filtered at ``_audit_scope_drift`` AND defensively at
+  ``_replace_findings``.
+- **``cmd_live tail`` dead code removed.** After ``--since`` switched
+  to ``type=_nonneg_int``, the runtime ``int(since_arg)`` conversion
+  and ``except (TypeError, ValueError)`` branch were unreachable.
+
+### Performance
+
+- **``rank.CONTENT_SCAN_LIMIT`` reduced from 2000 → 1024.** Profiling
+  showed the per-file regex (75-group alternation) was dominating
+  ``rank_files`` on large repos: 5000 files × 2000 chars ≈ 25 s.
+  1024 chars still captures the import block + first major
+  declaration in any realistic file. Measured ≈4× speedup.
+- **``_normalize_history_key`` is now cached (``lru_cache(8192)``).**
+  ``rank_files`` called it O(N×M) times — at 5000 files × 1000
+  history entries the unconditional re-normalization was ~4 seconds.
+  Pure function so caching is safe.
+
+### Changed
+
+- **CLI clarity**: ``advisor status`` now shows component identity
+  ("CLAUDE.md nudge", "/advisor command", "/advisor-update") instead
+  of opaque internal labels. ``advisor install --strict`` exits 3
+  with a one-line stderr note instead of silently. ``install --check``
+  shows the same ``/advisor <path>`` CTA when healthy that ``status``
+  shows.
+- **Better error tips**: ``plan ./nonexistent`` suggests path
+  spelling + cwd fallback; ``plan /etc/hosts`` suggests scanning the
+  parent dir; ``plan --min-priority 5`` empty result surfaces the
+  P1–P5 ladder; ``audit FAKE_RUN_ID`` suggests
+  ``advisor checkpoints``; ``history --stats`` empty explains the
+  confirm-during-run workflow plus the value-prop (history boosts
+  repeat-offender ranking).
+- **``advisor doctor`` codex noise reduction**: ``codex-cli`` warning
+  softened ("Codex variant unavailable — Claude Code /advisor is
+  unaffected") and ``codex-home`` / ``codex-skill-install`` checks
+  gated on ``codex_cli_available()``. Claude-only users see one
+  softened warning instead of two alarming ones.
+- **Dashboard**: Findings tab first-load fetch fixed (``lastToken``
+  initialized to a sentinel so the null/null first ``/api/status``
+  response triggers ``refetchFindings`` instead of being seen as
+  unchanged). Cost and Plan tabs auto-load on first visit (the
+  Refresh / Estimate buttons stay for explicit re-fetch). Cost tab
+  hint explains the min/max range. Live tab empty-state rewritten
+  from jargon ("SKILL.md wired to ``advisor live record``") to
+  actionable ("Start a review run with /advisor . in Claude Code").
+  Run config tab gains a hint distinguishing ``advisor plan``
+  (offline ranking) from ``/advisor`` (live pipeline).
+- **Plan budget warning rewritten action-first.** "batch 2 has 5
+  files but only 3 fixes are allowed per runner ... To avoid the
+  rotation: rerun with --batch-size 3." replaces the stack-trace-
+  style prior wording.
+- **``advisor ui --quiet``** suppresses the startup banner for
+  scripted dashboard launches.
+
+### Added
+
+- ``scripts/sarif_gate.py`` — standalone, unit-testable SARIF gate
+  (38 test cases). Works for advisor's own SARIF (uses
+  ``properties.severity``) and third-party SARIF (falls back to the
+  SARIF level mapping).
+- ``Finding.expected_vs_actual: str = ""`` field on the parser, in
+  ``format_findings_block``, in SARIF result properties, in
+  ``audit_to_dict``, and in ``pr_comment``.
+- 39 regression tests across ``test_verify``, ``test_cost``,
+  ``test_main``, ``test_live``, ``test_audit``, ``test_sarif_gate``,
+  ``test_properties``.
+
 ## [0.8.0] - 2026-05-26
 
 Real-time dashboard feed. The web dashboard previously surfaced only

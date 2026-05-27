@@ -41,7 +41,7 @@ from .._fs import validate_file_types as _validate_file_types
 from ..cost import estimate_cost
 from ..focus import FocusTask, create_focus_tasks
 from ..history import HISTORY_SCHEMA_VERSION, history_path, load_recent
-from ..live import LIVE_SCHEMA_VERSION, latest_seq, load_recent_events
+from ..live import LIVE_SCHEMA_VERSION, latest_seq, live_events_path, load_recent_events
 from ..orchestrate.config import POOL_SIZE_CEILING
 from ..rank import load_advisorignore, rank_files
 from .assets import APP_CSS, APP_JS, INDEX_HTML
@@ -320,11 +320,32 @@ def _events_payload(state: AppState, qs: dict[str, list[str]]) -> dict[str, Any]
 def _status_payload(state: AppState) -> dict[str, Any]:
     """Cheap "has anything changed?" probe for the live dashboard poller.
 
-    Returns the file's mtime (stable cache key for the client's
+    Returns the history file's mtime (stable cache key for the client's
     ``lastMtime`` check), a composite ``token`` field combining
     ``st_mtime_ns`` and ``st_size`` for higher-resolution change
-    detection, and whether the file was touched in the last
-    :data:`_ACTIVE_WINDOW_SECONDS` (drives the ``LIVE`` indicator).
+    detection, and an ``is_active`` flag that reflects EITHER store
+    being modified in the last :data:`_ACTIVE_WINDOW_SECONDS`.
+
+    Why ``is_active`` considers both files: during a live ``/advisor``
+    run the team-lead writes to ``.advisor/live/events.jsonl`` (which
+    the Live tab polls) but NOT to ``history.jsonl`` (which only takes
+    CONFIRMED findings after the run wraps). The prior implementation
+    read only ``history.jsonl``'s mtime, so the Findings tab's LIVE
+    pill stayed IDLE during an active run even when the Live tab was
+    buzzing — users saw the disconnect and concluded "Findings isn't
+    reflecting live data". Including both signals makes the indicator
+    honest: it says "advisor is doing something on this target".
+
+    The ``last_mtime`` / ``token`` fields remain history-only because
+    the Findings tab's ``refetchFindings`` only needs to fire when the
+    history list itself changes; new live events without new confirmed
+    findings shouldn't trigger a redundant ``/api/history`` refetch.
+
+    ``live_*`` keys are new in this revision — older client builds
+    that ignore them keep working (they still have ``last_mtime`` /
+    ``token`` / ``is_active``); newer client builds can render a
+    "run in progress" hint by checking ``live_is_active``.
+
     Intentionally does not read file contents — the whole point is that
     this endpoint fires every few seconds and must be nearly free.
 
@@ -335,25 +356,48 @@ def _status_payload(state: AppState) -> dict[str, Any]:
     rewrite that lands on the same timestamp. ``last_mtime`` is kept
     for the human-readable banner and as a fallback for older clients.
     """
-    path = history_path(state.target)
-    empty: dict[str, Any] = {"last_mtime": None, "token": None, "is_active": False}
-    if not path.exists():
-        return empty
-    try:
-        stat = path.stat()
-    except OSError:
-        return empty
-    mtime_dt = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
-    # Clamp to 0 because on Windows the NTFS mtime resolution (100 ns) is
-    # finer than ``time.time()`` rounding, which can leave ``st_mtime``
-    # microseconds in the "future" of ``datetime.now()`` for a file we
-    # just wrote — yielding a tiny negative age and mis-reporting the
-    # LIVE pill as inactive. A just-touched file is always active.
-    age_seconds = max(0.0, (datetime.now(timezone.utc) - mtime_dt).total_seconds())
+    now = datetime.now(timezone.utc)
+
+    def _read(p: Path) -> tuple[str | None, str | None, bool]:
+        """Return (iso_mtime, token, is_active) for one file."""
+        if not p.exists():
+            return None, None, False
+        try:
+            stat = p.stat()
+        except OSError:
+            return None, None, False
+        mtime_dt = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+        # Clamp to 0 because on Windows the NTFS mtime resolution
+        # (100 ns) is finer than ``time.time()`` rounding, which can
+        # leave ``st_mtime`` microseconds in the "future" of
+        # ``datetime.now()`` for a file we just wrote — yielding a tiny
+        # negative age and mis-reporting the LIVE pill as inactive. A
+        # just-touched file is always active.
+        age = max(0.0, (now - mtime_dt).total_seconds())
+        return (
+            mtime_dt.isoformat(),
+            f"{stat.st_mtime_ns}:{stat.st_size}",
+            age < _ACTIVE_WINDOW_SECONDS,
+        )
+
+    h_mtime, h_token, h_active = _read(history_path(state.target))
+    l_mtime, l_token, l_active = _read(live_events_path(state.target))
     return {
-        "last_mtime": mtime_dt.isoformat(),
-        "token": f"{stat.st_mtime_ns}:{stat.st_size}",
-        "is_active": age_seconds < _ACTIVE_WINDOW_SECONDS,
+        # Back-compat fields — Findings tab change-detection still
+        # keys on history alone so a flurry of live events without
+        # new confirmed findings doesn't trigger redundant refetches.
+        "last_mtime": h_mtime,
+        "token": h_token,
+        # ``is_active`` reflects EITHER store being warm — drives the
+        # Findings tab's LIVE pill so it agrees with the Live tab
+        # during a /advisor run.
+        "is_active": h_active or l_active,
+        # New per-store fields — let smarter clients distinguish
+        # "findings being confirmed" from "live events firing".
+        "history_is_active": h_active,
+        "live_is_active": l_active,
+        "live_mtime": l_mtime,
+        "live_token": l_token,
     }
 
 
@@ -537,6 +581,7 @@ def run_server(
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
     log_requests: bool = False,
+    quiet: bool = False,
 ) -> None:
     """Block and serve the dashboard until Ctrl-C.
 
@@ -586,9 +631,10 @@ def run_server(
     # actually bound to, so report that instead of the request value.
     actual_port = server.server_address[1]
     url = f"http://{_display_host(host)}:{actual_port}"
-    print(_style.success_box(f"advisor dashboard serving {state.target} at {url}"))
-    print(_style.tip("press Ctrl-C to stop"))
-    print(_style.cta("open in browser", url))
+    if not quiet:
+        print(_style.success_box(f"advisor dashboard serving {state.target} at {url}"))
+        print(_style.tip("press Ctrl-C to stop"))
+        print(_style.cta("open in browser", url))
     try:
         server.serve_forever()
     except KeyboardInterrupt:

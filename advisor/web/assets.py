@@ -542,9 +542,23 @@ APP_JS = r"""(() => {
     }
     $('#findings-count').textContent = `${filtered.length} of ${findingsRaw.length}`;
     const hasVisibleFindings = filtered.length !== 0;
-    $('#findings-empty').textContent = findingsErrorMessage || (findingsRaw.length === 0
-      ? 'No findings yet. Run the advisor on this target first.'
-      : 'No findings match the current filters.');
+    // When the Live tab is showing activity but no findings have
+    // been confirmed yet, swap the generic "no findings" copy for a
+    // hint that explains the disconnect — confirmed findings only
+    // land in history.jsonl after a /advisor run wraps and the user
+    // accepts each finding. Otherwise the user sees "no findings" +
+    // a bustling Live tab and thinks the Findings tab is broken.
+    let emptyCopy;
+    if (findingsErrorMessage) {
+      emptyCopy = findingsErrorMessage;
+    } else if (findingsRaw.length === 0) {
+      emptyCopy = (lastStatus && lastStatus.live_is_active)
+        ? 'A /advisor run is in progress on this target — confirmed findings will appear here when the run wraps and you accept them. Watch the Live tab for real-time activity.'
+        : 'No findings yet. Run the advisor on this target first.';
+    } else {
+      emptyCopy = 'No findings match the current filters.';
+    }
+    $('#findings-empty').textContent = emptyCopy;
     $('#findings-empty').hidden = hasVisibleFindings;
     $('#findings-table').hidden = !hasVisibleFindings;
   }
@@ -626,8 +640,25 @@ APP_JS = r"""(() => {
       const data = await r.json();
       lastStatus = data;
       lastStatusTs = Date.now();
-      setLiveState(data.is_active ? 'active' : 'idle',
-                   data.is_active ? 'LIVE' : 'IDLE');
+      // Pill label distinguishes "findings being confirmed" (LIVE)
+      // from "a /advisor run is firing live events but hasn't
+      // confirmed findings yet" (RUNNING). The latter is the common
+      // case during the explore phase — without this label the user
+      // sees IDLE while the Live tab is busy and concludes the
+      // Findings tab is broken. Older servers don't emit
+      // ``live_is_active`` / ``history_is_active`` so the fallback
+      // matches the prior LIVE/IDLE behavior.
+      const liveActive = data.live_is_active === true;
+      const historyActive = data.history_is_active === true;
+      if (historyActive) {
+        setLiveState('active', 'LIVE');
+      } else if (liveActive) {
+        setLiveState('active', 'RUNNING');
+      } else if (data.is_active) {
+        setLiveState('active', 'LIVE');
+      } else {
+        setLiveState('idle', 'IDLE');
+      }
       // Prefer the token field when the server emits it (nanosecond +
       // size). Older servers won't return ``token`` — fall back to the
       // mtime comparison so the client stays compatible with them.
