@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -137,9 +138,12 @@ class TestPathHandling:
         with pytest.raises(ValueError, match="outside target_dir"):
             findings_to_sarif(findings, tool_version="0.5.0", target_dir=tmp_path)
 
-    def test_windows_absolute_path_rejected_on_posix_target(self, tmp_path: Path) -> None:
+    def test_windows_absolute_path_rejected(self, tmp_path: Path) -> None:
         findings = [_make_finding(file_path=r"C:\Users\alice\secret.py:42")]
-        with pytest.raises(ValueError, match="Windows absolute/rooted path"):
+        expected_error = (
+            "outside target_dir" if sys.platform == "win32" else "Windows absolute/rooted path"
+        )
+        with pytest.raises(ValueError, match=expected_error):
             findings_to_sarif(findings, tool_version="0.5.0", target_dir=tmp_path)
 
     def test_windows_relative_path_normalized(self, tmp_path: Path) -> None:
