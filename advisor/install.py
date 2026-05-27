@@ -52,6 +52,26 @@ def _read_text_capped_lf(path: Path, max_bytes: int) -> str:
 #: without hashing or diffing the whole file.
 _BADGE_RE = re.compile(r"<!--\s*advisor:([^\s>]+)\s*-->")
 
+#: Allowed characters in a PyPI / PEP 440 version string. Rejects anything
+#: outside this charset (ANSI escapes, control bytes, whitespace, shell
+#: meta) so a compromised mirror cannot smuggle terminal escape sequences
+#: through the update cache into ``advisor status`` / ``advisor doctor``
+#: stdout. The pattern intentionally covers the full PEP 440 surface
+#: (epoch ``!``, local-version ``+``, pre/post/dev separators ``.-``) so
+#: legitimate releases like ``1!2.3.dev1+local`` are still accepted.
+_PYPI_VERSION_RE = re.compile(r"^[A-Za-z0-9._+!\-]{1,64}$")
+
+
+def _is_valid_pypi_version(value: object) -> bool:
+    """Return True when ``value`` looks like a real PyPI version string.
+
+    Used at both ingest points (network fetch + cache read) so a hostile
+    mirror cannot reach stdout through either path, even if a previously
+    poisoned cache predates this validator.
+    """
+    return isinstance(value, str) and bool(_PYPI_VERSION_RE.match(value))
+
+
 #: Response-size cap for the PyPI ``/json`` endpoint. The endpoint is a small
 #: metadata document (under 100 KB for any real package); ``urlopen(timeout=)``
 #: only bounds connect + first-byte latency, not total transfer or memory, so
@@ -215,20 +235,36 @@ def load_changelog_sections(since: str | None = None) -> list[tuple[str, str, st
 def fetch_pypi_latest_version(package: str = "advisor-agent", timeout: float = 5.0) -> str | None:
     """Return the latest version on PyPI, or ``None`` on network/parse failure."""
     import json as _json
+    import threading
     import urllib.error
     import urllib.request
 
+    # urlopen(timeout=) is a per-recv socket deadline, not a total-transfer
+    # one. Run the fetch on a daemon thread and join with the same timeout so
+    # a slow-drip server (one byte every (timeout - ε) seconds) can't pin the
+    # CLI indefinitely. daemon=True ensures a stuck thread does not prevent
+    # process exit.
     url = f"https://pypi.org/pypi/{package}/json"
-    try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:
-            data = _json.loads(resp.read(_PYPI_MAX_BYTES))
-    except (urllib.error.URLError, OSError, _json.JSONDecodeError, ValueError):
+    holder: list[object] = [None]
+
+    def _fetch() -> None:
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as resp:
+                holder[0] = _json.loads(resp.read(_PYPI_MAX_BYTES))
+        except (urllib.error.URLError, OSError, _json.JSONDecodeError, ValueError):
+            holder[0] = None
+
+    t = threading.Thread(target=_fetch, daemon=True)
+    t.start()
+    t.join(timeout=timeout)
+    if t.is_alive():
         return None
+    data = holder[0]
     info = data.get("info") if isinstance(data, dict) else None
     if not isinstance(info, dict):
         return None
     version = info.get("version")
-    return version if isinstance(version, str) else None
+    return version if _is_valid_pypi_version(version) else None
 
 
 def _update_check_cache_path() -> Path:
@@ -278,7 +314,7 @@ def check_for_update_cached(
     if isinstance(cached, dict):
         latest_val = cached.get("latest")
         at_val = cached.get("checked_at")
-        if isinstance(latest_val, str):
+        if _is_valid_pypi_version(latest_val):
             cached_latest = latest_val
         if isinstance(at_val, (int, float)):
             cached_at = float(at_val)
@@ -322,13 +358,31 @@ def fetch_remote_changelog(
     timeout: float = 5.0,
 ) -> str | None:
     """Fetch a remote CHANGELOG.md, or ``None`` on any network/decode failure."""
+    import threading
     import urllib.error
     import urllib.request
 
-    try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:
-            raw = resp.read(_CHANGELOG_MAX_BYTES)
-    except (urllib.error.URLError, OSError):
+    # Same total-deadline pattern as :func:`fetch_pypi_latest_version` —
+    # urlopen(timeout=) is per-recv, so a slow-drip server can stretch the
+    # call far past ``timeout``. The daemon thread enforces a true wall-clock
+    # bound; if the read hasn't finished by then, we treat it as a fetch
+    # failure and return None.
+    holder: list[bytes | None] = [None]
+
+    def _fetch() -> None:
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as resp:
+                holder[0] = resp.read(_CHANGELOG_MAX_BYTES)
+        except (urllib.error.URLError, OSError):
+            holder[0] = None
+
+    t = threading.Thread(target=_fetch, daemon=True)
+    t.start()
+    t.join(timeout=timeout)
+    if t.is_alive():
+        return None
+    raw = holder[0]
+    if raw is None:
         return None
     try:
         text: str = raw.decode("utf-8")

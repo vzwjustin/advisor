@@ -26,7 +26,9 @@ import re
 import shutil
 import signal
 import subprocess
+import tempfile
 from pathlib import Path
+from typing import BinaryIO
 
 
 class GitScopeError(Exception):
@@ -46,12 +48,12 @@ _GIT_TIMEOUT_SECONDS = 30
 
 # Hard ceiling on git stdout bytes. ``git diff --name-only`` returns one
 # path per line — typical: a few KB; pathological monorepo with 50k+
-# files changed: tens of MB. ``subprocess.communicate()`` buffers all
-# stdout in memory with no cap. 50 MiB matches advisor's other
-# pipe-data ceilings (``__main__._STDIN_LIMIT``) and is well above any
-# realistic repo's name-only diff while still bounding worst-case
-# allocation if something runs away.
+# files changed: tens of MB. 50 MiB matches advisor's other pipe-data
+# ceilings (``__main__._STDIN_LIMIT``) and is well above any realistic
+# repo's name-only diff while still bounding worst-case allocation if
+# something runs away.
 _GIT_MAX_STDOUT_BYTES = 50 * 1024 * 1024
+_GIT_MAX_STDERR_BYTES = 1024 * 1024
 
 # Characters legal in a git ref or revspec we want to support
 # (branch/tag names, ``HEAD~N``, ``main^``, ``origin/foo``, reflog
@@ -60,6 +62,23 @@ _GIT_MAX_STDOUT_BYTES = 50 * 1024 * 1024
 # cannot smuggle option-like tokens into git's parser via concatenation
 # in ``files_branch``.
 _REF_ALLOWED = re.compile(r"^[A-Za-z0-9_./~^@{}\-]+$")
+
+
+def _read_tempfile_capped(
+    fh: BinaryIO, *, max_bytes: int, label: str, args: tuple[str, ...]
+) -> str:
+    """Read a subprocess temp file after enforcing a byte ceiling."""
+    fh.flush()
+    fh.seek(0, os.SEEK_END)
+    size = fh.tell()
+    if size > max_bytes:
+        raise GitScopeError(
+            f"git {' '.join(args)} produced more than {max_bytes // (1024 * 1024)} "
+            f"MiB of {label} — refusing to load. Narrow the scope (e.g. a more "
+            "recent ``--since`` ref) or run advisor against a smaller subtree."
+        )
+    fh.seek(0)
+    return fh.read().decode("utf-8", errors="replace")
 
 
 def _run_git(cwd: Path, *args: str) -> list[str]:
@@ -77,71 +96,59 @@ def _run_git(cwd: Path, *args: str) -> list[str]:
     # ``subprocess.run`` alone delivers (it only signals the direct child).
     # POSIX-only; on Windows ``start_new_session`` is silently ignored and
     # ``os.killpg`` doesn't exist, so we skip the group kill there.
-    try:
-        proc = subprocess.Popen(
-            ["git", *args],
-            cwd=str(cwd),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            # See encoding/errors rationale below.
-            encoding="utf-8",
-            errors="replace",
-            start_new_session=True,
-        )
-    except OSError as exc:
-        raise GitScopeError(f"failed to invoke git: {exc}") from exc
-    try:
-        # ``text=True`` alone relies on ``locale.getpreferredencoding()``,
-        # which can be ASCII/CP1252 on containers or Windows. A non-ASCII
-        # filename from git would then raise ``UnicodeDecodeError`` outside
-        # the caught exception set and crash the CLI. ``errors="replace"``
-        # keeps the command scoped-review-usable even on partial encoding
-        # issues; display strings only need to be readable, not
-        # round-trippable.
-        stdout, stderr = proc.communicate(timeout=_GIT_TIMEOUT_SECONDS)
-    except subprocess.TimeoutExpired as exc:
-        # Kill the whole process group so grandchildren (credential
-        # managers, ssh, askpass helpers) die with git. ``killpg`` is
-        # POSIX-only; on Windows fall back to plain ``proc.kill()``.
-        if hasattr(os, "killpg"):
-            # start_new_session=True makes the child its own session leader,
-            # so PGID == proc.pid on POSIX. Use os.getpgid() explicitly so
-            # the invariant is visible in the source rather than implicit.
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
-        else:
-            proc.kill()
-        # Drain pipes so the Popen object releases its file descriptors;
-        # ignore output — we're erroring out anyway.
+    with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
         try:
-            proc.communicate(timeout=5)
-        except subprocess.TimeoutExpired:
-            pass
-        raise GitScopeError(
-            f"git {' '.join(args)} timed out after {_GIT_TIMEOUT_SECONDS}s"
-        ) from exc
-    if proc.returncode != 0:
-        stderr_text = stderr.strip() or "(no stderr)"
-        raise GitScopeError(f"git {' '.join(args)} failed: {stderr_text}")
-    # Defense-in-depth: ``proc.communicate()`` buffered everything in
-    # memory with no cap. A pathological monorepo or a misconfigured
-    # ``--since`` (e.g. against an ancient root commit) could deliver
-    # tens of MB of paths and dominate process memory. Refuse to
-    # propagate runaway output as a path list — the resulting plan
-    # would have been unusable anyway. The byte-length check is on
-    # the decoded string (post ``errors="replace"`` substitution),
-    # which over-counts wide-replacement-char inputs but is correct
-    # for an upper-bound check.
-    if len(stdout.encode("utf-8", errors="replace")) > _GIT_MAX_STDOUT_BYTES:
-        raise GitScopeError(
-            f"git {' '.join(args)} produced more than "
-            f"{_GIT_MAX_STDOUT_BYTES // (1024 * 1024)} MiB of output — "
-            "refusing to load. Narrow the scope (e.g. a more recent "
-            "``--since`` ref) or run advisor against a smaller subtree."
+            proc = subprocess.Popen(
+                ["git", *args],
+                cwd=str(cwd),
+                stdin=subprocess.DEVNULL,
+                stdout=stdout_file,
+                stderr=stderr_file,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            raise GitScopeError(f"failed to invoke git: {exc}") from exc
+        try:
+            proc.communicate(timeout=_GIT_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired as exc:
+            # Kill the whole process group so grandchildren (credential
+            # managers, ssh, askpass helpers) die with git. ``killpg`` is
+            # POSIX-only; on Windows fall back to plain ``proc.kill()``.
+            if hasattr(os, "killpg"):
+                # start_new_session=True makes the child its own session leader,
+                # so PGID == proc.pid on POSIX. Use os.getpgid() explicitly so
+                # the invariant is visible in the source rather than implicit.
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+            else:
+                proc.kill()
+            try:
+                proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            raise GitScopeError(
+                f"git {' '.join(args)} timed out after {_GIT_TIMEOUT_SECONDS}s"
+            ) from exc
+
+        stderr = _read_tempfile_capped(
+            stderr_file,
+            max_bytes=_GIT_MAX_STDERR_BYTES,
+            label="stderr",
+            args=args,
+        )
+        if proc.returncode != 0:
+            stderr_text = stderr.strip() or "(no stderr)"
+            raise GitScopeError(f"git {' '.join(args)} failed: {stderr_text}")
+        # Keep stdout out of Python heap until after the cap check. A
+        # pathological diff can spill to the OS temp file, but it cannot
+        # force advisor to allocate the whole payload before refusing it.
+        stdout = _read_tempfile_capped(
+            stdout_file,
+            max_bytes=_GIT_MAX_STDOUT_BYTES,
+            label="stdout",
+            args=args,
         )
     return [line for line in stdout.splitlines() if line.strip()]
 

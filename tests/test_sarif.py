@@ -137,6 +137,23 @@ class TestPathHandling:
         with pytest.raises(ValueError, match="outside target_dir"):
             findings_to_sarif(findings, tool_version="0.5.0", target_dir=tmp_path)
 
+    def test_windows_absolute_path_rejected_on_posix_target(self, tmp_path: Path) -> None:
+        findings = [_make_finding(file_path=r"C:\Users\alice\secret.py:42")]
+        with pytest.raises(ValueError, match="Windows absolute/rooted path"):
+            findings_to_sarif(findings, tool_version="0.5.0", target_dir=tmp_path)
+
+    def test_windows_relative_path_normalized(self, tmp_path: Path) -> None:
+        findings = [_make_finding(file_path=r"src\auth.py:42")]
+        doc = findings_to_sarif(findings, tool_version="0.5.0", target_dir=tmp_path)
+        loc = doc["runs"][0]["results"][0]["locations"][0]["physicalLocation"]
+        assert loc["artifactLocation"]["uri"] == "src/auth.py"
+        assert loc["region"]["startLine"] == 42
+
+    def test_windows_relative_dotdot_rejected(self, tmp_path: Path) -> None:
+        findings = [_make_finding(file_path=r"..\secret.py:42")]
+        with pytest.raises(ValueError, match="escapes target_dir"):
+            findings_to_sarif(findings, tool_version="0.5.0", target_dir=tmp_path)
+
     def test_path_without_line_number(self, tmp_path: Path) -> None:
         findings = [_make_finding(file_path="src/auth.py")]
         doc = findings_to_sarif(findings, tool_version="0.5.0", target_dir=tmp_path)

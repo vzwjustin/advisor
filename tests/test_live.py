@@ -97,6 +97,18 @@ class TestAppendEvent:
         assert [e["seq"] for e in events] == [1, 2, 3]
         assert [e["kind"] for e in events] == ["a", "b", "c"]
 
+    def test_seq_continues_after_long_valid_event(self, tmp_path):
+        """A valid event larger than 8 KiB must not reset the cursor."""
+        append_event(tmp_path, "run_start", {"summary": "x" * 9000})
+        append_event(tmp_path, "report_relay", {})
+        events = load_recent_events(tmp_path)
+        assert [(e["seq"], e["kind"]) for e in events] == [
+            (1, "run_start"),
+            (2, "report_relay"),
+        ]
+        assert latest_seq(tmp_path) == 2
+        assert [e["kind"] for e in load_recent_events(tmp_path, since=1)] == ["report_relay"]
+
 
 class TestLoadRecentEvents:
     def test_missing_file_returns_empty(self, tmp_path):
@@ -239,10 +251,18 @@ class TestLiveCli:
         assert events[0]["kind"] == "run_start"
         assert events[0]["data"]["run_id"] == "r1"
 
+    def test_record_accepts_custom_kind(self, tmp_path):
+        parser = build_parser()
+        args = parser.parse_args(
+            ["live", "record", "--kind", "budget_tick", "--quiet", str(tmp_path)]
+        )
+        assert cmd_live(args) == 0
+        assert load_recent_events(tmp_path)[0]["kind"] == "budget_tick"
+
     def test_record_rejects_non_object_data(self, tmp_path):
         parser = build_parser()
         args = parser.parse_args(
-            ["live", "record", "--kind", "x", "--data", "[1,2,3]", str(tmp_path)]
+            ["live", "record", "--kind", "run_start", "--data", "[1,2,3]", str(tmp_path)]
         )
         # JSON arrays / scalars are not allowed — must be an object.
         assert cmd_live(args) == 2
@@ -250,7 +270,7 @@ class TestLiveCli:
     def test_record_rejects_invalid_data_json(self, tmp_path):
         parser = build_parser()
         args = parser.parse_args(
-            ["live", "record", "--kind", "x", "--data", "{not json", str(tmp_path)]
+            ["live", "record", "--kind", "run_start", "--data", "{not json", str(tmp_path)]
         )
         assert cmd_live(args) == 2
 
@@ -319,7 +339,9 @@ class TestLiveCli:
 
         monkeypatch.setattr("sys.stdin", _TtyStdin())
         parser = build_parser()
-        args = parser.parse_args(["live", "record", "--kind", "x", "--data", "-", str(tmp_path)])
+        args = parser.parse_args(
+            ["live", "record", "--kind", "run_start", "--data", "-", str(tmp_path)]
+        )
         assert cmd_live(args) == 2
         err = capsys.readouterr().err
         assert "no data on stdin" in err
