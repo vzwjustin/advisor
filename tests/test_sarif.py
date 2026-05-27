@@ -629,9 +629,7 @@ def test_synthesize_rule_id_handles_lone_surrogates() -> None:
     assert result.startswith("advisor/high/")
 
 
-def test_resolve_relative_handles_oserror(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_resolve_relative_handles_oserror(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """H3: _resolve_relative must re-raise OSError from Path.resolve() as ValueError.
 
     Path.resolve() can raise OSError on symlink loops (ELOOP) or permission
@@ -652,4 +650,3 @@ def test_resolve_relative_handles_oserror(
     # Should raise ValueError (not OSError) because the fix catches both.
     with pytest.raises(ValueError):
         _resolve_relative("/abs/src/auth.py", tmp_path, target_resolved=target_resolved)
-

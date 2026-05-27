@@ -130,7 +130,6 @@ class TestReadTextCapped:
             read_text_capped(tmp_path / "absent.txt", max_bytes=100)
 
 
-
 class TestValidateFileTypes:
     """``validate_file_types`` must distinguish path-traversal ``..`` segments
     from legitimate filenames that contain ``..`` as a substring."""

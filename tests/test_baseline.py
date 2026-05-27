@@ -193,4 +193,3 @@ def test_baseline_normalize_collapses_leading_double_slash() -> None:
     assert _normalize_identity_path("/src/auth.py") == "/src/auth.py"
     # Findings with '//foo.py' and '/foo.py' now produce the same key.
     assert _normalize_identity_path("//foo.py") == _normalize_identity_path("/foo.py")
-

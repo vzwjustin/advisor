@@ -305,9 +305,7 @@ def filter_against_baseline(
     suppressed: list[Finding] = []
     for f in findings:
         key = _finding_key(f)
-        if key in baseline_keys or _suffix_alias_match(
-            key[0], path_idx.get((key[1], key[2]), [])
-        ):
+        if key in baseline_keys or _suffix_alias_match(key[0], path_idx.get((key[1], key[2]), [])):
             suppressed.append(f)
         else:
             new_findings.append(f)

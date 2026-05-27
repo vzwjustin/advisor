@@ -503,7 +503,6 @@ class TestPricingValueShapeValidation:
             )
 
 
-
 class TestTokensForFileSandbox:
     """M4 regression: _tokens_for_file must reject paths outside target."""
 
