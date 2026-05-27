@@ -2133,7 +2133,6 @@ class TestCmdUpdate:
         monkeypatch.setattr(cli.subprocess, "run", _fake_run)
         monkeypatch.setattr(cli, "invalidate_update_check_cache", lambda: None)
         monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
-        monkeypatch.setattr(cli.shutil, "which", lambda _name: None)
 
         rc = cli.cmd_update(self._make_args(quiet=True, yes=True))
         assert rc == 0
@@ -2180,7 +2179,6 @@ class TestCmdUpdate:
         monkeypatch.setattr(cli, "fetch_pypi_latest_version", lambda: "0.7.2")
         monkeypatch.setattr(cli, "fetch_remote_changelog", lambda: None)
         monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
-        monkeypatch.setattr(cli.shutil, "which", lambda _name: None)
 
         class _C:
             returncode = 0
@@ -2248,7 +2246,6 @@ class TestCmdUpdate:
         )
         monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
         monkeypatch.setattr(cli, "invalidate_update_check_cache", lambda: None)
-        monkeypatch.setattr(cli.shutil, "which", lambda _name: None)
 
         def _boom(prompt: str) -> str:
             raise AssertionError(f"unexpected prompt: {prompt!r}")
@@ -2271,6 +2268,116 @@ class TestCmdUpdate:
         assert rc == 0
         assert any(c == ["true"] for c in ran), ran
 
+
+class TestCmdLiveRecordJsonLimit:
+    """M1 regression: --data JSON payloads exceeding 256 KiB must be rejected."""
+
+    def _make_args(self, tmp_path: Path, data: str | None = None) -> object:
+        import argparse
+
+        return argparse.Namespace(
+            live_sub="record",
+            target=str(tmp_path),
+            kind="test_event",
+            data=data,
+            json=False,
+        )
+
+    def test_cmd_live_record_rejects_oversized_json(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Payload whose re-serialized length exceeds 256 KiB returns exit code 2."""
+        import argparse
+
+        from advisor import __main__ as cli
+
+        # Build a dict that serializes to just over 256 KiB.
+        big_value = "x" * (256 * 1024 + 1)
+        import json
+
+        payload = json.dumps({"k": big_value})
+
+        args = argparse.Namespace(
+            live_sub="record",
+            target=str(tmp_path),
+            kind="test_event",
+            data=payload,
+            json=False,
+        )
+        rc = cli.cmd_live(args)
+        assert rc == 2
+        _, err = capsys.readouterr()
+        assert "256" in err or "limit" in err.lower()
+
+        # No events file should have been written.
+        events_file = tmp_path / ".advisor" / "live" / "events.jsonl"
+        assert not events_file.exists()
+
+    def test_cmd_live_record_accepts_normal_json(self, tmp_path: Path) -> None:
+        """Small payloads are not rejected by the size guard."""
+        import argparse
+        import json
+
+        from advisor import __main__ as cli
+
+        payload = json.dumps({"k": "v"})
+        args = argparse.Namespace(
+            live_sub="record",
+            target=str(tmp_path),
+            kind="test_event",
+            data=payload,
+            json=False,
+        )
+        rc = cli.cmd_live(args)
+        assert rc == 0
+
+        events_file = tmp_path / ".advisor" / "live" / "events.jsonl"
+        assert events_file.exists()
+
+
+class TestCmdUpdateReexecUsesSysExecutable:
+    """M3 regression: post-upgrade re-exec must use sys.executable, not PATH lookup."""
+
+    def _make_args(self, **overrides: object) -> object:
+        import argparse
+
+        ns = argparse.Namespace(quiet=True, yes=True, no_preview=False)
+        for k, v in overrides.items():
+            setattr(ns, k, v)
+        return ns
+
+    def test_cmd_update_reexec_uses_sys_executable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """install re-exec argv must start with [sys.executable, '-m', 'advisor', 'install']."""
+        from advisor import __main__ as cli
+
+        monkeypatch.setattr(cli, "_detect_install_method", lambda: ("uv tool", ["true"]))
+        monkeypatch.setattr(cli, "_get_version", lambda: "0.1.0")
+        monkeypatch.setattr(cli, "fetch_pypi_latest_version", lambda: "0.99.0")
+        monkeypatch.setattr(cli, "fetch_remote_changelog", lambda: None)
+        monkeypatch.setattr(cli, "invalidate_update_check_cache", lambda: None)
+        monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
+
+        install_calls: list[list[str]] = []
+
+        class _Done:
+            returncode = 0
+
+        def _fake_run(cmd: list[str], check: bool = False, **_kw: object) -> _Done:
+            install_calls.append(list(cmd))
+            return _Done()
+
+        monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+
+        rc = cli.cmd_update(self._make_args())
+        assert rc == 0
+
+        # At least one subprocess.run call must be the install re-exec.
+        import sys
+
+        install_argv = [sys.executable, "-m", "advisor", "install"]
+        assert any(cmd[: len(install_argv)] == install_argv for cmd in install_calls), (
+            f"expected install re-exec with sys.executable; got: {install_calls}"
+        )
 
 
 class TestCountLinesSandbox:

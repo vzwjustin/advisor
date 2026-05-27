@@ -10,7 +10,6 @@ import argparse
 import csv
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -2164,15 +2163,10 @@ def cmd_update(args: argparse.Namespace) -> int:
     if not quiet and latest is not None and latest != current:
         print()
         print(_style.banner(f"Updated: v{current} → v{latest}"))
-    # Locate the advisor entry-point by name rather than trusting
-    # ``sys.argv[0]`` — under ``python -m advisor update`` that path
-    # resolves to the Python interpreter, which would re-exec as
-    # ``python install`` (a no-op or error) instead of ``advisor install``.
-    advisor_bin = shutil.which("advisor")
-    if advisor_bin:
-        install_cmd = [advisor_bin, "install"]
-    else:
-        install_cmd = [sys.executable, "-m", "advisor", "install"]
+    # Use sys.executable unconditionally so we always invoke the just-installed
+    # package rather than a potentially stale PATH shim that could be hijacked
+    # by an earlier entry on PATH.
+    install_cmd = [sys.executable, "-m", "advisor", "install"]
     if quiet:
         install_cmd.append("--quiet")
     try:
@@ -2486,6 +2480,16 @@ def cmd_live(args: argparse.Namespace) -> int:
             if not isinstance(parsed, dict):
                 print(
                     _style.error_box(f"--data must be a JSON object, got {type(parsed).__name__}"),
+                    file=sys.stderr,
+                )
+                return 2
+            _JSON_DATA_LIMIT = 256 * 1024
+            if len(json.dumps(parsed, separators=(",", ":"))) > _JSON_DATA_LIMIT:
+                print(
+                    _style.error_box(
+                        f"--data JSON exceeds {_JSON_DATA_LIMIT // 1024} KiB limit; "
+                        "pass a smaller payload"
+                    ),
                     file=sys.stderr,
                 )
                 return 2
