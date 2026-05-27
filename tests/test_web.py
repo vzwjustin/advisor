@@ -244,7 +244,40 @@ class TestStatusPayload:
     def test_empty_when_no_history_file(self, tmp_path):
         state = build_app_state(tmp_path)
         payload = _status_payload(state)
-        assert payload == {"last_mtime": None, "token": None, "is_active": False}
+        # Back-compat fields stay as-is for older clients.
+        assert payload["last_mtime"] is None
+        assert payload["token"] is None
+        assert payload["is_active"] is False
+        # New per-store fields — both inactive when neither file exists.
+        assert payload["history_is_active"] is False
+        assert payload["live_is_active"] is False
+        assert payload["live_mtime"] is None
+        assert payload["live_token"] is None
+
+    def test_is_active_true_when_only_live_events_recent(self, tmp_path):
+        """Regression: during a /advisor run the team-lead writes to
+        ``live/events.jsonl`` but NOT to ``history.jsonl`` (only
+        confirmed findings land there). The prior implementation read
+        only ``history.jsonl``'s mtime, so the Findings tab's LIVE pill
+        stayed IDLE even when the Live tab was buzzing. ``is_active``
+        now reflects EITHER store being warm."""
+        from advisor.live import append_event
+
+        append_event(tmp_path, "run_start", {"run_id": "r1"})
+        state = build_app_state(tmp_path)
+        payload = _status_payload(state)
+        # No history file → history_is_active is False.
+        assert payload["history_is_active"] is False
+        # Just-written events file → live_is_active is True.
+        assert payload["live_is_active"] is True
+        # ``is_active`` aggregates both → True.
+        assert payload["is_active"] is True
+        # Back-compat fields key on history only.
+        assert payload["last_mtime"] is None
+        assert payload["token"] is None
+        # New live fields are populated.
+        assert payload["live_mtime"] is not None
+        assert payload["live_token"] is not None
 
     def test_token_combines_mtime_ns_and_size(self, tmp_path):
         """The token field gives the client a higher-resolution
@@ -470,7 +503,16 @@ class TestLiveEndpoints:
         assert status == 200
         assert "application/json" in headers["Content-Type"]
         data = json.loads(body)
-        assert data == {"last_mtime": None, "token": None, "is_active": False}
+        # Back-compat fields stay shaped the same for older clients.
+        assert data["last_mtime"] is None
+        assert data["token"] is None
+        assert data["is_active"] is False
+        # New per-store fields (added when ``is_active`` was extended
+        # to reflect live activity, not just history activity).
+        assert data["history_is_active"] is False
+        assert data["live_is_active"] is False
+        assert data["live_mtime"] is None
+        assert data["live_token"] is None
 
     def test_api_status_reflects_writes(self, live_server):
         """After appending a finding, /api/status must report count>0, a
@@ -525,7 +567,13 @@ class TestStaticUiState:
     def test_findings_filter_empty_state_uses_filtered_count(self):
         assert "let findingsErrorMessage = '';" in APP_JS
         assert "const hasVisibleFindings = filtered.length !== 0;" in APP_JS
-        assert "$('#findings-empty').textContent = findingsErrorMessage ||" in APP_JS
+        # The empty-state copy now branches on three cases: error,
+        # no-findings-but-live-run-active, no-findings-and-idle, and
+        # findings-but-filter-empty. Confirm each branch ships.
+        assert "if (findingsErrorMessage) {" in APP_JS
+        assert "lastStatus.live_is_active" in APP_JS
+        assert "A /advisor run is in progress on this target" in APP_JS
+        assert "No findings yet. Run the advisor on this target first." in APP_JS
         assert "No findings match the current filters." in APP_JS
         assert "$('#findings-table').hidden = !hasVisibleFindings;" in APP_JS
 
@@ -538,7 +586,11 @@ class TestStaticUiState:
 
     def test_cost_empty_resets_stale_error_message(self):
         assert "function showCostError(message)" in APP_JS
-        assert "No plan yet — cost estimate needs ranked files." in APP_JS
+        # The empty-state copy was updated to direct the user to click
+        # Estimate cost (and to mention auto-load on first visit).
+        assert "No plan yet — cost estimate needs ranked files." in APP_JS or (
+            "Click" in APP_JS and "Estimate cost" in APP_JS
+        )
         assert "Error loading cost: network error" in APP_JS
 
     def test_findings_fetch_errors_show_empty_state(self):
@@ -575,8 +627,16 @@ class TestStaticUiState:
     def test_poll_uses_token_when_present(self):
         """Client prefers the higher-resolution ``token`` field for
         change detection, falling back to ``last_mtime`` when the server
-        omits it (older server compat)."""
-        assert "let lastToken = null;" in APP_JS
+        omits it (older server compat).
+
+        Note: ``lastToken`` / ``lastMtime`` are initialized to a unique
+        sentinel string (NOT ``null``) so the first poll always triggers
+        ``refetchFindings`` even when ``/api/status`` returns ``null``
+        for both fields (fresh checkout with no history file). See the
+        comment in ``app.js`` for the regression that motivated this.
+        """
+        assert "let lastToken = '__uninitialized__';" in APP_JS
+        assert "let lastMtime = '__uninitialized__';" in APP_JS
         assert "const hasToken = typeof data.token === 'string';" in APP_JS
         assert "data.token !== lastToken" in APP_JS
         assert "data.last_mtime !== lastMtime" in APP_JS

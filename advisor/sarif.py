@@ -452,6 +452,15 @@ def findings_to_sarif(
                     "severity": _strip_controls(f.severity),
                     "evidence": _strip_controls(f.evidence, keep_block_whitespace=True),
                     "fix": _strip_controls(f.fix, keep_block_whitespace=True),
+                    **(
+                        {
+                            "expected_vs_actual": _strip_controls(
+                                f.expected_vs_actual, keep_block_whitespace=True
+                            )
+                        }
+                        if f.expected_vs_actual
+                        else {}
+                    ),
                 },
             }
         )

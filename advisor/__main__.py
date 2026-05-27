@@ -761,6 +761,12 @@ def cmd_plan(args: argparse.Namespace) -> int:
     target = Path(args.target)
     if not target.exists():
         print(_style.error_box(f"target not found: {target}", stream=sys.stderr), file=sys.stderr)
+        # Path-spelling errors are the most common cause; suggesting the
+        # current-directory fallback gets the user un-stuck in one keypress.
+        print(
+            _style.tip("check the path spelling, or run: advisor plan ."),
+            file=sys.stderr,
+        )
         return 2
     if not target.is_dir():
         # Path exists but isn't a directory — fail loudly instead of
@@ -770,6 +776,14 @@ def cmd_plan(args: argparse.Namespace) -> int:
             _style.error_box(
                 f"target must be a directory, got file: {target}",
                 stream=sys.stderr,
+            ),
+            file=sys.stderr,
+        )
+        # A file path is almost always either a typo (meant the parent
+        # dir) or a misconception (advisor scans dirs, not single files).
+        print(
+            _style.tip(
+                f"to scan its directory: advisor plan {target.parent}",
             ),
             file=sys.stderr,
         )
@@ -984,6 +998,7 @@ def cmd_codex_plan_csv(args: argparse.Namespace) -> int:
     concurrent ``$advisor`` invocations don't collide.
     """
     from .codex_skill import build_codex_runner_prompt
+    from .install import codex_cli_available
 
     target = Path(args.target)
     if not target.exists():
@@ -1015,6 +1030,25 @@ def cmd_codex_plan_csv(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
         return 2
+
+    # Soft warning when ``codex`` isn't on PATH — the CSV is the input
+    # to Codex's ``spawn_agents_on_csv``, so producing one on a host
+    # without the Codex CLI is almost always operator error (e.g.
+    # invoked from a Claude-only shell). Fires AFTER target / preset /
+    # config validation so an invalid-input error isn't paired with a
+    # secondary warning that would just add noise to the user's
+    # diagnosis. We still emit the file so test fixtures and dry-runs
+    # work, but the user sees the mismatch.
+    if not getattr(args, "quiet", False) and not codex_cli_available():
+        print(
+            _style.warning_box(
+                "advisor codex-plan-csv: ``codex`` CLI not on PATH. The "
+                "emitted CSV is intended for Codex's ``spawn_agents_on_csv`` "
+                "tool — without Codex installed, nothing will consume it.",
+                stream=sys.stderr,
+            ),
+            file=sys.stderr,
+        )
 
     paths, glob_err = _resolve_plan_files(target, args, file_types=cfg.file_types)
     if glob_err is not None:
@@ -1322,6 +1356,15 @@ def _emit_plan(
             print(_style.tip("try a broader git scope or remove the filter"))
         else:
             print(_style.dim(f"no files at priority P{args.min_priority}+ in {target}"))
+            # Surface the P1-P5 scale so the user can decide which tier
+            # they actually want — "try --min-priority 1" without the
+            # ladder context is a blind suggestion.
+            print(
+                _style.dim(
+                    "  (P5=auth/secrets · P4=input/parsing · P3=handlers/db · "
+                    "P2=config/crypto · P1=utils/tests)"
+                )
+            )
             print(_style.tip("try --min-priority 1 to include all files"))
             print(_style.tip("or adjust --file-types to match your file extensions"))
         return 0
@@ -1498,6 +1541,17 @@ _STRICT_NOOP_EXIT = 3
 _NOOP_ACTIONS = frozenset({InstallAction.UNCHANGED.value, InstallAction.ABSENT.value})
 
 
+# Internal component names (``nudge`` / ``skill`` / ``update-skill``)
+# are opaque to a first-time user. Show what each one actually IS in
+# the status output so they can tell at a glance whether the rows mean
+# "ready to use" without reading the source.
+_COMPONENT_LABELS: dict[str, str] = {
+    "nudge": "CLAUDE.md nudge",
+    "skill": "/advisor command",
+    "update-skill": "/advisor-update",
+}
+
+
 def _component_line(c: ComponentStatus) -> str:
     key = "ok" if c.present and c.current else "outdated" if c.present else "missing"
     _, fancy, ascii_, color = _style.STATE_GLYPHS[key]
@@ -1507,7 +1561,8 @@ def _component_line(c: ComponentStatus) -> str:
         _style.paint(_style.glyph(fancy, ascii_), color) if color else _style.glyph(fancy, ascii_)
     )
     state = _style.paint(component_label, color) if color else component_label
-    name_col = _style.paint(f"{c.name:<6}", "cyan", "bold")
+    human = _COMPONENT_LABELS.get(c.name, c.name)
+    name_col = _style.paint(f"{human:<17}", "cyan", "bold")
     return f"  {mark} {name_col} {state:<10} {_style.dim(str(c.path))}"
 
 
@@ -1686,6 +1741,17 @@ def _run_install_op(
         and update_skill_action in (*_NOOP_ACTIONS, InstallAction.SKIPPED.value)
         and codex_skill_action in (*_NOOP_ACTIONS, InstallAction.SKIPPED.value)
     ):
+        # Silent exit-3 confuses CI users — they can't tell if the
+        # build failed or the install was already complete. Surface a
+        # dim one-liner so the exit-code semantics are visible even
+        # under --strict (still honoured by --quiet).
+        if not quiet:
+            print(
+                _style.dim(
+                    f"  · nothing to install — already current (exit {_STRICT_NOOP_EXIT}, --strict)"
+                ),
+                file=sys.stderr,
+            )
         return _STRICT_NOOP_EXIT
     _CHANGE_ACTIONS = (InstallAction.INSTALLED.value, InstallAction.UPDATED.value)
     if (
@@ -1760,6 +1826,14 @@ def cmd_install(args: argparse.Namespace) -> int:
             and s.skill.current
             and update_ok
         )
+        # Mirror cmd_status: when everything's healthy, show the next-
+        # step CTA so a user running ``install --check`` knows they're
+        # done AND where to go next. Without this they get a wall of
+        # checkmarks and no direction. ``--json`` callers don't want
+        # the CTA; ``--quiet`` suppresses it.
+        if ok and not quiet and not getattr(args, "json", False):
+            print()
+            print(_style.cta("/advisor <path>", "run the advisor on a codebase"))
         return 0 if ok else _STRICT_NOOP_EXIT
 
     # Codex skill is gated on PATH detection — only install when ``codex`` is
@@ -2212,6 +2286,7 @@ def cmd_ui(args: argparse.Namespace) -> int:
             host=args.host,
             port=args.port,
             log_requests=args.verbose,
+            quiet=getattr(args, "quiet", False),
         )
     except OSError as exc:
         print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
@@ -2270,7 +2345,14 @@ def cmd_history(args: argparse.Namespace) -> int:
             return 0
         if not all_entries:
             print(_style.dim(f"no history yet at {target}/.advisor/history.jsonl"))
-            print(_style.tip("findings are logged when you confirm them during a run"))
+            # First-time users don't know what "confirm" means in this
+            # context. Spell out the workflow + the value-prop so they
+            # have a reason to bother (history boosts repeat-offender
+            # files in the next plan).
+            print(_style.tip("run /advisor . in Claude Code, then confirm findings when prompted"))
+            print(
+                _style.dim("  confirmed findings accumulate here and boost repeat-offender ranking")
+            )
             return 0
         print(_format_history_stats(target, summary))
         if not getattr(args, "quiet", False):
@@ -2358,6 +2440,36 @@ def cmd_live(args: argparse.Namespace) -> int:
         kind = getattr(args, "kind", "") or ""
         data_raw = getattr(args, "data", None)
         data: dict[str, object] = {}
+        # ``--data -`` reads the JSON payload from stdin. Mirrors the
+        # ``--context -`` / ``--from -`` convention elsewhere in the CLI
+        # and lets the team-lead pipe in payloads larger than a CLI flag
+        # comfortably accepts (e.g. multi-line ``report_relay.summary``).
+        if data_raw == "-":
+            if sys.stdin.isatty():
+                print(
+                    _style.error_box(
+                        "--data -: no data on stdin; pipe a JSON object or drop the flag",
+                        stream=sys.stderr,
+                    ),
+                    file=sys.stderr,
+                )
+                return 2
+            data_raw = _read_stdin_capped(source_label="--data -").strip()
+            # An empty pipe (closed stdin / broken upstream / typo in
+            # the producer command) is almost always operator error,
+            # not "I meant to record an event with empty data". The
+            # no-dash path treats omitted ``--data`` as empty by design;
+            # explicitly requesting stdin and getting nothing is the
+            # signal we should surface.
+            if not data_raw:
+                print(
+                    _style.error_box(
+                        "--data -: stdin was empty; expected a JSON object",
+                        stream=sys.stderr,
+                    ),
+                    file=sys.stderr,
+                )
+                return 2
         if data_raw:
             try:
                 parsed = json.loads(data_raw)
@@ -2393,17 +2505,10 @@ def cmd_live(args: argparse.Namespace) -> int:
         return 0
     if sub == "tail":
         limit = max(1, min(int(getattr(args, "limit", 50)), 1000))
-        since_arg = getattr(args, "since", None)
-        since = None
-        if since_arg is not None:
-            try:
-                since = max(0, int(since_arg))
-            except (TypeError, ValueError):
-                print(
-                    _style.error_box(f"--since must be an integer, got {since_arg!r}"),
-                    file=sys.stderr,
-                )
-                return 2
+        # ``--since`` is argparse-validated as a non-negative int
+        # (``type=_nonneg_int``), so the only values reaching here are
+        # ``None`` (unset) or ``int >= 0``. No runtime conversion needed.
+        since = getattr(args, "since", None)
         events = load_recent_events(target, since=since, limit=limit)
         if getattr(args, "json", False):
             print(
@@ -2538,7 +2643,19 @@ def cmd_checkpoints(args: argparse.Namespace) -> int:
                 removed += 1
             except OSError:
                 failed += 1
-        if not getattr(args, "quiet", False):
+        if getattr(args, "json", False):
+            print(
+                json.dumps(
+                    {
+                        "schema_version": JSON_SCHEMA_VERSION,
+                        "target": str(target.resolve()),
+                        "removed": removed,
+                        "failed": failed,
+                    },
+                    indent=2,
+                )
+            )
+        elif not getattr(args, "quiet", False):
             if removed or failed:
                 noun = "checkpoint" if removed == 1 else "checkpoints"
                 msg = f"removed {removed} {noun}"
@@ -2667,12 +2784,23 @@ def _replace_findings(
 
     Separate helper so baseline / suppression wiring doesn't have to
     reach into the report's internals.
+
+    Defensive sentinel guard: ``audit._audit_scope_drift`` already drops
+    :data:`verify.INCOMPLETE_FILE_PATH` findings before they reach the
+    report, so a sentinel cannot reach this helper through the normal
+    pipeline. Re-filtering here makes the invariant unconditional — if
+    a future refactor of the upstream filter regresses, the SARIF /
+    PR-comment / fail-on sinks downstream of ``_replace_findings`` still
+    never see a finding with ``file_path == "<incomplete>"``.
     """
     import dataclasses
 
+    from .verify import INCOMPLETE_FILE_PATH as _INCOMPLETE
     from .verify import Finding as _Finding
 
-    typed: list[_Finding] = [f for f in kept if isinstance(f, _Finding)]
+    typed: list[_Finding] = [
+        f for f in kept if isinstance(f, _Finding) and f.file_path != _INCOMPLETE
+    ]
     return dataclasses.replace(report, findings_in_batch=typed)
 
 
@@ -2814,6 +2942,7 @@ def _load_findings_from_input(
                             evidence=str(f.get("evidence", "")),
                             fix=str(f.get("fix", "")),
                             rule_id=rule_id,
+                            expected_vs_actual=str(f.get("expected_vs_actual", "")),
                         )
                     )
                 except KeyError:
@@ -3106,6 +3235,14 @@ def cmd_audit(args: argparse.Namespace) -> int:
         cp = load_checkpoint(target, args.run_id)
     except (FileNotFoundError, ValueError) as exc:
         print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
+        # No checkpoint at the given run_id is almost always either a
+        # typo (the IDs are 25-char timestamp-hex strings) or a user
+        # who's never checkpointed. Point them at the list command so
+        # they don't have to guess.
+        print(
+            _style.tip(f"list available run IDs with: advisor checkpoints {target}"),
+            file=sys.stderr,
+        )
         return 2
 
     transcript_arg = args.transcript or "-"
@@ -3303,7 +3440,7 @@ def build_parser() -> argparse.ArgumentParser:
                 f"expected non-negative integer, got {value!r}"
             ) from exc
         if n < 0:
-            raise argparse.ArgumentTypeError(f"batch-size must be >= 0, got {n}")
+            raise argparse.ArgumentTypeError(f"must be >= 0, got {n}")
         return n
 
     p_plan.add_argument(
@@ -3710,6 +3847,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Log every HTTP request to stderr (off by default)",
     )
     p_ui.add_argument("--json", action="store_true", help="Print server URL as JSON and exit")
+    p_ui.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress startup banner (the bound URL is still printed via --json if set)",
+    )
     p_ui.set_defaults(func=cmd_ui)
 
     p_history = sub.add_parser(
@@ -3816,9 +3958,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_live_tail.add_argument(
         "--since",
-        type=str,
+        type=_nonneg_int,
         default=None,
-        help="Only show events whose seq is strictly greater than this cursor",
+        help="Only show events whose seq is strictly greater than this cursor (>=0)",
     )
     p_live_tail.add_argument(
         "--json",

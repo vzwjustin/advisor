@@ -96,6 +96,7 @@ INDEX_HTML = """<!doctype html>
       <pre id="cli-command"></pre>
       <button id="copy-cli">Copy to clipboard</button>
       <span id="copy-feedback" class="feedback"></span>
+      <p class="hint" style="margin-top:0.8rem"><code>advisor plan</code> ranks files locally (what this dashboard shows). To run the full review-and-fix pipeline with live agents, type <code>/advisor &lt;path&gt;</code> in Claude Code instead.</p>
     </div>
   </section>
 
@@ -103,8 +104,9 @@ INDEX_HTML = """<!doctype html>
     <div class="controls">
       <button id="cost-refresh">Estimate cost</button>
     </div>
+    <p class="hint">Min = explore pass only; Max = full fix wave per runner. Actual cost lands in this range based on how many findings Opus confirms and whether the user asks for fixes.</p>
     <div id="cost-summary"></div>
-    <p id="cost-empty" class="empty" hidden>No plan yet — cost estimate needs ranked files.</p>
+    <p id="cost-empty" class="empty">Click <strong>Estimate cost</strong> to project token usage and dollar cost for the files in scope. The estimate loads automatically on first visit.</p>
   </section>
 
   <section id="live" class="panel">
@@ -117,7 +119,7 @@ INDEX_HTML = """<!doctype html>
       <span id="live-count" class="count"></span>
     </div>
     <ul id="live-feed" class="feed"></ul>
-    <p id="live-empty" class="empty">No events yet. Live events are emitted by the /advisor run when SKILL.md is wired to <code>advisor live record</code>; on older skill versions this tab stays quiet.</p>
+    <p id="live-empty" class="empty">No live events yet. Start a review run with <code>/advisor .</code> in Claude Code &mdash; events appear here in real time as the advisor and runners work. If this tab stays quiet after a run, refresh your skill with <code>advisor install</code>.</p>
   </section>
 </main>
 
@@ -416,6 +418,9 @@ APP_JS = r"""(() => {
   const $$ = (sel) => document.querySelectorAll(sel);
 
   // --- tab switching ---
+  // Track which tabs have been auto-loaded so we only fetch their data
+  // once per session — clicking back into a tab shouldn't re-fetch.
+  const autoLoaded = new Set();
   $$('.tab').forEach((btn) => {
     btn.addEventListener('click', () => {
       $$('.tab').forEach((b) => b.classList.remove('active'));
@@ -425,6 +430,17 @@ APP_JS = r"""(() => {
       // Poll is only useful on the findings tab; kick it immediately when
       // the user switches to that tab so they don't wait a full interval.
       if (btn.dataset.tab === 'findings') schedulePoll(0);
+      // Auto-load the Cost and Plan tabs on first visit so the user
+      // doesn't have to click a button just to see what the tab is for.
+      // The dedicated Refresh / Estimate buttons remain for re-fetch.
+      if (btn.dataset.tab === 'cost' && !autoLoaded.has('cost')) {
+        autoLoaded.add('cost');
+        loadCost();
+      }
+      if (btn.dataset.tab === 'plan' && !autoLoaded.has('plan')) {
+        autoLoaded.add('plan');
+        loadPlan();
+      }
     });
   });
 
@@ -526,9 +542,23 @@ APP_JS = r"""(() => {
     }
     $('#findings-count').textContent = `${filtered.length} of ${findingsRaw.length}`;
     const hasVisibleFindings = filtered.length !== 0;
-    $('#findings-empty').textContent = findingsErrorMessage || (findingsRaw.length === 0
-      ? 'No findings yet. Run the advisor on this target first.'
-      : 'No findings match the current filters.');
+    // When the Live tab is showing activity but no findings have
+    // been confirmed yet, swap the generic "no findings" copy for a
+    // hint that explains the disconnect — confirmed findings only
+    // land in history.jsonl after a /advisor run wraps and the user
+    // accepts each finding. Otherwise the user sees "no findings" +
+    // a bustling Live tab and thinks the Findings tab is broken.
+    let emptyCopy;
+    if (findingsErrorMessage) {
+      emptyCopy = findingsErrorMessage;
+    } else if (findingsRaw.length === 0) {
+      emptyCopy = (lastStatus && lastStatus.live_is_active)
+        ? 'A /advisor run is in progress on this target — confirmed findings will appear here when the run wraps and you accept them. Watch the Live tab for real-time activity.'
+        : 'No findings yet. Run the advisor on this target first.';
+    } else {
+      emptyCopy = 'No findings match the current filters.';
+    }
+    $('#findings-empty').textContent = emptyCopy;
     $('#findings-empty').hidden = hasVisibleFindings;
     $('#findings-table').hidden = !hasVisibleFindings;
   }
@@ -555,7 +585,16 @@ APP_JS = r"""(() => {
   const POLL_INTERVAL_MS = 3000;
   const POLL_MAX_BACKOFF_MS = 30000;
   let pollErrorStreak = 0;
-  let lastMtime = null;
+  // Initial value must NOT match what /api/status returns on first
+  // load — when history.jsonl is absent the server returns
+  // ``{"last_mtime": null, "token": null}`` and a strict ``!== null``
+  // check would evaluate false, skipping the initial /api/history
+  // fetch. Result: the empty-state message never renders and the user
+  // sees a blank Findings tab with no indication the dashboard is
+  // connected. A unique sentinel string differs from any real token,
+  // so the first poll always triggers refetchFindings() and either
+  // populates the table or shows the "No findings yet" copy.
+  let lastMtime = '__uninitialized__';
   // Composite ``${st_mtime_ns}:${st_size}`` token from /api/status.
   // Preferred over lastMtime for change detection: nanosecond precision
   // survives same-microsecond writes that lastMtime's ISO rendering can
@@ -563,7 +602,7 @@ APP_JS = r"""(() => {
   // rewrite landing on the same timestamp. Falls back to lastMtime when
   // the server omits the field — keeps older client/server combos
   // working.
-  let lastToken = null;
+  let lastToken = '__uninitialized__';
   let pollTimer = null;
   let liveEnabled = true;
   let lastStatus = null;      // last successful /api/status payload
@@ -601,8 +640,25 @@ APP_JS = r"""(() => {
       const data = await r.json();
       lastStatus = data;
       lastStatusTs = Date.now();
-      setLiveState(data.is_active ? 'active' : 'idle',
-                   data.is_active ? 'LIVE' : 'IDLE');
+      // Pill label distinguishes "findings being confirmed" (LIVE)
+      // from "a /advisor run is firing live events but hasn't
+      // confirmed findings yet" (RUNNING). The latter is the common
+      // case during the explore phase — without this label the user
+      // sees IDLE while the Live tab is busy and concludes the
+      // Findings tab is broken. Older servers don't emit
+      // ``live_is_active`` / ``history_is_active`` so the fallback
+      // matches the prior LIVE/IDLE behavior.
+      const liveActive = data.live_is_active === true;
+      const historyActive = data.history_is_active === true;
+      if (historyActive) {
+        setLiveState('active', 'LIVE');
+      } else if (liveActive) {
+        setLiveState('active', 'RUNNING');
+      } else if (data.is_active) {
+        setLiveState('active', 'LIVE');
+      } else {
+        setLiveState('idle', 'IDLE');
+      }
       // Prefer the token field when the server emits it (nanosecond +
       // size). Older servers won't return ``token`` — fall back to the
       // mtime comparison so the client stays compatible with them.

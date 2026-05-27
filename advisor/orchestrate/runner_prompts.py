@@ -816,10 +816,19 @@ def check_batch_fix_budget(
                 )
 
         if file_count > effective_cap:
+            # Action-first phrasing — the prior wording buried the
+            # remediation behind two clauses of internal jargon
+            # (``cap_reason``, "mid-batch rotation") so a new user
+            # couldn't tell whether to act or ignore. Put the
+            # consequence in plain English and the fix command on its
+            # own line so it's copy-pasteable.
             warnings.append(
-                f"batch {batch.batch_id}: {file_count} tasks exceeds "
-                f"{cap_reason}={effective_cap}. Worst-case (every file "
-                f"needs a fix) would require mid-batch rotation. Consider "
-                f"--batch-size {effective_cap} or splitting this batch."
+                f"batch {batch.batch_id} has {file_count} files but only "
+                f"{effective_cap} fixes are allowed per runner "
+                f"({cap_reason}). If every file needs a fix, the runner "
+                f"will rotate mid-batch (a fresh runner picks up the "
+                f"remaining work — review continues, but it's slower). "
+                f"To avoid the rotation: rerun with --batch-size "
+                f"{effective_cap}."
             )
     return warnings

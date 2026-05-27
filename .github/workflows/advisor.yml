@@ -25,7 +25,7 @@ on:
       fail-on:
         type: string
         default: "never"
-        description: "Reserved: exit non-zero if any finding at/above level (never|low|medium|high|critical). Not forwarded to `advisor plan` — plan does not gate on findings; pair with a future `advisor audit` step instead."
+        description: "Exit status 4 if any SARIF result at/above level (never|low|medium|high|critical). NOTE: `advisor plan --sarif` emits an empty-results document, so this gate is a no-op unless a downstream step replaces `advisor.sarif` with real findings (e.g. from a live `/advisor` run captured upstream)."
       preset:
         type: string
         default: ""
@@ -65,9 +65,6 @@ jobs:
           INPUT_FAIL_ON: ${{ inputs.fail-on }}
           PR_BASE_REF: ${{ github.base_ref }}
         run: |
-          if [ "$INPUT_FAIL_ON" != "never" ]; then
-            echo "::warning::fail-on='$INPUT_FAIL_ON' is not supported in the reusable plan workflow (plan does not gate on findings). To gate on findings, pair with a subsequent 'advisor audit --fail-on LEVEL' step instead."
-          fi
           SINCE_ARG=()
           if [ -n "$INPUT_SINCE" ]; then
             SINCE_ARG=("--since" "$INPUT_SINCE")
@@ -91,6 +88,18 @@ jobs:
         with:
           sarif_file: advisor.sarif
           category: advisor
+
+      - name: Gate on findings (--fail-on)
+        # SARIF gate lives in scripts/sarif_gate.py so the logic is unit-
+        # testable and reusable (a local user can gate their own SARIF
+        # artifact with the same script). Runs only after upload so Code
+        # Scanning still gets the artifact even when the job fails. Exits
+        # 4 when tripped (matches advisor audit --fail-on), 2 when SARIF
+        # is unreadable, 0 otherwise.
+        if: always() && inputs.fail-on != 'never' && hashFiles('advisor.sarif') != ''
+        env:
+          ADVISOR_FAIL_ON: ${{ inputs.fail-on }}
+        run: python scripts/sarif_gate.py advisor.sarif
 
       - name: Post PR comment
         if: ${{ always() && inputs.post-pr-comment && github.event_name == 'pull_request' }}

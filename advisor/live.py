@@ -55,7 +55,6 @@ Caps mirror :mod:`advisor.history`:
 from __future__ import annotations
 
 import json
-import sys
 import warnings
 from collections import deque
 from datetime import datetime, timezone
@@ -373,36 +372,3 @@ def latest_seq(target: str | Path) -> int:
         return 0
     next_one = _next_seq(path)
     return max(0, next_one - 1)
-
-
-def _record_event_from_stdin(target: str | Path, stdin: Any = None) -> Path:
-    """Read a JSON event-spec from stdin and append it.
-
-    Helper used by the ``advisor live record`` CLI subcommand. The stdin
-    payload is a JSON object with shape::
-
-        {"kind": "<kind>", "data": {...}}
-
-    Returns the path written to. Raises :class:`ValueError` on missing or
-    malformed input.
-    """
-    if stdin is None:
-        stdin = sys.stdin
-    raw = stdin.read()
-    if not raw or not raw.strip():
-        raise ValueError("empty stdin — pass a JSON object describing the event")
-    try:
-        spec = json.loads(raw)
-    except (ValueError, json.JSONDecodeError) as exc:
-        raise ValueError(f"invalid JSON on stdin: {exc}") from exc
-    if not isinstance(spec, dict):
-        raise ValueError(f"event spec must be a JSON object, got {type(spec).__name__}")
-    kind = spec.get("kind")
-    if not isinstance(kind, str) or not kind:
-        raise ValueError("event spec missing required 'kind' field")
-    data = spec.get("data")
-    if data is None:
-        data = {}
-    if not isinstance(data, dict):
-        raise ValueError(f"event 'data' must be an object, got {type(data).__name__}")
-    return append_event(target, kind, data)

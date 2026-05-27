@@ -260,7 +260,12 @@ def estimate_cost(
     # zero count produces a plan that reflects an Opus-only pipeline.
     runner_limit = 5 if max_runners is None else max(0, max_runners)
     if batches:
-        runner_count = len(batches)
+        # Clamp against runner_limit — at dispatch time the pool is
+        # bounded by max_runners (and POOL_SIZE_CEILING above it), so
+        # using ``len(batches)`` here inflates the cost estimate when a
+        # plan has more batches than runners (the advisor will reuse
+        # long-lived runners across batches rather than spawning one per).
+        runner_count = min(len(batches), runner_limit) if runner_limit > 0 else 0
     elif runner_limit == 0 or not tasks:
         runner_count = 0
     else:

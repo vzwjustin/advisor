@@ -293,7 +293,7 @@ jobs:
 ```
 
 > [!NOTE]
-> The `fail-on` parameter is currently reserved for a future audit gating step and is not forwarded to `advisor plan`.
+> The `fail-on` parameter is enforced by a SARIF-parsing step that runs after `actions/upload-sarif`. Because `advisor plan --sarif` emits an empty-results document by design, the gate is a no-op unless a downstream step replaces `advisor.sarif` with real findings (e.g. SARIF captured from a live `/advisor` run). Threshold semantics match `advisor audit --fail-on`: the gate reads each result's `properties.severity` (which advisor's SARIF writer emits) so `critical` and `high` are correctly distinguished. For third-party SARIF that lacks `properties.severity`, the gate falls back to the SARIF level field (CRITICAL/HIGH → `error`, MEDIUM → `warning`, LOW → `note`) which cannot distinguish CRITICAL from HIGH.
 
 Or roll your own: any CI system can run `advisor plan --sarif advisor.sarif`
 and upload the file to whatever scanner you use.
@@ -353,3 +353,7 @@ no-op or unhealthy install · `2` argparse / user error · `1` unexpected.
   runtime flow, data contract, design invariants
 - [`docs/prompts.md`](docs/prompts.md) — prompt engineering notes for
   contributors modifying prompt templates
+
+## License
+
+[MIT](LICENSE) — Copyright (c) 2025–2026 Justin Adams ([@vzwjustin](https://github.com/vzwjustin)).

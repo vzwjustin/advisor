@@ -27,8 +27,16 @@ from functools import lru_cache
 from pathlib import Path, PurePath
 from typing import TypeVar
 
-# Bytes scanned per file for keyword matching — covers typical import block + first function/class.
-CONTENT_SCAN_LIMIT = 2000
+# Bytes scanned per file for keyword matching — covers typical import
+# block + first function/class. Previously 2000; reduced to 1024 after
+# profiling showed the per-file regex cost dominates ``rank_files`` on
+# large repos (5000 files × 2000 chars × 75-group alternation ≈ 25 s
+# total). 1024 captures the import block + first major declaration in
+# every realistic file while halving the regex work — the small loss
+# in mid-file keyword hits is acceptable because the priority is a
+# heuristic for "which files to focus on first", not a precise
+# classification.
+CONTENT_SCAN_LIMIT = 1024
 
 # Priority 5 = most likely to have issues, 1 = least.
 # All keywords are word-boundary matched; include explicit variants rather
@@ -1115,6 +1123,7 @@ def rank_files(
 _HISTORY_BOOST_THRESHOLD = 1.5
 
 
+@lru_cache(maxsize=8192)
 def _normalize_history_key(path: str) -> str:
     """Normalize a history path key for exact/suffix matching.
 
@@ -1127,6 +1136,12 @@ def _normalize_history_key(path: str) -> str:
     prepend a BOM to the file-path field. Without this, a history entry
     with a BOM-prefixed path silently gets zero repeat-offender boost
     because neither the exact-match nor the suffix-match would fire.
+
+    Cached because ``rank_files`` calls this O(N*M) times where N is the
+    scanned-file count and M is the history-entry count — at 5000 files
+    × 1000 entries the unconditional re-normalization was ~4 seconds.
+    The cache (maxsize=8192) covers any realistic file-count × history
+    union; pure-function so caching is safe.
     """
     normalized = path.lstrip("﻿").strip().strip("`").replace("\\", "/")
     while normalized.startswith("./"):

@@ -41,6 +41,7 @@ class Finding:
     evidence: str
     fix: str
     rule_id: str | None = None
+    expected_vs_actual: str = ""
 
 
 # Required for a well-formed block; ``rule_id`` is optional and never
@@ -99,6 +100,22 @@ _KEY_PREFIXES: dict[str, tuple[str, ...]] = {
     "severity": ("- **Severity**:", "* **Severity**:", "**Severity**:"),
     "description": ("- **Description**:", "* **Description**:", "**Description**:"),
     "evidence": ("- **Evidence**:", "* **Evidence**:", "**Evidence**:"),
+    "expected_vs_actual": (
+        # Unicode arrow (U+2192) — what FINDING_SCHEMA tells runners to
+        # emit. Most runners follow the schema verbatim.
+        "- **Expected → Actual**:",
+        "* **Expected → Actual**:",
+        "**Expected → Actual**:",
+        # ASCII arrow fallback — LLM runners (and humans hand-editing
+        # findings) routinely autocorrect ``→`` to ``->``. Without these
+        # variants the line bleeds into the prior field as continuation
+        # text and the divergence signal is lost. Mirrors the same
+        # tolerance the SCOPE-anchor parser at runner_budget.py extends
+        # to ``·``/``|``/``-`` separators.
+        "- **Expected -> Actual**:",
+        "* **Expected -> Actual**:",
+        "**Expected -> Actual**:",
+    ),
     "fix": ("- **Fix**:", "* **Fix**:", "**Fix**:"),
     "rule_id": ("- **Rule**:", "* **Rule**:", "**Rule**:"),
 }
@@ -183,6 +200,8 @@ def format_findings_block(findings: list[Finding]) -> str:
         lines.append(f"- **Severity**: {_safe_inline(f.severity)}")
         lines.append(f"- **Description**: {_safe_inline(f.description)}")
         lines.append(f"- **Evidence**: {_safe_inline(f.evidence)}")
+        if f.expected_vs_actual:
+            lines.append(f"- **Expected → Actual**: {_safe_inline(f.expected_vs_actual)}")
         lines.append(f"- **Fix**: {_safe_inline(f.fix)}")
         if f.rule_id:
             lines.append(f"- **Rule**: {_safe_inline(f.rule_id)}")
@@ -567,6 +586,7 @@ def _dict_to_finding(d: dict[str, str]) -> Finding | None:
             evidence=d.get("evidence") or "",
             fix=d.get("fix") or "",
             rule_id=d.get("rule_id") or None,
+            expected_vs_actual=d.get("expected_vs_actual", ""),
         )
     return Finding(
         file_path=d["file_path"],
@@ -575,4 +595,5 @@ def _dict_to_finding(d: dict[str, str]) -> Finding | None:
         evidence=d["evidence"],
         fix=d["fix"],
         rule_id=d.get("rule_id") or None,
+        expected_vs_actual=d.get("expected_vs_actual", ""),
     )

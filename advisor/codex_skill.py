@@ -104,9 +104,10 @@ shape; this layer is presentation only.
 
 **Step 6 (closing line):** Tell the user how to ask for fixes:
 
-> Want me to apply remediation? Reply with ``$advisor fix`` (or describe
-> which findings to address) and I will queue the changes in a follow-up
-> turn. The first pass was review-only.
+> Want me to apply remediation? Reply describing which findings to address
+> (e.g. "fix the two HIGHs", "fix #3 and #5", "fix everything in
+> auth.py") and I will queue the changes in a follow-up turn. The first
+> pass was review-only — there is no separate ``$advisor fix`` command.
 
 ## Output schema for each runner
 

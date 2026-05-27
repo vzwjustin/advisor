@@ -4,12 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "advisor-agent"
-version = "0.8.0"
+version = "0.8.1"
 description = "Opus-led code review-and-fix pipeline for Claude Code (native agent teams, no external API calls)."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
-authors = [{ name = "Justin Adams" }]
+license = { file = "LICENSE" }
+authors = [{ name = "Justin Adams", email = "spotty118@gmail.com" }]
 keywords = ["claude", "claude-code", "code-review", "ai", "agents", "llm", "pipeline"]
 classifiers = [
     "Development Status :: 4 - Beta",

@@ -346,6 +346,116 @@ class TestConfigFromArgs:
         assert cfg.runner_file_read_ceiling == 20
 
 
+class TestCmdPlanUserFacingTips:
+    """High-ROI UX: error / empty-state paths must surface an actionable
+    next step rather than just complaining. These are the lines a new
+    user sees first when they fumble the invocation."""
+
+    def test_target_not_found_suggests_path_spelling_and_cwd_fallback(
+        self, tmp_path: Path, capsys
+    ) -> None:
+        """A missing path is almost always a typo. Surface the cwd
+        fallback so the user gets unstuck in one keystroke."""
+        from advisor.__main__ import cmd_plan
+
+        parser = build_parser()
+        args = parser.parse_args(["plan", str(tmp_path / "nope")])
+        assert cmd_plan(args) == 2
+        err = capsys.readouterr().err
+        assert "target not found" in err
+        assert "check the path spelling" in err
+        assert "advisor plan ." in err
+
+    def test_target_is_file_suggests_parent_dir(self, tmp_path: Path, capsys) -> None:
+        """``advisor plan ./some_file.py`` is a common misconception
+        (advisor scans dirs, not single files). Suggest the parent."""
+        from advisor.__main__ import cmd_plan
+
+        f = tmp_path / "single.py"
+        f.write_text("x = 1\n")
+        parser = build_parser()
+        args = parser.parse_args(["plan", str(f)])
+        assert cmd_plan(args) == 2
+        err = capsys.readouterr().err
+        assert "must be a directory" in err
+        assert f"advisor plan {f.parent}" in err
+
+    def test_empty_plan_surfaces_p1_p5_scale(self, tmp_path: Path, capsys) -> None:
+        """Without the ladder explanation, "try --min-priority 1" is a
+        blind suggestion. Surface what each tier means."""
+        from advisor.__main__ import cmd_plan
+
+        # Empty tmp_path → nothing to rank → empty plan path.
+        parser = build_parser()
+        args = parser.parse_args(["plan", str(tmp_path), "--min-priority", "5"])
+        assert cmd_plan(args) == 0
+        out = capsys.readouterr().out
+        assert "P5=auth/secrets" in out
+        assert "P1=utils/tests" in out
+
+
+class TestCmdAuditUserFacingTips:
+    """The audit subcommand's no-checkpoint error must point at the
+    list command so the user can find a valid run_id."""
+
+    def test_missing_run_id_suggests_checkpoints_list(self, tmp_path: Path, capsys) -> None:
+        from advisor.__main__ import cmd_audit
+
+        parser = build_parser()
+        args = parser.parse_args(["audit", "20990101T000000Z-deadbeef", str(tmp_path)])
+        # The checkpoint doesn't exist, so cmd_audit returns 2 with the tip.
+        assert cmd_audit(args) == 2
+        err = capsys.readouterr().err
+        assert "no checkpoint" in err
+        assert f"advisor checkpoints {tmp_path}" in err
+
+
+class TestCmdHistoryUserFacingTips:
+    """The history --stats empty-state must explain the confirm
+    workflow + the value-prop, not just point at the file."""
+
+    def test_history_stats_empty_explains_workflow(self, tmp_path: Path, capsys) -> None:
+        from advisor.__main__ import cmd_history
+
+        parser = build_parser()
+        args = parser.parse_args(["history", str(tmp_path), "--stats"])
+        assert cmd_history(args) == 0
+        out = capsys.readouterr().out
+        assert "no history yet" in out
+        # Workflow hint + value-prop both present.
+        assert "/advisor" in out
+        assert "boost repeat-offender" in out
+
+
+class TestComponentStatusLabels:
+    """The status output shows what each component IS so a new user
+    can tell at a glance whether the rows mean ready-to-use, without
+    having to read the README to decode "nudge" / "skill"."""
+
+    def test_component_line_renders_human_label(self) -> None:
+        from advisor.__main__ import _component_line
+        from advisor.install import ComponentStatus
+
+        nudge = ComponentStatus(name="nudge", path=Path("/x/CLAUDE.md"), present=True, current=True)
+        line = _component_line(nudge)
+        # Strip ANSI so the assertion isn't fragile to color codes.
+        from advisor._style import strip_ansi
+
+        plain = strip_ansi(line)
+        assert "CLAUDE.md nudge" in plain
+        assert "installed" in plain
+
+    def test_component_line_skill_label(self) -> None:
+        from advisor.__main__ import _component_line
+        from advisor.install import ComponentStatus
+
+        skill = ComponentStatus(name="skill", path=Path("/x/SKILL.md"), present=True, current=True)
+        line = _component_line(skill)
+        from advisor._style import strip_ansi
+
+        assert "/advisor command" in strip_ansi(line)
+
+
 class TestCmdPlanJson:
     """``advisor plan --json`` emits parseable JSON with the expected shape."""
 
@@ -1348,6 +1458,64 @@ class TestCmdCheckpoints:
         rc = cli.main(["checkpoints", str(tmp_path), "--clear", "--quiet"])
         assert rc == 0
         assert list_checkpoints(tmp_path) == []
+
+    def test_clear_with_json_emits_summary(self, tmp_path, capsys):
+        """Regression: ``--clear --json`` previously fell into the quiet
+        branch and emitted no JSON, so scripted callers couldn't tell
+        success from a silent no-op."""
+        import json as _json
+
+        from advisor import __main__ as cli
+        from advisor.checkpoint import list_checkpoints
+
+        self._write_stub_checkpoint(tmp_path, "20260101T000000Z-a")
+        self._write_stub_checkpoint(tmp_path, "20260101T000001Z-b")
+        rc = cli.main(["checkpoints", str(tmp_path), "--clear", "--json"])
+        assert rc == 0
+        payload = _json.loads(capsys.readouterr().out)
+        assert payload["removed"] == 2
+        assert payload["failed"] == 0
+        assert list_checkpoints(tmp_path) == []
+
+    def test_clear_with_json_on_empty_dir(self, tmp_path, capsys):
+        """JSON payload reports zero on an empty target instead of
+        printing the pretty 'no checkpoints to remove' line."""
+        import json as _json
+
+        from advisor import __main__ as cli
+
+        rc = cli.main(["checkpoints", str(tmp_path), "--clear", "--json"])
+        assert rc == 0
+        payload = _json.loads(capsys.readouterr().out)
+        assert payload["removed"] == 0
+        assert payload["failed"] == 0
+
+    def test_clear_with_json_reports_failed_count(self, tmp_path, capsys, monkeypatch):
+        """When a checkpoint can't be unlinked, the JSON payload reflects
+        the failed count and the command exits 1 — letting scripts
+        distinguish "removed N" from "tried N, failed M". Uses a
+        Path.unlink monkeypatch instead of chmod because the test suite
+        may run as root (where directory-write bits don't block unlink)."""
+        import json as _json
+
+        from advisor import __main__ as cli
+
+        self._write_stub_checkpoint(tmp_path, "20260101T000000Z-x")
+        self._write_stub_checkpoint(tmp_path, "20260101T000001Z-y")
+
+        original_unlink = Path.unlink
+
+        def failing_unlink(self, *args, **kwargs):
+            if self.name.startswith("run-"):
+                raise OSError("simulated EACCES")
+            return original_unlink(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", failing_unlink)
+        rc = cli.main(["checkpoints", str(tmp_path), "--clear", "--json"])
+        payload = _json.loads(capsys.readouterr().out)
+        assert rc == 1
+        assert payload["failed"] == 2
+        assert payload["removed"] == 0
 
     def test_rm_and_clear_are_mutually_exclusive(self, tmp_path, capsys):
         from advisor import __main__ as cli
