@@ -636,3 +636,37 @@ class TestVersionBadge:
         from advisor.install import get_installed_skill_version
 
         assert get_installed_skill_version(path=tmp_path / "nope.md") is None
+
+
+class TestInstallHandlesMissingTarget:
+    def test_install_handles_missing_target(self, tmp_path: Path, monkeypatch):
+        """B2: if the file is unlinked between exists() and read(), treat as empty."""
+        import importlib
+
+        install_mod = importlib.import_module("advisor.install")
+
+        target = tmp_path / "CLAUDE.md"
+        target.write_text("", encoding="utf-8")
+
+        def boom(path, *a, **kw):
+            raise FileNotFoundError(f"gone: {path}")
+
+        monkeypatch.setattr(install_mod, "_read_text_capped_lf", boom)
+        result = install(path=target)
+        assert result.action == "installed"
+
+
+class TestEnsureNudgeSwallowsRuntimeError:
+    def test_ensure_nudge_swallows_runtime_error(self, tmp_path: Path, monkeypatch):
+        """B3: Path.home() raising RuntimeError must not propagate out of ensure_nudge."""
+        import importlib
+
+        install_mod = importlib.import_module("advisor.install")
+
+        def bad_home() -> Path:
+            raise RuntimeError("no home directory")
+
+        monkeypatch.setattr(install_mod.Path, "home", staticmethod(bad_home))
+        stream = importlib.import_module("io").StringIO()
+        # Should not raise
+        ensure_nudge(path=None, env={}, stream=stream)
