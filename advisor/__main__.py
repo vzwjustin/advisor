@@ -2425,17 +2425,10 @@ def cmd_live(args: argparse.Namespace) -> int:
         return 0
     if sub == "tail":
         limit = max(1, min(int(getattr(args, "limit", 50)), 1000))
-        since_arg = getattr(args, "since", None)
-        since = None
-        if since_arg is not None:
-            try:
-                since = max(0, int(since_arg))
-            except (TypeError, ValueError):
-                print(
-                    _style.error_box(f"--since must be an integer, got {since_arg!r}"),
-                    file=sys.stderr,
-                )
-                return 2
+        # ``--since`` is argparse-validated as a non-negative int
+        # (``type=_nonneg_int``), so the only values reaching here are
+        # ``None`` (unset) or ``int >= 0``. No runtime conversion needed.
+        since = getattr(args, "since", None)
         events = load_recent_events(target, since=since, limit=limit)
         if getattr(args, "json", False):
             print(

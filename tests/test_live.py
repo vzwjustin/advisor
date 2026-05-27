@@ -279,6 +279,34 @@ class TestLiveCli:
         assert events[0]["data"]["runner_name"] == "runner-1"
         assert events[0]["data"]["summary"] == "piped from stdin"
 
+    def test_record_data_dash_preserves_multiline_summary(self, tmp_path, monkeypatch):
+        """The motivation for ``--data -`` is payloads that don't fit
+        as a CLI flag — multi-line ``report_relay.summary`` bodies are
+        the canonical case. Embedded ``\\n`` inside the JSON string
+        must survive the stdin read + parse + append round-trip."""
+        import io
+
+        class _FakeStdin:
+            def __init__(self, payload: bytes):
+                self.buffer = io.BytesIO(payload)
+
+            def isatty(self) -> bool:
+                return False
+
+        # Multi-line summary uses ``\n`` inside the JSON string literal —
+        # what a shell heredoc emits when piping a real runner report.
+        payload = b'{"summary":"finding 1: leak\\nfinding 2: race\\nfinding 3: nil deref"}'
+        monkeypatch.setattr("sys.stdin", _FakeStdin(payload))
+        parser = build_parser()
+        args = parser.parse_args(
+            ["live", "record", "--kind", "report_relay", "--data", "-", "--quiet", str(tmp_path)]
+        )
+        assert cmd_live(args) == 0
+        events = load_recent_events(tmp_path)
+        assert events[0]["data"]["summary"] == (
+            "finding 1: leak\nfinding 2: race\nfinding 3: nil deref"
+        )
+
     def test_record_data_dash_rejects_tty(self, tmp_path, monkeypatch, capsys):
         """``--data -`` with no stdin pipe (interactive TTY) errors loudly
         instead of silently waiting on a never-coming read."""

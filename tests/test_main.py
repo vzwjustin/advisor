@@ -1380,6 +1380,33 @@ class TestCmdCheckpoints:
         assert payload["removed"] == 0
         assert payload["failed"] == 0
 
+    def test_clear_with_json_reports_failed_count(self, tmp_path, capsys, monkeypatch):
+        """When a checkpoint can't be unlinked, the JSON payload reflects
+        the failed count and the command exits 1 — letting scripts
+        distinguish "removed N" from "tried N, failed M". Uses a
+        Path.unlink monkeypatch instead of chmod because the test suite
+        may run as root (where directory-write bits don't block unlink)."""
+        import json as _json
+
+        from advisor import __main__ as cli
+
+        self._write_stub_checkpoint(tmp_path, "20260101T000000Z-x")
+        self._write_stub_checkpoint(tmp_path, "20260101T000001Z-y")
+
+        original_unlink = Path.unlink
+
+        def failing_unlink(self, *args, **kwargs):
+            if self.name.startswith("run-"):
+                raise OSError("simulated EACCES")
+            return original_unlink(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", failing_unlink)
+        rc = cli.main(["checkpoints", str(tmp_path), "--clear", "--json"])
+        payload = _json.loads(capsys.readouterr().out)
+        assert rc == 1
+        assert payload["failed"] == 2
+        assert payload["removed"] == 0
+
     def test_rm_and_clear_are_mutually_exclusive(self, tmp_path, capsys):
         from advisor import __main__ as cli
 

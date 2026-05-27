@@ -102,8 +102,14 @@ jobs:
           python - <<'PY'
           import json, os, sys
           threshold = os.environ["INPUT_FAIL_ON"].lower()
-          # Match advisor/__main__.py:_FAIL_ON_RANK + sarif._LEVEL_MAP.
+          # Match advisor/__main__.py:_FAIL_ON_RANK exactly so the gate's
+          # threshold semantics agree with the audit subcommand.
           rank = {"never": 99, "low": 1, "medium": 2, "high": 3, "critical": 4}
+          # Fallback for third-party SARIF that lacks ``properties.severity``:
+          # map the SARIF level back to an advisor rank. Lossy — CRITICAL and
+          # HIGH both emit SARIF ``error`` — so this branch cannot distinguish
+          # critical from high. Advisor's own SARIF writer emits
+          # ``properties.severity`` per result (see sarif.py); we prefer that.
           sarif_to_rank = {"error": 3, "warning": 2, "note": 1, "none": 0}
           gate = rank.get(threshold, 99)
           if gate == 99:
@@ -112,10 +118,22 @@ jobs:
               doc = json.load(fh)
           for run in doc.get("runs", []):
               for result in run.get("results", []):
-                  if sarif_to_rank.get(result.get("level", "warning"), 0) >= gate:
+                  props = result.get("properties") or {}
+                  # ``rank`` is keyed lowercase to match the fail-on input
+                  # values; ``properties.severity`` is emitted uppercase by
+                  # advisor's SARIF writer. Lowercase before lookup.
+                  sev = (props.get("severity") or "").strip().lower()
+                  if sev in rank:
+                      result_rank = rank[sev]
+                  else:
+                      result_rank = sarif_to_rank.get(
+                          result.get("level", "warning"), 0
+                      )
+                  if result_rank >= gate:
                       print(
-                          f"::error::advisor fail-on={threshold} tripped: at least "
-                          f"one finding at/above the threshold (see Code Scanning)"
+                          f"::error::advisor fail-on={threshold} tripped: at "
+                          f"least one finding at/above the threshold "
+                          f"(see Code Scanning)"
                       )
                       sys.exit(4)
           PY
