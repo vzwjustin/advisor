@@ -7,11 +7,13 @@ Thin wrapper over the existing builders. Prints prompts/plans to stdout so a
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import warnings
 from collections.abc import Callable, Sequence
@@ -58,16 +60,19 @@ from .install import (
     Status,
     _semver_tuple,
     check_for_update_cached,
+    codex_cli_available,
     ensure_nudge,
     fetch_pypi_latest_version,
     fetch_remote_changelog,
     get_installed_skill_version,
+    install_codex_skill,
     install_skill,
     install_update_skill,
     invalidate_update_check_cache,
     load_changelog_sections,
     load_release_notes,
     parse_changelog_sections,
+    uninstall_codex_skill,
     uninstall_skill,
     uninstall_update_skill,
     update_skill_path_for,
@@ -966,6 +971,128 @@ def cmd_plan(args: argparse.Namespace) -> int:
     return _emit_plan(args, target, tasks, batches, run_id=saved_run_id, resolved_config=cfg)
 
 
+def cmd_codex_plan_csv(args: argparse.Namespace) -> int:
+    """Emit a Codex-flavored dispatch CSV — one row per runner batch.
+
+    Codex's ``spawn_agents_on_csv`` subagent tool consumes a CSV where
+    each row is one work item: the runner reads its assigned files,
+    reports findings, and exits. This command produces that CSV by
+    running the same discovery + rank + focus pipeline as ``advisor
+    plan``, then formatting each batch into a CSV row whose ``prompt``
+    column carries the per-runner instruction text.
+
+    Prints the CSV path on stdout. The Codex SKILL.md reads that path
+    and passes it to ``spawn_agents_on_csv`` verbatim. The CSV lives
+    in a unique tempfile (via :func:`tempfile.NamedTemporaryFile`) so
+    concurrent ``$advisor`` invocations don't collide.
+    """
+    from .codex_skill import build_codex_runner_prompt
+
+    target = Path(args.target)
+    if not target.exists():
+        print(_style.error_box(f"target not found: {target}", stream=sys.stderr), file=sys.stderr)
+        return 2
+    if not target.is_dir():
+        print(
+            _style.error_box(
+                f"target must be a directory, got file: {target}",
+                stream=sys.stderr,
+            ),
+            file=sys.stderr,
+        )
+        return 2
+
+    paths, glob_err = _resolve_plan_files(target, args)
+    if glob_err is not None:
+        print(_style.error_box(glob_err, stream=sys.stderr), file=sys.stderr)
+        return 2
+
+    exclude_patterns: list[str] = list(getattr(args, "exclude", []) or [])
+    if exclude_patterns and paths:
+        paths = _apply_exclude_patterns(target, paths, exclude_patterns)
+
+    ranked = rank_files(
+        paths or [],
+        read_fn=_read_head,
+        ignore_patterns=load_advisorignore(target),
+    )
+    tasks = create_focus_tasks(
+        ranked,
+        max_tasks=None,
+        min_priority=args.min_priority,
+    )
+
+    if not tasks:
+        # spawn_agents_on_csv with zero rows is a degenerate dispatch —
+        # exit non-zero with a clear message so the Codex SKILL.md can
+        # surface it to the user instead of silently fanning out nothing.
+        print(
+            _style.error_box(
+                f"no files matched under {target} at min_priority={args.min_priority}; "
+                "nothing to dispatch",
+                stream=sys.stderr,
+            ),
+            file=sys.stderr,
+        )
+        return 1
+
+    # Always batch by ``--batch-size`` (default 5 files/batch). Codex's
+    # ``max_concurrency`` caps how many subagents run at once; the batch
+    # count drives total work. A small batch (1-3 files) lets each
+    # subagent fit its files in context; a larger batch trades context
+    # pressure for fewer dispatches.
+    batch_size = getattr(args, "batch_size", None) or 5
+    batches = create_focus_batches(tasks, files_per_batch=batch_size)
+
+    # Determine output path. ``--out`` lets callers (tests, CI) pin a
+    # specific location; without it, write to a tempfile and print the
+    # path on stdout so the Codex SKILL.md can capture it.
+    out_path: Path
+    if getattr(args, "out", None):
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        # ``delete=False`` so the file survives after the with-block —
+        # ``spawn_agents_on_csv`` reads it later in a different process.
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            prefix="advisor-codex-plan.",
+            suffix=".csv",
+            delete=False,
+            encoding="utf-8",
+            newline="",
+        ) as tmp:
+            out_path = Path(tmp.name)
+
+    # ``newline=""`` lets ``csv.writer`` emit its own ``\r\n`` row
+    # terminators per RFC 4180; Python's universal-newlines mode would
+    # otherwise double-translate on Windows. ``QUOTE_ALL`` covers the
+    # ``prompt`` column which embeds newlines, commas, and quotes.
+    with out_path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f, quoting=csv.QUOTE_ALL)
+        writer.writerow(["runner_id", "batch_id", "file_count", "max_priority", "files", "prompt"])
+        for i, batch in enumerate(batches, start=1):
+            runner_id = f"runner-{i}"
+            file_lines = [f"- `{t.file_path}` (P{t.priority})" for t in batch.tasks]
+            prompt = build_codex_runner_prompt(runner_id, file_lines)
+            writer.writerow(
+                [
+                    runner_id,
+                    str(batch.batch_id),
+                    str(len(batch.tasks)),
+                    str(batch.top_priority),
+                    "|".join(t.file_path for t in batch.tasks),
+                    prompt,
+                ]
+            )
+
+    # Single line of stdout: the CSV path. The Codex SKILL.md captures
+    # it and passes it to ``spawn_agents_on_csv``. No prose, no banner —
+    # the consumer is a tool, not a human.
+    print(str(out_path))
+    return 0
+
+
 def _batches_from_checkpoint(cp: Checkpoint) -> list[FocusBatch]:
     """Reconstruct :class:`FocusBatch` objects from a loaded checkpoint."""
     out: list[FocusBatch] = []
@@ -1461,11 +1588,17 @@ def _run_install_op(
     skill_fn: Callable[..., InstallResult],
     trailing_cta: tuple[str, str] | None,
     update_skill_fn: Callable[..., InstallResult] | None = None,
+    codex_skill_fn: Callable[..., InstallResult] | None = None,
 ) -> int:
     """Shared body for ``install`` / ``uninstall``: call nudge + skill +
-    optional update-skill ops, print per-component status lines, honor
-    ``--skip-skill``/``--strict``/``--quiet`` flags, and emit a trailing
-    call-to-action.
+    optional update-skill / codex-skill ops, print per-component status
+    lines, honor ``--skip-skill``/``--strict``/``--quiet`` flags, and
+    emit a trailing call-to-action. ``codex_skill_fn`` runs the Codex
+    ``~/.agents/skills/advisor/SKILL.md`` install or uninstall when the
+    caller supplied one — install paths gate on
+    :func:`codex_cli_available` so dead config is not written to hosts
+    without Codex; uninstall paths run unconditionally so a previously-
+    written codex skill is cleaned up even after the user removes Codex.
     """
     nudge_target = Path(args.path) if args.path else None
     skill_target = Path(args.skill_path) if args.skill_path else None
@@ -1506,10 +1639,29 @@ def _run_install_op(
             if not quiet:
                 print(_fmt_action("update", update_skill_result.action, update_skill_result.path))
 
+    codex_skill_action = InstallAction.SKIPPED.value
+    if codex_skill_fn is not None and not args.skip_skill:
+        try:
+            codex_skill_result = codex_skill_fn()
+        except (OSError, UnicodeDecodeError) as exc:
+            # Codex skill failures are non-fatal for the surrounding install —
+            # the Claude Code skill is the primary deliverable and a Codex
+            # write failure (read-only ``~/.agents``, hostile parent symlink,
+            # etc.) shouldn't sink the whole operation. Warn and move on.
+            msg = f"codex-skill: {exc}"
+            print(_style.warning_box(msg, stream=sys.stderr), file=sys.stderr)
+        else:
+            codex_skill_action = codex_skill_result.action
+            if not quiet:
+                print(
+                    _fmt_action("codex skill", codex_skill_result.action, codex_skill_result.path)
+                )
+
     if args.strict and (
         nudge_result.action in _NOOP_ACTIONS
         and skill_action in (*_NOOP_ACTIONS, InstallAction.SKIPPED.value)
         and update_skill_action in (*_NOOP_ACTIONS, InstallAction.SKIPPED.value)
+        and codex_skill_action in (*_NOOP_ACTIONS, InstallAction.SKIPPED.value)
     ):
         return _STRICT_NOOP_EXIT
     _CHANGE_ACTIONS = (InstallAction.INSTALLED.value, InstallAction.UPDATED.value)
@@ -1587,12 +1739,19 @@ def cmd_install(args: argparse.Namespace) -> int:
         )
         return 0 if ok else _STRICT_NOOP_EXIT
 
+    # Codex skill is gated on PATH detection — only install when ``codex`` is
+    # actually present so a Claude-only host doesn't accumulate dead config
+    # under ``~/.agents/skills/advisor/``. The uninstall path always passes
+    # through so a user who previously had Codex installed can clean up
+    # after removing it.
+    codex_install_fn = install_codex_skill if codex_cli_available() else None
     return _run_install_op(
         args,
         install_nudge,
         install_skill,
         ("/advisor <path>", "run the advisor on a codebase"),
         update_skill_fn=install_update_skill,
+        codex_skill_fn=codex_install_fn,
     )
 
 
@@ -1604,6 +1763,7 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
         uninstall_skill,
         ("advisor install", "reinstall if you change your mind"),
         update_skill_fn=uninstall_update_skill,
+        codex_skill_fn=uninstall_codex_skill,
     )
 
 
@@ -3258,6 +3418,58 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_plan.set_defaults(func=cmd_plan)
+
+    p_codex_csv = sub.add_parser(
+        "codex-plan-csv",
+        help=(
+            "Emit a Codex spawn_agents_on_csv dispatch CSV — one row per runner batch. "
+            "Called by the $advisor Codex skill; prints the CSV path on stdout."
+        ),
+    )
+    _add_common(p_codex_csv)
+    p_codex_csv.add_argument(
+        "--batch-size",
+        type=_pos_int_arg,
+        default=5,
+        help="Files per runner batch (default: 5). Smaller = more parallel subagents.",
+    )
+    p_codex_csv.add_argument(
+        "--exclude",
+        action="append",
+        default=None,
+        metavar="PATTERN",
+        help=(
+            "Exclude paths matching glob PATTERN (relative to target). May be "
+            "repeated. Applied after --file-types matching."
+        ),
+    )
+    p_codex_csv.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help=(
+            "Write the dispatch CSV to this path instead of a tempfile. Useful "
+            "for tests and reproducible local runs."
+        ),
+    )
+    # Git-scope selectors mirror ``advisor plan`` so a Codex review can target
+    # just the diff against ``main`` rather than the whole tree.
+    p_codex_csv.add_argument(
+        "--since",
+        default=None,
+        help="Limit dispatch to files changed since git rev SINCE (e.g. main, HEAD~5)",
+    )
+    p_codex_csv.add_argument(
+        "--staged",
+        action="store_true",
+        help="Limit dispatch to currently staged files",
+    )
+    p_codex_csv.add_argument(
+        "--branch",
+        default=None,
+        help="Limit dispatch to files differing from BRANCH",
+    )
+    p_codex_csv.set_defaults(func=cmd_codex_plan_csv)
 
     p_prompt = sub.add_parser("prompt", help="Print a step prompt for pasting into Claude Code")
     p_prompt.add_argument("step", choices=["advisor", "runner", "verify"])

@@ -23,7 +23,13 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
 
-from .install import OPT_OUT_ENV, Status, get_installed_skill_version
+from .install import (
+    OPT_OUT_ENV,
+    Status,
+    codex_cli_available,
+    default_codex_skill_path,
+    get_installed_skill_version,
+)
 from .install import status as install_status
 
 # Env vars scanned by ``default_team_config`` + other advisor surfaces.
@@ -238,6 +244,32 @@ def _check_claude_home() -> Check:
     return Check("claude-home", "ok", f"{claude_dir} is a regular directory")
 
 
+def _check_codex_skill_install() -> Check | None:
+    """Verify the Codex skill is installed when the ``codex`` CLI is present.
+
+    Returns ``None`` (skip the check) when Codex is not on ``PATH`` — a
+    Claude-only host has no use for ``~/.agents/skills/advisor/SKILL.md``
+    and a missing skill there is not a defect. When Codex IS installed
+    but the skill is absent, surface a ``warn`` with the remediation
+    command so the user knows ``$advisor`` will fail until they re-run
+    ``advisor install``.
+    """
+    if not codex_cli_available():
+        return None
+    skill_path = default_codex_skill_path()
+    if not skill_path.exists():
+        return Check(
+            "install-codex-skill",
+            "warn",
+            f"codex skill not installed at {skill_path} (run: advisor install)",
+        )
+    return Check(
+        "install-codex-skill",
+        "ok",
+        f"codex skill installed at {skill_path}",
+    )
+
+
 def _check_install(
     status: Status, installed_version: str | None, current_version: str
 ) -> list[Check]:
@@ -341,6 +373,9 @@ def run_doctor(
         _check_codex_home(),
         *_check_install(status, installed, version),
     ]
+    codex_skill_check = _check_codex_skill_install()
+    if codex_skill_check is not None:
+        checks.append(codex_skill_check)
     if not quiet and sys.stderr.isatty():
         sys.stderr.write("\033[2K\r")
         sys.stderr.flush()

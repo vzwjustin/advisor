@@ -11,6 +11,7 @@ import enum
 import math
 import os
 import re
+import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +20,7 @@ from typing import IO
 from . import _style
 from ._fs import atomic_write_text as _shared_atomic_write
 from ._fs import read_text_capped as _read_text_capped
+from .codex_skill import SKILL_MD_CODEX_RENDERED
 from .skill_asset import SKILL_MD, SKILL_MD_UPDATE
 
 
@@ -388,6 +390,15 @@ SKILL_DIR_NAME = "advisor"
 SKILL_FILE_NAME = "SKILL.md"
 UPDATE_SKILL_DIR_NAME = "advisor-update"
 
+# Codex CLI installs its USER-scope skills under ``~/.agents/skills/`` — the
+# OpenAI Codex docs identify ``$HOME/.agents/skills`` (alongside REPO-scope
+# ``$CWD/.agents/skills`` and ADMIN-scope ``/etc/codex/skills``) as the
+# canonical USER-scope path. The dir is intentionally NOT ``~/.codex`` — the
+# ``.agents`` prefix is shared across Codex front-ends (CLI, web, future
+# integrations) by design.
+CODEX_SKILLS_DIR_NAME = ".agents"
+CODEX_SKILLS_SUBDIR = "skills"
+
 NUDGE_BODY = """## Advisor Tool (review-and-fix pipeline)
 
 For strategic multi-file work — reviews, audits, root-cause hunts,
@@ -712,19 +723,41 @@ def ensure_nudge(
         print(_style.warning_box(msg), file=out)
         update_skill_result_action = InstallAction.UNCHANGED.value
 
+    # Codex skill — install only when the ``codex`` CLI is on PATH. Writing
+    # ``~/.agents/skills/advisor/SKILL.md`` to a host that doesn't have Codex
+    # would leave dead config the user never asked for. The check is cheap
+    # (``shutil.which`` is a stat per PATH entry) and runs on every advisor
+    # invocation as part of the auto-nudge, so a user who later installs
+    # Codex picks up the skill on their next ``advisor`` call.
+    codex_skill_result_action = InstallAction.UNCHANGED.value
+    codex_skill_target: Path | None = None
+    if codex_cli_available():
+        try:
+            codex_skill_res = install_codex_skill()
+            codex_skill_target = codex_skill_res.path
+            codex_skill_result_action = codex_skill_res.action
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            msg = f"codex skill write failed ({codex_skill_target}): {exc}"
+            errors.append(msg)
+            print(_style.warning_box(msg), file=out)
+            codex_skill_result_action = InstallAction.UNCHANGED.value
+
     _updated = {InstallAction.INSTALLED.value, InstallAction.UPDATED.value}
     if (
         nudge_result.action in _updated
         or skill_result_action in _updated
         or update_skill_result_action in _updated
+        or codex_skill_result_action in _updated
     ):
         pieces: list[str] = []
         if nudge_result.action in _updated:
-            pieces.append(f"  nudge     → {nudge_result.path}")
+            pieces.append(f"  nudge       → {nudge_result.path}")
         if skill_result_action in _updated:
-            pieces.append(f"  skill     → {skill_target}")
+            pieces.append(f"  skill       → {skill_target}")
         if update_skill_result_action in _updated:
-            pieces.append(f"  update    → {update_skill_target}")
+            pieces.append(f"  update      → {update_skill_target}")
+        if codex_skill_result_action in _updated and codex_skill_target is not None:
+            pieces.append(f"  codex skill → {codex_skill_target}")
 
         lines = [
             "",
@@ -1033,6 +1066,116 @@ def uninstall_update_skill(path: Path | None = None) -> InstallResult:
     parent = target.parent
     try:
         if parent.name == UPDATE_SKILL_DIR_NAME and not any(parent.iterdir()):
+            parent.rmdir()
+    except OSError:
+        pass
+    return InstallResult(path=target, action=InstallAction.REMOVED.value)
+
+
+# ── Codex skill install (writes ~/.agents/skills/advisor/SKILL.md) ──
+
+
+def default_codex_skills_root() -> Path:
+    """Return ``~/.agents/skills`` — Codex's USER-scope skills directory.
+
+    Distinct from :func:`default_skills_root` (which returns
+    ``~/.claude/skills``). The Codex CLI's subagent model can't drive the
+    Claude Code skill — its tools are not ``TeamCreate`` / ``Agent`` /
+    ``SendMessage`` — so the Codex skill ships a batch-mode pipeline
+    backed by ``advisor codex-plan-csv`` and Codex's native
+    ``spawn_agents_on_csv``.
+    """
+    return Path.home() / CODEX_SKILLS_DIR_NAME / CODEX_SKILLS_SUBDIR
+
+
+def default_codex_skill_path() -> Path:
+    return default_codex_skills_root() / SKILL_DIR_NAME / SKILL_FILE_NAME
+
+
+def codex_cli_available() -> bool:
+    """Return ``True`` when the ``codex`` binary is on ``PATH``.
+
+    Used by :func:`ensure_nudge` to gate the Codex skill install: writing
+    ``~/.agents/skills/advisor/SKILL.md`` when the user does not have
+    Codex installed would create dead config in their home directory
+    that contributes nothing. Cheap (``shutil.which`` is a stat over
+    each PATH entry).
+    """
+    return shutil.which("codex") is not None
+
+
+def install_codex_skill(
+    path: Path | None = None,
+    body: str = SKILL_MD_CODEX_RENDERED,
+) -> InstallResult:
+    """Write the Codex SKILL.md to ``path`` (default
+    ``~/.agents/skills/advisor/SKILL.md``).
+
+    Mirrors :func:`install_skill` — same ``$HOME`` containment guard,
+    same leaf-symlink rejection, same atomic write — but targets Codex's
+    USER-scope skills directory. The body is the Codex-flavored
+    activation sequence (``spawn_agents_on_csv`` + ``report_agent_job_result``)
+    rather than the Claude Code variant. Caller is responsible for only
+    invoking this when Codex is actually present on the machine; see
+    :func:`codex_cli_available`.
+    """
+    target = path or default_codex_skill_path()
+    if path is None:
+        if target.is_symlink():
+            raise OSError(f"refusing to install codex skill through symlink: {target}")
+        resolved = target.resolve()
+        if not resolved.is_relative_to(Path.home().resolve()):
+            raise OSError(f"refusing to install codex skill outside $HOME: {resolved}")
+        target = resolved
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    if target.exists():
+        try:
+            # CRLF-normalized — see install_skill's matching comment.
+            current = _read_text_capped_lf(target, _SKILL_MD_MAX_BYTES)
+        except (OSError, UnicodeDecodeError, ValueError):
+            current = ""
+        if current == body:
+            return InstallResult(path=target, action=InstallAction.UNCHANGED.value)
+        installed_v = parse_badge(current)
+        bundled_v = parse_badge(body)
+        if (
+            installed_v is not None
+            and bundled_v is not None
+            and _is_semver_newer(installed_v, bundled_v)
+        ):
+            print(
+                _style.warning_box(
+                    f"overwriting codex SKILL.md v{installed_v} with bundled "
+                    f"v{bundled_v} (downgrade); the installed copy is newer.",
+                    stream=sys.stderr,
+                ),
+                file=sys.stderr,
+            )
+        _atomic_write_text(target, body)
+        return InstallResult(path=target, action=InstallAction.UPDATED.value)
+
+    _atomic_write_text(target, body)
+    return InstallResult(path=target, action=InstallAction.INSTALLED.value)
+
+
+def uninstall_codex_skill(path: Path | None = None) -> InstallResult:
+    """Remove the Codex SKILL.md and its parent directory if empty.
+
+    Mirrors :func:`uninstall_skill` — same symlink rejection, same parent
+    cleanup — but targets ``~/.agents/skills/advisor/SKILL.md``. The
+    ``~/.agents/skills`` root is left alone even when empty so Codex
+    keeps registering its own skills there.
+    """
+    target = path or default_codex_skill_path()
+    if not target.exists():
+        return InstallResult(path=target, action=InstallAction.ABSENT.value)
+    if target.is_symlink():
+        raise OSError(f"refusing to unlink symlink at {target}; remove it manually if intended")
+    target.unlink()
+    parent = target.parent
+    try:
+        if parent.name == SKILL_DIR_NAME and not any(parent.iterdir()):
             parent.rmdir()
     except OSError:
         pass
