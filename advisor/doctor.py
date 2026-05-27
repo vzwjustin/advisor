@@ -127,10 +127,15 @@ def _check_git() -> Check:
 def _check_codex_cli() -> Check:
     if shutil.which("codex"):
         return Check("codex-cli", "ok", "`codex` CLI available on PATH")
+    # Soften the message: the vast majority of users only use Claude
+    # Code, and the prior wording ("you cannot run the live pipeline
+    # from this shell") read as though advisor itself was broken. Make
+    # it explicit that Claude Code's `/advisor` is unaffected.
     return Check(
         "codex-cli",
         "warn",
-        "`codex` CLI not on PATH; you cannot run the live pipeline from this shell",
+        "`codex` CLI not on PATH — Codex variant unavailable "
+        "(Claude Code `/advisor` is unaffected)",
     )
 
 
@@ -370,12 +375,21 @@ def run_doctor(
         _check_claude_cli(),
         _check_codex_cli(),
         _check_claude_home(),
-        _check_codex_home(),
-        *_check_install(status, installed, version),
     ]
-    codex_skill_check = _check_codex_skill_install()
-    if codex_skill_check is not None:
-        checks.append(codex_skill_check)
+    # Gate the codex-home + codex-skill checks on whether the user has
+    # Codex installed at all. A Claude-only user previously saw two
+    # yellow Codex warnings (`codex-cli` + `codex-home`) followed by
+    # "healthy" — confusing. ``_check_codex_cli`` still fires (one
+    # softened warning) so the user knows the Codex variant exists;
+    # the other two checks only matter if they're using Codex.
+    codex_present = codex_cli_available()
+    if codex_present:
+        checks.append(_check_codex_home())
+    checks.extend(_check_install(status, installed, version))
+    if codex_present:
+        codex_skill_check = _check_codex_skill_install()
+        if codex_skill_check is not None:
+            checks.append(codex_skill_check)
     if not quiet and sys.stderr.isatty():
         sys.stderr.write("\033[2K\r")
         sys.stderr.flush()

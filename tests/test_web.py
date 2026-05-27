@@ -575,8 +575,16 @@ class TestStaticUiState:
     def test_poll_uses_token_when_present(self):
         """Client prefers the higher-resolution ``token`` field for
         change detection, falling back to ``last_mtime`` when the server
-        omits it (older server compat)."""
-        assert "let lastToken = null;" in APP_JS
+        omits it (older server compat).
+
+        Note: ``lastToken`` / ``lastMtime`` are initialized to a unique
+        sentinel string (NOT ``null``) so the first poll always triggers
+        ``refetchFindings`` even when ``/api/status`` returns ``null``
+        for both fields (fresh checkout with no history file). See the
+        comment in ``app.js`` for the regression that motivated this.
+        """
+        assert "let lastToken = '__uninitialized__';" in APP_JS
+        assert "let lastMtime = '__uninitialized__';" in APP_JS
         assert "const hasToken = typeof data.token === 'string';" in APP_JS
         assert "data.token !== lastToken" in APP_JS
         assert "data.last_mtime !== lastMtime" in APP_JS

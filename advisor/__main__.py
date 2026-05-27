@@ -761,6 +761,12 @@ def cmd_plan(args: argparse.Namespace) -> int:
     target = Path(args.target)
     if not target.exists():
         print(_style.error_box(f"target not found: {target}", stream=sys.stderr), file=sys.stderr)
+        # Path-spelling errors are the most common cause; suggesting the
+        # current-directory fallback gets the user un-stuck in one keypress.
+        print(
+            _style.tip("check the path spelling, or run: advisor plan ."),
+            file=sys.stderr,
+        )
         return 2
     if not target.is_dir():
         # Path exists but isn't a directory — fail loudly instead of
@@ -770,6 +776,14 @@ def cmd_plan(args: argparse.Namespace) -> int:
             _style.error_box(
                 f"target must be a directory, got file: {target}",
                 stream=sys.stderr,
+            ),
+            file=sys.stderr,
+        )
+        # A file path is almost always either a typo (meant the parent
+        # dir) or a misconception (advisor scans dirs, not single files).
+        print(
+            _style.tip(
+                f"to scan its directory: advisor plan {target.parent}",
             ),
             file=sys.stderr,
         )
@@ -1342,6 +1356,15 @@ def _emit_plan(
             print(_style.tip("try a broader git scope or remove the filter"))
         else:
             print(_style.dim(f"no files at priority P{args.min_priority}+ in {target}"))
+            # Surface the P1-P5 scale so the user can decide which tier
+            # they actually want — "try --min-priority 1" without the
+            # ladder context is a blind suggestion.
+            print(
+                _style.dim(
+                    "  (P5=auth/secrets · P4=input/parsing · P3=handlers/db · "
+                    "P2=config/crypto · P1=utils/tests)"
+                )
+            )
             print(_style.tip("try --min-priority 1 to include all files"))
             print(_style.tip("or adjust --file-types to match your file extensions"))
         return 0
@@ -1518,6 +1541,17 @@ _STRICT_NOOP_EXIT = 3
 _NOOP_ACTIONS = frozenset({InstallAction.UNCHANGED.value, InstallAction.ABSENT.value})
 
 
+# Internal component names (``nudge`` / ``skill`` / ``update-skill``)
+# are opaque to a first-time user. Show what each one actually IS in
+# the status output so they can tell at a glance whether the rows mean
+# "ready to use" without reading the source.
+_COMPONENT_LABELS: dict[str, str] = {
+    "nudge": "CLAUDE.md nudge",
+    "skill": "/advisor command",
+    "update-skill": "/advisor-update",
+}
+
+
 def _component_line(c: ComponentStatus) -> str:
     key = "ok" if c.present and c.current else "outdated" if c.present else "missing"
     _, fancy, ascii_, color = _style.STATE_GLYPHS[key]
@@ -1527,7 +1561,8 @@ def _component_line(c: ComponentStatus) -> str:
         _style.paint(_style.glyph(fancy, ascii_), color) if color else _style.glyph(fancy, ascii_)
     )
     state = _style.paint(component_label, color) if color else component_label
-    name_col = _style.paint(f"{c.name:<6}", "cyan", "bold")
+    human = _COMPONENT_LABELS.get(c.name, c.name)
+    name_col = _style.paint(f"{human:<17}", "cyan", "bold")
     return f"  {mark} {name_col} {state:<10} {_style.dim(str(c.path))}"
 
 
@@ -1706,6 +1741,17 @@ def _run_install_op(
         and update_skill_action in (*_NOOP_ACTIONS, InstallAction.SKIPPED.value)
         and codex_skill_action in (*_NOOP_ACTIONS, InstallAction.SKIPPED.value)
     ):
+        # Silent exit-3 confuses CI users — they can't tell if the
+        # build failed or the install was already complete. Surface a
+        # dim one-liner so the exit-code semantics are visible even
+        # under --strict (still honoured by --quiet).
+        if not quiet:
+            print(
+                _style.dim(
+                    f"  · nothing to install — already current (exit {_STRICT_NOOP_EXIT}, --strict)"
+                ),
+                file=sys.stderr,
+            )
         return _STRICT_NOOP_EXIT
     _CHANGE_ACTIONS = (InstallAction.INSTALLED.value, InstallAction.UPDATED.value)
     if (
@@ -1780,6 +1826,14 @@ def cmd_install(args: argparse.Namespace) -> int:
             and s.skill.current
             and update_ok
         )
+        # Mirror cmd_status: when everything's healthy, show the next-
+        # step CTA so a user running ``install --check`` knows they're
+        # done AND where to go next. Without this they get a wall of
+        # checkmarks and no direction. ``--json`` callers don't want
+        # the CTA; ``--quiet`` suppresses it.
+        if ok and not quiet and not getattr(args, "json", False):
+            print()
+            print(_style.cta("/advisor <path>", "run the advisor on a codebase"))
         return 0 if ok else _STRICT_NOOP_EXIT
 
     # Codex skill is gated on PATH detection — only install when ``codex`` is
@@ -2290,7 +2344,14 @@ def cmd_history(args: argparse.Namespace) -> int:
             return 0
         if not all_entries:
             print(_style.dim(f"no history yet at {target}/.advisor/history.jsonl"))
-            print(_style.tip("findings are logged when you confirm them during a run"))
+            # First-time users don't know what "confirm" means in this
+            # context. Spell out the workflow + the value-prop so they
+            # have a reason to bother (history boosts repeat-offender
+            # files in the next plan).
+            print(_style.tip("run /advisor . in Claude Code, then confirm findings when prompted"))
+            print(
+                _style.dim("  confirmed findings accumulate here and boost repeat-offender ranking")
+            )
             return 0
         print(_format_history_stats(target, summary))
         if not getattr(args, "quiet", False):
@@ -3173,6 +3234,14 @@ def cmd_audit(args: argparse.Namespace) -> int:
         cp = load_checkpoint(target, args.run_id)
     except (FileNotFoundError, ValueError) as exc:
         print(_style.error_box(str(exc), stream=sys.stderr), file=sys.stderr)
+        # No checkpoint at the given run_id is almost always either a
+        # typo (the IDs are 25-char timestamp-hex strings) or a user
+        # who's never checkpointed. Point them at the list command so
+        # they don't have to guess.
+        print(
+            _style.tip(f"list available run IDs with: advisor checkpoints {target}"),
+            file=sys.stderr,
+        )
         return 2
 
     transcript_arg = args.transcript or "-"

@@ -346,6 +346,116 @@ class TestConfigFromArgs:
         assert cfg.runner_file_read_ceiling == 20
 
 
+class TestCmdPlanUserFacingTips:
+    """High-ROI UX: error / empty-state paths must surface an actionable
+    next step rather than just complaining. These are the lines a new
+    user sees first when they fumble the invocation."""
+
+    def test_target_not_found_suggests_path_spelling_and_cwd_fallback(
+        self, tmp_path: Path, capsys
+    ) -> None:
+        """A missing path is almost always a typo. Surface the cwd
+        fallback so the user gets unstuck in one keystroke."""
+        from advisor.__main__ import cmd_plan
+
+        parser = build_parser()
+        args = parser.parse_args(["plan", str(tmp_path / "nope")])
+        assert cmd_plan(args) == 2
+        err = capsys.readouterr().err
+        assert "target not found" in err
+        assert "check the path spelling" in err
+        assert "advisor plan ." in err
+
+    def test_target_is_file_suggests_parent_dir(self, tmp_path: Path, capsys) -> None:
+        """``advisor plan ./some_file.py`` is a common misconception
+        (advisor scans dirs, not single files). Suggest the parent."""
+        from advisor.__main__ import cmd_plan
+
+        f = tmp_path / "single.py"
+        f.write_text("x = 1\n")
+        parser = build_parser()
+        args = parser.parse_args(["plan", str(f)])
+        assert cmd_plan(args) == 2
+        err = capsys.readouterr().err
+        assert "must be a directory" in err
+        assert f"advisor plan {f.parent}" in err
+
+    def test_empty_plan_surfaces_p1_p5_scale(self, tmp_path: Path, capsys) -> None:
+        """Without the ladder explanation, "try --min-priority 1" is a
+        blind suggestion. Surface what each tier means."""
+        from advisor.__main__ import cmd_plan
+
+        # Empty tmp_path → nothing to rank → empty plan path.
+        parser = build_parser()
+        args = parser.parse_args(["plan", str(tmp_path), "--min-priority", "5"])
+        assert cmd_plan(args) == 0
+        out = capsys.readouterr().out
+        assert "P5=auth/secrets" in out
+        assert "P1=utils/tests" in out
+
+
+class TestCmdAuditUserFacingTips:
+    """The audit subcommand's no-checkpoint error must point at the
+    list command so the user can find a valid run_id."""
+
+    def test_missing_run_id_suggests_checkpoints_list(self, tmp_path: Path, capsys) -> None:
+        from advisor.__main__ import cmd_audit
+
+        parser = build_parser()
+        args = parser.parse_args(["audit", "20990101T000000Z-deadbeef", str(tmp_path)])
+        # The checkpoint doesn't exist, so cmd_audit returns 2 with the tip.
+        assert cmd_audit(args) == 2
+        err = capsys.readouterr().err
+        assert "no checkpoint" in err
+        assert f"advisor checkpoints {tmp_path}" in err
+
+
+class TestCmdHistoryUserFacingTips:
+    """The history --stats empty-state must explain the confirm
+    workflow + the value-prop, not just point at the file."""
+
+    def test_history_stats_empty_explains_workflow(self, tmp_path: Path, capsys) -> None:
+        from advisor.__main__ import cmd_history
+
+        parser = build_parser()
+        args = parser.parse_args(["history", str(tmp_path), "--stats"])
+        assert cmd_history(args) == 0
+        out = capsys.readouterr().out
+        assert "no history yet" in out
+        # Workflow hint + value-prop both present.
+        assert "/advisor" in out
+        assert "boost repeat-offender" in out
+
+
+class TestComponentStatusLabels:
+    """The status output shows what each component IS so a new user
+    can tell at a glance whether the rows mean ready-to-use, without
+    having to read the README to decode "nudge" / "skill"."""
+
+    def test_component_line_renders_human_label(self) -> None:
+        from advisor.__main__ import _component_line
+        from advisor.install import ComponentStatus
+
+        nudge = ComponentStatus(name="nudge", path=Path("/x/CLAUDE.md"), present=True, current=True)
+        line = _component_line(nudge)
+        # Strip ANSI so the assertion isn't fragile to color codes.
+        from advisor._style import strip_ansi
+
+        plain = strip_ansi(line)
+        assert "CLAUDE.md nudge" in plain
+        assert "installed" in plain
+
+    def test_component_line_skill_label(self) -> None:
+        from advisor.__main__ import _component_line
+        from advisor.install import ComponentStatus
+
+        skill = ComponentStatus(name="skill", path=Path("/x/SKILL.md"), present=True, current=True)
+        line = _component_line(skill)
+        from advisor._style import strip_ansi
+
+        assert "/advisor command" in strip_ansi(line)
+
+
 class TestCmdPlanJson:
     """``advisor plan --json`` emits parseable JSON with the expected shape."""
 
