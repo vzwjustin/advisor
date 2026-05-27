@@ -94,10 +94,24 @@ class Suppression:
             return False
         if self.file_glob is not None and not _matches_glob(
             normalized_finding_path,
-            normalize_path(self.file_glob),
+            _normalize_glob_pattern(self.file_glob),
         ):
             return False
         return True
+
+
+def _normalize_glob_pattern(pattern: str) -> str:
+    """Normalize a glob pattern for use in :func:`_matches_glob`.
+
+    Does only the minimum safe transforms: backslash → forward-slash and
+    BOM strip.  Unlike :func:`~advisor._fs.normalize_path` it does NOT
+    strip trailing ``:digits`` or ``:digits:digits`` suffixes — those are
+    valid *literal* characters in a glob (e.g. ``src/*:42`` to match only
+    findings whose path key ends with ``:42``).  Applying
+    ``normalize_path`` to a glob would silently widen ``src/*:42`` to
+    ``src/*``, matching findings that should not be suppressed.
+    """
+    return pattern.lstrip("\ufeff").replace("\\", "/")
 
 
 def _matches_glob(file_path: str, pattern: str) -> bool:

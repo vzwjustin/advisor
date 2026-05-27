@@ -533,3 +533,32 @@ def test_mismatched_fence_markers_recover():
     findings = list(parse_findings_from_text(text))
     assert len(findings) == 1
     assert findings[0].fix == "use parameterized queries"
+
+
+class TestSafeInline:
+    """Regression: _safe_inline must strip all C0 controls, not just NUL/CR/LF."""
+
+    def test_safe_inline_strips_all_c0_controls(self) -> None:
+        from advisor.verify import _safe_inline
+
+        # Chars that the old replace-chain missed
+        assert _safe_inline("a\x07b") == "ab", "BEL (U+0007) not stripped"
+        assert _safe_inline("a\x0bb") == "ab", "VT (U+000B) not stripped"
+        assert _safe_inline("a\x0cb") == "ab", "FF (U+000C) not stripped"
+        assert _safe_inline("a\x7fb") == "ab", "DEL (U+007F) not stripped"
+        # Chars that the old chain handled (regression guard)
+        assert _safe_inline("a\x00b") == "ab", "NUL (U+0000) not stripped"
+        assert _safe_inline("a\nb") == "ab", "LF not stripped"
+        assert _safe_inline("a\rb") == "ab", "CR not stripped"
+        # Unicode line separators
+        assert _safe_inline("a\u2028b") == "ab", "U+2028 not stripped"
+        assert _safe_inline("a\u2029b") == "ab", "U+2029 not stripped"
+        assert _safe_inline("a\x85b") == "ab", "NEL (U+0085) not stripped"
+        # Zero-width and invisible chars
+        assert _safe_inline("a\u200bb") == "ab", "U+200B not stripped"
+        assert _safe_inline("a\u200cb") == "ab", "U+200C not stripped"
+        assert _safe_inline("a\u200db") == "ab", "U+200D not stripped"
+        assert _safe_inline("a\ufeffb") == "ab", "U+FEFF not stripped"
+        assert _safe_inline("a\u00adb") == "ab", "U+00AD not stripped"
+        # Normal text must survive intact
+        assert _safe_inline("hello world") == "hello world"
