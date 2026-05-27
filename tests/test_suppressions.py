@@ -358,3 +358,32 @@ class TestApply:
         kept_nested, dropped_nested = apply_suppressions([f_nested], supp)
         assert kept_nested == [f_nested]
         assert dropped_nested == []
+
+
+# ---------------------------------------------------------------------------
+# Regression test for Wave 3 — H2
+# ---------------------------------------------------------------------------
+
+
+def test_suppressions_rule_id_handles_lone_surrogates() -> None:
+    """H2 (suppressions site): apply_suppressions must not raise
+    UnicodeEncodeError when a Finding description contains lone surrogates.
+
+    synthesize_rule_id (called when f.rule_id is None) hashes the description
+    via .encode('utf-8'), which raises on lone surrogates without
+    errors='surrogatepass'.
+    """
+    from advisor.sarif import synthesize_rule_id
+    from advisor.suppressions import apply_suppressions
+
+    description = "issue with surrogate \ud800"
+    # Pre-compute the synthesized rule_id — this must not raise.
+    rid = synthesize_rule_id("HIGH", description)
+
+    supp = Suppression(rule_id=rid, reason="noise")
+    finding = _f(description=description, rule_id=None)
+    # apply_suppressions synthesizes the rule_id internally; must not raise.
+    kept, dropped = apply_suppressions([finding], [supp])
+    assert kept == []
+    assert len(dropped) == 1
+

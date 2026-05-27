@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
@@ -98,6 +99,7 @@ def _normalize_identity_path(path: str) -> str:
     # Empty input stays empty; ``posixpath.normpath('')`` returns ``'.'``
     # which we don't want as a sentinel.
     if normalized and normalized != ".":
+        normalized = re.sub(r"^/{2,}", "/", normalized)
         collapsed = _pp.normpath(normalized)
         normalized = "" if collapsed == "." else collapsed
     while normalized.startswith("./"):
@@ -148,7 +150,7 @@ def _description_hash(description: str) -> str:
     size. SHA-1 is used for stability, not security.
     """
     normalized = " ".join(description[:120].split())
-    return hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha1(normalized.encode("utf-8", errors="surrogatepass")).hexdigest()[:16]
 
 
 def findings_to_entries(findings: list[Finding]) -> list[BaselineEntry]:
@@ -261,6 +263,32 @@ def read_baseline(path: Path) -> list[BaselineEntry]:
     return entries
 
 
+def _baseline_path_index(
+    baseline: list[BaselineEntry],
+) -> dict[tuple[str, str], list[str]]:
+    """Map (rule_id, description_hash) → list of normalized paths.
+
+    Used for absolute/relative path suffix aliasing (H4): when a finding's
+    normalized path and a baseline entry's normalized path differ only by
+    an absolute-vs-relative prefix, one will be a path-component suffix of
+    the other (e.g. ``src/auth.py`` is a suffix of ``/home/runner/src/auth.py``).
+    """
+    idx: dict[tuple[str, str], list[str]] = {}
+    for e in baseline:
+        idx.setdefault((e.rule_id, e.description_hash), []).append(
+            _normalize_identity_path(e.file_path)
+        )
+    return idx
+
+
+def _suffix_alias_match(path_norm: str, baseline_paths: list[str]) -> bool:
+    """Return True if ``path_norm`` is an abs/rel alias of any baseline path."""
+    for bp in baseline_paths:
+        if bp.endswith(f"/{path_norm}") or path_norm.endswith(f"/{bp}"):
+            return True
+    return False
+
+
 def filter_against_baseline(
     findings: list[Finding],
     baseline: list[BaselineEntry],
@@ -271,10 +299,15 @@ def filter_against_baseline(
     :func:`findings_to_entries`. The function is pure — no I/O, no logging.
     """
     baseline_keys = {e.key() for e in baseline}
+    # H4: secondary index for absolute/relative path aliasing.
+    path_idx = _baseline_path_index(baseline)
     new_findings: list[Finding] = []
     suppressed: list[Finding] = []
     for f in findings:
-        if _finding_key(f) in baseline_keys:
+        key = _finding_key(f)
+        if key in baseline_keys or _suffix_alias_match(
+            key[0], path_idx.get((key[1], key[2]), [])
+        ):
             suppressed.append(f)
         else:
             new_findings.append(f)
@@ -311,17 +344,30 @@ def diff_against_baseline(
     "what disappeared" can read that name.
     """
     baseline_by_key = {e.key(): e for e in baseline}
-    current_keys: set[tuple[str, str, str]] = set()
+    # H4: secondary index for absolute/relative path aliasing.
+    path_idx = _baseline_path_index(baseline)
+    # Track which baseline keys were matched (exact or via alias).
+    matched_baseline_keys: set[tuple[str, str, str]] = set()
     new_findings: list[Finding] = []
     persisting: list[Finding] = []
     for f in findings:
         key = _finding_key(f)
-        current_keys.add(key)
         if key in baseline_by_key:
+            matched_baseline_keys.add(key)
+            persisting.append(f)
+        elif _suffix_alias_match(key[0], path_idx.get((key[1], key[2]), [])):
+            # Mark the aliased baseline entry as matched so it is not
+            # counted as "fixed".
+            for e in baseline:
+                if e.rule_id == key[1] and e.description_hash == key[2]:
+                    bp = _normalize_identity_path(e.file_path)
+                    if bp.endswith(f"/{key[0]}") or key[0].endswith(f"/{bp}"):
+                        matched_baseline_keys.add(e.key())
+                        break
             persisting.append(f)
         else:
             new_findings.append(f)
-    fixed = [baseline_by_key[k] for k in baseline_by_key.keys() - current_keys]
+    fixed = [e for e in baseline if e.key() not in matched_baseline_keys]
     return BaselineDiff(
         new=new_findings,
         persisting=persisting,

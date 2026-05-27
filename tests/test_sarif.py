@@ -598,3 +598,58 @@ def test_strip_controls_strips_bidi_on_both_paths():
     # reviewer — the "trojan source" attack class.
     assert _strip_controls("text‮evil", keep_block_whitespace=False) == "textevil"
     assert _strip_controls("text‮evil", keep_block_whitespace=True) == "textevil"
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for Wave 3 — H1, H2, H3
+# ---------------------------------------------------------------------------
+
+
+def test_parse_file_path_rejects_double_minus(tmp_path: Path) -> None:
+    """H1: _parse_file_path must not raise ValueError on 'path:--5'.
+
+    Previously _is_int_token stripped ALL leading '-' via lstrip('-'), so
+    '--5'.lstrip('-') == '5' (isdigit True), '--5' was accepted as a numeric
+    token, and int('--5') raised ValueError aborting SARIF emission.
+    """
+    from advisor.sarif import _parse_file_path
+
+    # Must not raise; double-minus token is not a valid int token and
+    # should be left in the path component.
+    path, line, _col, _end = _parse_file_path("src/foo.py:--5")
+    # '--5' is not a valid int-token after the fix, so no line is extracted
+    # and the token stays embedded in the path.
+    assert line is None
+    assert "--5" in path or path == "src/foo.py"
+
+
+def test_synthesize_rule_id_handles_lone_surrogates() -> None:
+    """H2 (sarif site): synthesize_rule_id must not raise on lone surrogates."""
+    result = synthesize_rule_id("HIGH", "description with surrogate \ud800")
+    assert result.startswith("advisor/high/")
+
+
+def test_resolve_relative_handles_oserror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """H3: _resolve_relative must re-raise OSError from Path.resolve() as ValueError.
+
+    Path.resolve() can raise OSError on symlink loops (ELOOP) or permission
+    errors (EACCES). Previously only ValueError was caught, so OSError
+    propagated uncaught and aborted SARIF emission.
+    """
+    import pathlib
+
+    from advisor.sarif import _resolve_relative
+
+    target_resolved = tmp_path.resolve()  # resolve before patch
+
+    def raise_oserror(self: pathlib.Path, *args: object, **kwargs: object) -> pathlib.Path:
+        raise OSError("simulated ELOOP")
+
+    monkeypatch.setattr(pathlib.Path, "resolve", raise_oserror)
+
+    # Should raise ValueError (not OSError) because the fix catches both.
+    with pytest.raises(ValueError):
+        _resolve_relative("/abs/src/auth.py", tmp_path, target_resolved=target_resolved)
+

@@ -140,3 +140,57 @@ class TestDiff:
         assert diff.new == []
         assert diff.persisting == current
         assert diff.fixed == []
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for Wave 3 — H2, H4, H5
+# ---------------------------------------------------------------------------
+
+
+def test_baseline_rule_id_handles_lone_surrogates() -> None:
+    """H2 (baseline site): findings_to_entries / filter_against_baseline must
+    not raise UnicodeEncodeError on descriptions containing lone surrogates."""
+    finding = _f("src/auth.py", "issue with surrogate \ud800")
+    entries = findings_to_entries([finding])
+    assert len(entries) == 1
+    # Round-trip: filter against the just-written baseline must not raise.
+    new, suppressed = filter_against_baseline([finding], entries)
+    assert new == []
+    assert len(suppressed) == 1
+
+
+def test_baseline_identity_aliases_absolute_and_relative() -> None:
+    """H4: baseline written with relative paths must match findings with absolute
+    paths (and vice-versa), so CI runs that emit absolute paths don't resurface
+    every suppressed finding as 'new' on a local run using relative paths."""
+    # Baseline written with relative path.
+    baseline = findings_to_entries([_f("src/auth.py:10", "issue")])
+
+    # Current finding uses an absolute path that ends with the relative path.
+    abs_finding = _f("/home/runner/work/repo/src/auth.py:10", "issue")
+    new, suppressed = filter_against_baseline([abs_finding], baseline)
+    assert new == [], "absolute-path variant should be suppressed by relative-path baseline"
+    assert len(suppressed) == 1
+
+    # Reverse: baseline written with absolute path, current uses relative.
+    baseline_abs = findings_to_entries([_f("/home/runner/work/repo/src/auth.py:10", "issue")])
+    rel_finding = _f("src/auth.py:10", "issue")
+    new2, suppressed2 = filter_against_baseline([rel_finding], baseline_abs)
+    assert new2 == [], "relative-path variant should be suppressed by absolute-path baseline"
+    assert len(suppressed2) == 1
+
+
+def test_baseline_normalize_collapses_leading_double_slash() -> None:
+    """H5: _normalize_identity_path must collapse leading '//' to '/' so
+    network-mount or typo paths like '//foo.py' do not produce a distinct
+    identity key from '/foo.py'.  POSIX normpath preserves '//' by design;
+    the fix applies re.sub before normpath."""
+    from advisor.baseline import _normalize_identity_path
+
+    assert _normalize_identity_path("//src/auth.py") == "/src/auth.py"
+    assert _normalize_identity_path("///src/auth.py") == "/src/auth.py"
+    # Single slash is unaffected.
+    assert _normalize_identity_path("/src/auth.py") == "/src/auth.py"
+    # Findings with '//foo.py' and '/foo.py' now produce the same key.
+    assert _normalize_identity_path("//foo.py") == _normalize_identity_path("/foo.py")
+

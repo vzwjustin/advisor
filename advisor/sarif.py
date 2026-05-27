@@ -159,7 +159,7 @@ def synthesize_rule_id(severity: str, description: str, *, prefix: str = "adviso
     finding count by orders of magnitude. SHA-1 is used for stability,
     not security; the input is severity-bucketed description text.
     """
-    slug = hashlib.sha1(description.encode("utf-8")).hexdigest()[:16]
+    slug = hashlib.sha1(description.encode("utf-8", errors="surrogatepass")).hexdigest()[:16]
     return f"{prefix}/{severity.lower()}/{slug}"
 
 
@@ -241,7 +241,7 @@ def _parse_file_path(
     # ``-5`` peeled off as a numeric token rather than left embedded in
     # the URI as ``%3A-5``. Downstream clamps negative values to 1.
     def _is_int_token(s: str) -> bool:
-        return s.lstrip("-").isdigit() and s != "-"
+        return (s[1:] if s.startswith("-") else s).isdigit() and s != "-"
 
     all_parts = body.split(":")
     trailing_non_numeric: list[str] = []
@@ -282,7 +282,7 @@ def _resolve_relative(path: str, target_dir: Path, target_resolved: Path | None 
     if p.is_absolute():
         try:
             rel = p.resolve().relative_to(target_resolved)
-        except ValueError as exc:
+        except (OSError, ValueError) as exc:
             raise ValueError(
                 f"file_path {path!r} is outside target_dir {target_dir!s}; "
                 f"SARIF requires paths to resolve under %SRCROOT%"
@@ -445,7 +445,7 @@ def findings_to_sarif(
                 "partialFingerprints": {
                     "primaryLocationLineHash": hashlib.sha1(
                         f"{rule_id}|{_url_quote(rel, safe='/')}|"
-                        f"{'?' if line is None else line}".encode()
+                        f"{'?' if line is None else line}".encode("utf-8", errors="surrogatepass")
                     ).hexdigest()[:16]
                 },
                 "properties": {
