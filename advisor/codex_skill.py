@@ -20,6 +20,8 @@ in a single turn, which matches the most common ``/advisor`` invocation
 
 from __future__ import annotations
 
+from typing import Any
+
 from ._version import resolve_version
 
 #: HTML-comment badge so ``advisor status`` can parse the installed version
@@ -177,7 +179,7 @@ SKILL_MD_CODEX_RENDERED = render_codex_skill_md()
 #: other. The required-field set is intentionally minimal so a runner that
 #: omits ``evidence`` or ``fix`` (because it judged them not load-bearing
 #: for a given finding) still passes validation.
-RUNNER_OUTPUT_SCHEMA: dict = {
+RUNNER_OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "runner_id": {"type": "string"},
