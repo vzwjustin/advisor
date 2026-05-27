@@ -501,3 +501,38 @@ class TestPricingValueShapeValidation:
                 max_fixes_per_runner=1,
                 pricing=bad,
             )
+
+
+
+class TestTokensForFileSandbox:
+    """M4 regression: _tokens_for_file must reject paths outside target."""
+
+    def test_tokens_for_file_rejects_path_outside_target(self, tmp_path: Path) -> None:
+        """A tampered file_path pointing outside target must return 0."""
+        outside = tmp_path / "outside.py"
+        outside.write_text("x" * 4000)
+
+        target = tmp_path / "target"
+        target.mkdir()
+
+        result = cost._tokens_for_file(str(outside), target)
+        assert result == 0
+
+    def test_tokens_for_file_allows_path_inside_target(self, tmp_path: Path) -> None:
+        """A legitimate file inside target must return a non-zero estimate."""
+        target = tmp_path / "target"
+        target.mkdir()
+        real_file = target / "real.py"
+        real_file.write_text("x" * 4000)
+
+        result = cost._tokens_for_file(str(real_file), target)
+        assert result > 0
+
+    def test_tokens_for_file_no_target_skips_guard(self, tmp_path: Path) -> None:
+        """Without a target, the guard is skipped (backward-compatible)."""
+        outside = tmp_path / "any.py"
+        outside.write_text("x" * 4000)
+
+        # No target — should stat the file normally
+        result = cost._tokens_for_file(str(outside))
+        assert result > 0

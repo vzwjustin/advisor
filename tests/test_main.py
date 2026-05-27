@@ -2270,3 +2270,36 @@ class TestCmdUpdate:
         rc = cli.cmd_update(self._make_args(quiet=True, yes=False))
         assert rc == 0
         assert any(c == ["true"] for c in ran), ran
+
+
+
+class TestCountLinesSandbox:
+    """M2 regression: _count_lines must reject paths that escape the target."""
+
+    def test_count_lines_rejects_path_outside_target(self, tmp_path: Path) -> None:
+        """A tampered file_path pointing outside target must return 0."""
+        from advisor.__main__ import _count_lines
+
+        # Create a real file outside of tmp_path/target so the guard is the
+        # only thing standing between us and a successful read.
+        outside = tmp_path / "outside.txt"
+        outside.write_text("line1\nline2\nline3\n")
+
+        target = tmp_path / "target"
+        target.mkdir()
+
+        # file_path is an absolute path escaping the target directory.
+        result = _count_lines(target, str(outside))
+        assert result == 0
+
+    def test_count_lines_allows_path_inside_target(self, tmp_path: Path) -> None:
+        """A legitimate file inside target must be counted normally."""
+        from advisor.__main__ import _count_lines
+
+        target = tmp_path / "target"
+        target.mkdir()
+        real_file = target / "real.py"
+        real_file.write_text("a\nb\nc\n")
+
+        result = _count_lines(target, str(real_file))
+        assert result == 3

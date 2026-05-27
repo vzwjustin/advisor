@@ -1237,6 +1237,8 @@ def _count_lines(target: Path, file_path: str) -> int:
             len(file_path) >= 2 and file_path[1] == ":" and file_path[0].isalpha()
         )
         p = fp if is_abs else (target / file_path)
+        if not p.resolve().is_relative_to(target.resolve()):
+            return 0
         with p.open("r", encoding="utf-8", errors="replace") as fh:
             return sum(1 for _ in fh)
     except OSError:
@@ -1393,6 +1395,7 @@ def _emit_plan(
             max_fixes_per_runner=cfg.max_fixes_per_runner,
             max_runners=cfg.max_runners,
             pricing=pricing_override,
+            target=target,
         )
         print()
         print(_style.colorize_markdown(format_estimate(est)))

@@ -234,6 +234,7 @@ def _cost_payload(state: AppState, qs: dict[str, list[str]]) -> dict[str, Any]:
         runner_model=runner_model,
         max_fixes_per_runner=max_fixes,
         max_runners=max_runners,
+        target=state.target,
     )
     return {
         "target": str(state.target),

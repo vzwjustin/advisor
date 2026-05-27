@@ -148,8 +148,19 @@ def _tokens_for_file_stat(path: str, size: int, mtime_ns: int) -> int:
     return int(size / CHARS_PER_TOKEN)
 
 
-def _tokens_for_file(path: str) -> int:
-    """Best-effort token estimate for a file's content (single stat call)."""
+def _tokens_for_file(path: str, target: Path | None = None) -> int:
+    """Best-effort token estimate for a file's content (single stat call).
+
+    When *target* is provided, paths that resolve outside *target* are
+    silently rejected (returns 0) to prevent tampered checkpoints or
+    imported JSON from escaping the sandbox.
+    """
+    if target is not None:
+        try:
+            if not Path(path).resolve().is_relative_to(target.resolve()):
+                return 0
+        except OSError:
+            return 0
     try:
         stat = os.stat(path)
     except OSError:
@@ -197,6 +208,7 @@ def estimate_cost(
     max_fixes_per_runner: int,
     max_runners: int | None = None,
     pricing: dict[str, tuple[int, int]] | None = None,
+    target: Path | None = None,
 ) -> CostEstimate:
     """Estimate token usage + USD cost for a planned run.
 
@@ -278,7 +290,7 @@ def estimate_cost(
     content_tokens = 0
     for task in tasks:
         if task.file_path not in token_cache:
-            token_cache[task.file_path] = _tokens_for_file(task.file_path)
+            token_cache[task.file_path] = _tokens_for_file(task.file_path, target)
         content_tokens += token_cache[task.file_path]
 
     # ---- MIN: one explore pass, no fixes ----
