@@ -37,7 +37,7 @@ import re
 from dataclasses import dataclass, field
 
 from .checkpoint import Checkpoint
-from .verify import Finding, parse_findings_with_drift
+from .verify import INCOMPLETE_FILE_PATH, Finding, parse_findings_with_drift
 
 # ── Detection patterns ───────────────────────────────────────────
 #
@@ -518,10 +518,20 @@ def _audit_scope_drift(
 
     Legacy/empty plan: no reliable denominator — treat all parsed findings
     as in-batch so the audit doesn't falsely flag drift.
+
+    Filters out :data:`verify.INCOMPLETE_FILE_PATH` sentinel findings (emitted
+    by ``_dict_to_finding`` for malformed blocks so the drift tally counts
+    parse misses) before returning — these are synthetic and should not
+    surface as in/out-of-batch findings to downstream SARIF / baseline /
+    PR-comment sinks that would mistake ``"<incomplete>"`` for a real path.
     """
     if batch_files:
-        return parse_findings_with_drift(transcript, batch_files)
-    return parse_findings_with_drift(transcript, None)[0], []
+        kept, dropped = parse_findings_with_drift(transcript, batch_files)
+    else:
+        kept, dropped = parse_findings_with_drift(transcript, None)[0], []
+    kept = [f for f in kept if f.file_path != INCOMPLETE_FILE_PATH]
+    dropped = [f for f in dropped if f.file_path != INCOMPLETE_FILE_PATH]
+    return kept, dropped
 
 
 def audit_transcript(transcript: str, cp: Checkpoint) -> AuditReport:
@@ -583,6 +593,7 @@ def audit_to_dict(report: AuditReport) -> dict[str, object]:
             "evidence": f.evidence,
             "fix": f.fix,
             "rule_id": f.rule_id,
+            "expected_vs_actual": f.expected_vs_actual,
         }
 
     return {

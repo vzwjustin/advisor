@@ -1349,6 +1349,37 @@ class TestCmdCheckpoints:
         assert rc == 0
         assert list_checkpoints(tmp_path) == []
 
+    def test_clear_with_json_emits_summary(self, tmp_path, capsys):
+        """Regression: ``--clear --json`` previously fell into the quiet
+        branch and emitted no JSON, so scripted callers couldn't tell
+        success from a silent no-op."""
+        import json as _json
+
+        from advisor import __main__ as cli
+        from advisor.checkpoint import list_checkpoints
+
+        self._write_stub_checkpoint(tmp_path, "20260101T000000Z-a")
+        self._write_stub_checkpoint(tmp_path, "20260101T000001Z-b")
+        rc = cli.main(["checkpoints", str(tmp_path), "--clear", "--json"])
+        assert rc == 0
+        payload = _json.loads(capsys.readouterr().out)
+        assert payload["removed"] == 2
+        assert payload["failed"] == 0
+        assert list_checkpoints(tmp_path) == []
+
+    def test_clear_with_json_on_empty_dir(self, tmp_path, capsys):
+        """JSON payload reports zero on an empty target instead of
+        printing the pretty 'no checkpoints to remove' line."""
+        import json as _json
+
+        from advisor import __main__ as cli
+
+        rc = cli.main(["checkpoints", str(tmp_path), "--clear", "--json"])
+        assert rc == 0
+        payload = _json.loads(capsys.readouterr().out)
+        assert payload["removed"] == 0
+        assert payload["failed"] == 0
+
     def test_rm_and_clear_are_mutually_exclusive(self, tmp_path, capsys):
         from advisor import __main__ as cli
 

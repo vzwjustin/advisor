@@ -984,6 +984,23 @@ def cmd_codex_plan_csv(args: argparse.Namespace) -> int:
     concurrent ``$advisor`` invocations don't collide.
     """
     from .codex_skill import build_codex_runner_prompt
+    from .install import codex_cli_available
+
+    # Soft warning when ``codex`` isn't on PATH — the CSV is the input
+    # to Codex's ``spawn_agents_on_csv``, so producing one on a host
+    # without the Codex CLI is almost always operator error (e.g.
+    # invoked from a Claude-only shell). We still emit the file so
+    # test fixtures and dry-runs work, but the user sees the mismatch.
+    if not getattr(args, "quiet", False) and not codex_cli_available():
+        print(
+            _style.warning_box(
+                "advisor codex-plan-csv: ``codex`` CLI not on PATH. The "
+                "emitted CSV is intended for Codex's ``spawn_agents_on_csv`` "
+                "tool — without Codex installed, nothing will consume it.",
+                stream=sys.stderr,
+            ),
+            file=sys.stderr,
+        )
 
     target = Path(args.target)
     if not target.exists():
@@ -2358,6 +2375,21 @@ def cmd_live(args: argparse.Namespace) -> int:
         kind = getattr(args, "kind", "") or ""
         data_raw = getattr(args, "data", None)
         data: dict[str, object] = {}
+        # ``--data -`` reads the JSON payload from stdin. Mirrors the
+        # ``--context -`` / ``--from -`` convention elsewhere in the CLI
+        # and lets the team-lead pipe in payloads larger than a CLI flag
+        # comfortably accepts (e.g. multi-line ``report_relay.summary``).
+        if data_raw == "-":
+            if sys.stdin.isatty():
+                print(
+                    _style.error_box(
+                        "--data -: no data on stdin; pipe a JSON object or drop the flag",
+                        stream=sys.stderr,
+                    ),
+                    file=sys.stderr,
+                )
+                return 2
+            data_raw = _read_stdin_capped(source_label="--data -").strip()
         if data_raw:
             try:
                 parsed = json.loads(data_raw)
@@ -2538,7 +2570,19 @@ def cmd_checkpoints(args: argparse.Namespace) -> int:
                 removed += 1
             except OSError:
                 failed += 1
-        if not getattr(args, "quiet", False):
+        if getattr(args, "json", False):
+            print(
+                json.dumps(
+                    {
+                        "schema_version": JSON_SCHEMA_VERSION,
+                        "target": str(target.resolve()),
+                        "removed": removed,
+                        "failed": failed,
+                    },
+                    indent=2,
+                )
+            )
+        elif not getattr(args, "quiet", False):
             if removed or failed:
                 noun = "checkpoint" if removed == 1 else "checkpoints"
                 msg = f"removed {removed} {noun}"
@@ -2814,6 +2858,7 @@ def _load_findings_from_input(
                             evidence=str(f.get("evidence", "")),
                             fix=str(f.get("fix", "")),
                             rule_id=rule_id,
+                            expected_vs_actual=str(f.get("expected_vs_actual", "")),
                         )
                     )
                 except KeyError:
@@ -3303,7 +3348,7 @@ def build_parser() -> argparse.ArgumentParser:
                 f"expected non-negative integer, got {value!r}"
             ) from exc
         if n < 0:
-            raise argparse.ArgumentTypeError(f"batch-size must be >= 0, got {n}")
+            raise argparse.ArgumentTypeError(f"must be >= 0, got {n}")
         return n
 
     p_plan.add_argument(
@@ -3816,9 +3861,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_live_tail.add_argument(
         "--since",
-        type=str,
+        type=_nonneg_int,
         default=None,
-        help="Only show events whose seq is strictly greater than this cursor",
+        help="Only show events whose seq is strictly greater than this cursor (>=0)",
     )
     p_live_tail.add_argument(
         "--json",

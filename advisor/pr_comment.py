@@ -40,6 +40,7 @@ def _sanitize(f: Finding) -> Finding:
         rule_id=(
             _strip_controls(f.rule_id, keep_block_whitespace=True) if f.rule_id else f.rule_id
         ),
+        expected_vs_actual=_strip_controls(f.expected_vs_actual, keep_block_whitespace=True),
     )
 
 
@@ -187,6 +188,11 @@ def format_pr_comment(findings: list[Finding]) -> str:
             "",
             f"**Description:** {_escape_html(f.description)}",
             "",
+        ]
+        if f.expected_vs_actual:
+            block.append(f"**Expected → Actual:** {_escape_html(f.expected_vs_actual)}")
+            block.append("")
+        block += [
             "**Evidence:**",
             "",
             "```",

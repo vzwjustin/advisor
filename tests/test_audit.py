@@ -318,6 +318,64 @@ class TestAuditTranscriptScopeDrift:
         report = audit_transcript(transcript, cp)
         assert [f.file_path for f in report.findings_in_batch] == ["auth.py"]
 
+    def test_incomplete_sentinel_does_not_leak_into_findings(self):
+        """Regression: a malformed finding block produces an
+        ``INCOMPLETE_FILE_PATH = "<incomplete>"`` sentinel from
+        ``_dict_to_finding`` so the drift tally counts parse misses.
+        That sentinel must not surface as an in/out-of-batch finding
+        because downstream sinks (SARIF emitter, PR comment, baseline
+        identity key) would mistake ``"<incomplete>"`` for a real path.
+        """
+        from advisor.verify import INCOMPLETE_FILE_PATH
+
+        # First block: complete and in-batch. Second block: partial —
+        # has File + Severity + Description but missing Evidence/Fix.
+        transcript = """### Finding 1
+- **File**: auth.py
+- **Severity**: HIGH
+- **Description**: real finding
+- **Evidence**: line 1
+- **Fix**: patch
+
+### Finding 2
+- **File**: bogus.py
+- **Severity**: HIGH
+- **Description**: partial — no evidence or fix
+"""
+        cp = _mk_checkpoint(batch_files=[["auth.py", "session.py"]])
+        report = audit_transcript(transcript, cp)
+        all_findings = [*report.findings_in_batch, *report.findings_out_of_batch]
+        assert all(f.file_path != INCOMPLETE_FILE_PATH for f in all_findings)
+        # The real finding still surfaces in-batch.
+        assert [f.file_path for f in report.findings_in_batch] == ["auth.py"]
+
+    def test_incomplete_sentinel_filtered_in_audit_to_dict(self):
+        """Belt-and-suspenders: even if a future change re-introduces
+        the sentinel upstream, ``audit_to_dict`` output must not carry
+        a finding with ``file_path == "<incomplete>"`` because that
+        round-trips through SARIF / baseline / PR-comment paths."""
+        from advisor.verify import INCOMPLETE_FILE_PATH
+
+        transcript = """### Finding 1
+- **File**: auth.py
+- **Severity**: HIGH
+- **Description**: real
+- **Evidence**: line 1
+- **Fix**: patch
+
+### Finding 2
+- **File**: x.py
+- **Severity**: HIGH
+- **Description**: partial
+"""
+        cp = _mk_checkpoint(batch_files=[["auth.py"]])
+        report = audit_transcript(transcript, cp)
+        payload = audit_to_dict(report)
+        for bucket in ("findings_in_batch", "findings_out_of_batch"):
+            assert all(f["file_path"] != INCOMPLETE_FILE_PATH for f in payload[bucket]), (
+                f"{bucket} leaked the incomplete sentinel"
+            )
+
 
 class TestAuditToDict:
     def test_round_trips_through_json(self):

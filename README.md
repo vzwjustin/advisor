@@ -293,7 +293,7 @@ jobs:
 ```
 
 > [!NOTE]
-> The `fail-on` parameter is currently reserved for a future audit gating step and is not forwarded to `advisor plan`.
+> The `fail-on` parameter is enforced by a SARIF-parsing step that runs after `actions/upload-sarif`. Because `advisor plan --sarif` emits an empty-results document by design, the gate is a no-op unless a downstream step replaces `advisor.sarif` with real findings (e.g. SARIF captured from a live `/advisor` run). Threshold semantics match `advisor audit --fail-on`: CRITICAL/HIGH → SARIF `error`, MEDIUM → `warning`, LOW → `note`.
 
 Or roll your own: any CI system can run `advisor plan --sarif advisor.sarif`
 and upload the file to whatever scanner you use.

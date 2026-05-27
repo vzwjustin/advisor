@@ -254,6 +254,48 @@ class TestLiveCli:
         )
         assert cmd_live(args) == 2
 
+    def test_record_data_dash_reads_stdin(self, tmp_path, monkeypatch):
+        """``--data -`` reads the JSON object from stdin. Lets the
+        team-lead pipe in payloads (long summaries, JSON-escaped
+        multi-line bodies) that don't fit comfortably as a CLI flag."""
+        import io
+
+        class _FakeStdin:
+            def __init__(self, payload: bytes):
+                self.buffer = io.BytesIO(payload)
+
+            def isatty(self) -> bool:
+                return False
+
+        payload = b'{"runner_name":"runner-1","summary":"piped from stdin"}'
+        monkeypatch.setattr("sys.stdin", _FakeStdin(payload))
+        parser = build_parser()
+        args = parser.parse_args(
+            ["live", "record", "--kind", "report_relay", "--data", "-", "--quiet", str(tmp_path)]
+        )
+        assert cmd_live(args) == 0
+        events = load_recent_events(tmp_path)
+        assert len(events) == 1
+        assert events[0]["data"]["runner_name"] == "runner-1"
+        assert events[0]["data"]["summary"] == "piped from stdin"
+
+    def test_record_data_dash_rejects_tty(self, tmp_path, monkeypatch, capsys):
+        """``--data -`` with no stdin pipe (interactive TTY) errors loudly
+        instead of silently waiting on a never-coming read."""
+
+        class _TtyStdin:
+            buffer = None
+
+            def isatty(self) -> bool:
+                return True
+
+        monkeypatch.setattr("sys.stdin", _TtyStdin())
+        parser = build_parser()
+        args = parser.parse_args(["live", "record", "--kind", "x", "--data", "-", str(tmp_path)])
+        assert cmd_live(args) == 2
+        err = capsys.readouterr().err
+        assert "no data on stdin" in err
+
     def test_record_json_output(self, tmp_path, capsys):
         parser = build_parser()
         args = parser.parse_args(["live", "record", "--kind", "run_start", "--json", str(tmp_path)])
@@ -303,6 +345,25 @@ class TestLiveCli:
         captured = capsys.readouterr()
         payload = json.loads(captured.out)
         assert [e["kind"] for e in payload["events"]] == ["b", "c"]
+
+    def test_tail_since_rejects_non_integer_at_argparse(self, tmp_path):
+        """Regression: ``--since`` was ``type=str`` with manual int
+        conversion inside ``cmd_live``, so a typo like ``--since abc``
+        slipped past argparse and hit a custom error. Now argparse
+        fails the usage-help path consistently with ``--limit``."""
+        import pytest
+
+        parser = build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["live", "tail", "--since", "abc", str(tmp_path)])
+
+    def test_tail_since_rejects_negative_at_argparse(self, tmp_path):
+        """``--since`` must be a cursor (>=0)."""
+        import pytest
+
+        parser = build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["live", "tail", "--since", "-1", str(tmp_path)])
 
     def test_clear_removes_file(self, tmp_path):
         append_event(tmp_path, "x", {})
