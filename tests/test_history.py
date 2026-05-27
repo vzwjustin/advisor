@@ -140,6 +140,38 @@ class TestAppendAndLoad:
         assert entries[0].file_path == "f4.py"
         assert entries[1].file_path == "f3.py"
 
+    def test_load_recent_findings_recovers_from_malformed_block(self, tmp_path: Path) -> None:
+        """load_recent_findings extends its read window when malformed lines
+        outnumber the initial overshoot budget (buffer_size = limit + 16).
+
+        Write 50 valid entries followed by 20 malformed lines. With the old
+        fixed buffer of ``limit + 16 = 36``, a request for limit=20 would read
+        only the last 36 lines (20 malformed + 16 valid), parse just 16 valid
+        entries, and return 16 — short of the requested 20. The loop-extend
+        fix doubles the window until it collects >= 20 valid entries.
+        """
+        import warnings
+
+        path = history_path(tmp_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        valid_line = (
+            '{"timestamp":"t","file_path":"v.py","severity":"HIGH",'
+            '"description":"d","status":"CONFIRMED","run_id":"r"}\n'
+        )
+        malformed_line = "not-valid-json\n"
+
+        # 50 valid entries, then 20 malformed lines at the end
+        content = valid_line * 50 + malformed_line * 20
+        path.write_text(content, encoding="utf-8")
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            entries = load_recent(tmp_path, limit=20)
+
+        assert len(entries) == 20
+        assert all(e.file_path == "v.py" for e in entries)
+
 
 class TestFormatHistoryBlock:
     def test_empty_returns_empty_string(self) -> None:

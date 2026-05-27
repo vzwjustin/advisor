@@ -348,99 +348,111 @@ def load_recent_findings(history_path: Path, *, limit: int = 500) -> list[Histor
         return []
     if not history_path.exists():
         return []
-    # Small overshoot so a handful of malformed lines in the tail still
-    # yield ``limit`` well-formed entries. The previous ``limit * 2``
-    # doubled memory for no good reason — this bounded margin keeps the
-    # invariant while staying O(limit).
+    # Start with a small overshoot so a handful of malformed lines in the
+    # tail still yield ``limit`` well-formed entries. If the valid-entry
+    # count falls short (more than ``buffer_size - limit`` malformed lines
+    # in the tail), double the window and re-read, up to ``limit * 8``
+    # lines total — ensuring repeat-offender scoring is accurate even when
+    # a crash left many partial appends in the history file.
     buffer_size = limit + 16
-    try:
-        # utf-8-sig transparently strips a leading BOM on the first line —
-        # some Windows editors write one, and plain utf-8 would otherwise
-        # leave it attached to the first JSON object, triggering
-        # JSONDecodeError and silently dropping what is typically the
-        # newest entry after the reverse-on-read flip.
-        with history_path.open("r", encoding="utf-8-sig") as f:
-            _MAX_LINE = 65536
-            # Stream lines directly into the bounded deque so a huge
-            # history file does not materialize an O(file-size) intermediate
-            # list just to truncate it on the next line.
-            #
-            # Use ``readline(_MAX_LINE + 1)`` instead of ``for _line in f`` so a
-            # single corrupted line without a newline cannot OOM the reader.
-            # The plain iterator delegates to ``readline()`` with no size cap
-            # and buffers the full line BEFORE we can reject it on length —
-            # ``readline(size)`` caps the read at ``size`` bytes, so an
-            # oversized line is observable (``len(chunk) > _MAX_LINE``) and
-            # we drain its tail with further capped reads before moving on.
-            lines: deque[tuple[int, str]] = deque(maxlen=buffer_size)
-            _line_no = 0
-            while True:
-                chunk = f.readline(_MAX_LINE + 1)
-                if not chunk:
-                    break
-                _line_no += 1
-                if len(chunk) > _MAX_LINE:
+    _max_buffer = max(limit * 8, buffer_size)
+    _MAX_LINE = 65536
+
+    while True:
+        lines: deque[tuple[int, str]] = deque(maxlen=buffer_size)
+        try:
+            # utf-8-sig transparently strips a leading BOM on the first line —
+            # some Windows editors write one, and plain utf-8 would otherwise
+            # leave it attached to the first JSON object, triggering
+            # JSONDecodeError and silently dropping what is typically the
+            # newest entry after the reverse-on-read flip.
+            with history_path.open("r", encoding="utf-8-sig") as f:
+                # Stream lines directly into the bounded deque so a huge
+                # history file does not materialize an O(file-size) intermediate
+                # list just to truncate it on the next line.
+                #
+                # Use ``readline(_MAX_LINE + 1)`` instead of ``for _line in f`` so a
+                # single corrupted line without a newline cannot OOM the reader.
+                # The plain iterator delegates to ``readline()`` with no size cap
+                # and buffers the full line BEFORE we can reject it on length —
+                # ``readline(size)`` caps the read at ``size`` bytes, so an
+                # oversized line is observable (``len(chunk) > _MAX_LINE``) and
+                # we drain its tail with further capped reads before moving on.
+                _line_no = 0
+                while True:
+                    chunk = f.readline(_MAX_LINE + 1)
+                    if not chunk:
+                        break
+                    _line_no += 1
+                    if len(chunk) > _MAX_LINE:
+                        warnings.warn(
+                            f"{history_path}:{_line_no}: line exceeds {_MAX_LINE} bytes, skipping",
+                            UserWarning,
+                            stacklevel=2,
+                        )
+                        # Drain the rest of this oversized line so the next
+                        # readline call returns the start of the NEXT line, not
+                        # this one's tail. EOF mid-drain is fine.
+                        while chunk and not chunk.endswith("\n"):
+                            chunk = f.readline(_MAX_LINE + 1)
+                        continue
+                    lines.append((_line_no, chunk))
+        except (OSError, UnicodeDecodeError) as exc:
+            warnings.warn(f"could not read {history_path}: {exc}", UserWarning, stacklevel=2)
+            return []
+
+        entries: list[HistoryEntry] = []
+        for line_num, line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                obj = json.loads(stripped)
+                if not isinstance(obj, dict):
                     warnings.warn(
-                        f"{history_path}:{_line_no}: line exceeds {_MAX_LINE} bytes, skipping",
+                        f"skipping non-dict history entry at {history_path}:{line_num}",
                         UserWarning,
                         stacklevel=2,
                     )
-                    # Drain the rest of this oversized line so the next
-                    # readline call returns the start of the NEXT line, not
-                    # this one's tail. EOF mid-drain is fine.
-                    while chunk and not chunk.endswith("\n"):
-                        chunk = f.readline(_MAX_LINE + 1)
                     continue
-                lines.append((_line_no, chunk))
-    except (OSError, UnicodeDecodeError) as exc:
-        warnings.warn(f"could not read {history_path}: {exc}", UserWarning, stacklevel=2)
-        return []
-
-    entries: list[HistoryEntry] = []
-    for line_num, line in lines:
-        stripped = line.strip()
-        if not stripped:
-            continue
-        try:
-            obj = json.loads(stripped)
-            if not isinstance(obj, dict):
+                for _f in ("timestamp", "file_path", "severity", "description", "status", "run_id"):
+                    if not isinstance(obj.get(_f), str):
+                        raise TypeError(f"{_f} must be str, got {type(obj.get(_f)).__name__}")
+                # Allowlist severity/status — they flow unescaped into the advisor
+                # prompt label line (format_history_block) and a CSS class suffix in
+                # the dashboard. A crafted newline in either field would inject.
+                # Normalize to upper-case so foreign / hand-edited entries with
+                # lowercase values don't diverge between file_repeat_counts (which
+                # ignores severity entirely) and file_repeat_scores (which drops
+                # UNKNOWN at line 395).
+                sev_raw = obj["severity"].upper()
+                status_raw = obj["status"].upper()
+                sev = sev_raw if sev_raw in _ALLOWED_SEVERITIES else "UNKNOWN"
+                status = status_raw if status_raw in _ALLOWED_STATUSES else "UNKNOWN"
+                entries.append(
+                    HistoryEntry(
+                        timestamp=obj["timestamp"],
+                        file_path=obj["file_path"],
+                        severity=sev,
+                        description=obj["description"],
+                        status=status,
+                        run_id=obj["run_id"],
+                        schema_version=str(obj.get("schema_version", HISTORY_SCHEMA_VERSION)),
+                    )
+                )
+            except (json.JSONDecodeError, KeyError, TypeError) as exc:
                 warnings.warn(
-                    f"skipping non-dict history entry at {history_path}:{line_num}",
+                    f"skipping malformed history entry at {history_path}:{line_num}: {exc}",
                     UserWarning,
                     stacklevel=2,
                 )
-                continue
-            for _f in ("timestamp", "file_path", "severity", "description", "status", "run_id"):
-                if not isinstance(obj.get(_f), str):
-                    raise TypeError(f"{_f} must be str, got {type(obj.get(_f)).__name__}")
-            # Allowlist severity/status — they flow unescaped into the advisor
-            # prompt label line (format_history_block) and a CSS class suffix in
-            # the dashboard. A crafted newline in either field would inject.
-            # Normalize to upper-case so foreign / hand-edited entries with
-            # lowercase values don't diverge between file_repeat_counts (which
-            # ignores severity entirely) and file_repeat_scores (which drops
-            # UNKNOWN at line 395).
-            sev_raw = obj["severity"].upper()
-            status_raw = obj["status"].upper()
-            sev = sev_raw if sev_raw in _ALLOWED_SEVERITIES else "UNKNOWN"
-            status = status_raw if status_raw in _ALLOWED_STATUSES else "UNKNOWN"
-            entries.append(
-                HistoryEntry(
-                    timestamp=obj["timestamp"],
-                    file_path=obj["file_path"],
-                    severity=sev,
-                    description=obj["description"],
-                    status=status,
-                    run_id=obj["run_id"],
-                    schema_version=str(obj.get("schema_version", HISTORY_SCHEMA_VERSION)),
-                )
-            )
-        except (json.JSONDecodeError, KeyError, TypeError) as exc:
-            warnings.warn(
-                f"skipping malformed history entry at {history_path}:{line_num}: {exc}",
-                UserWarning,
-                stacklevel=2,
-            )
+
+        # Stop if we have enough entries, the buffer is at the cap, or the
+        # file is exhausted (deque didn't fill up, meaning fewer lines exist
+        # than buffer_size — doubling won't find more valid entries).
+        if len(entries) >= limit or buffer_size >= _max_buffer or len(lines) < buffer_size:
+            break
+        buffer_size = min(buffer_size * 2, _max_buffer)
 
     # Newest-first per contract. We don't know whether the file is in
     # chronological order, but by convention entries are appended — so

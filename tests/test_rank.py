@@ -254,6 +254,38 @@ class TestGlobReDoSGuard:
         warning_msgs = [str(w.message) for w in recwarn.list]
         assert any("unsafe pattern" in m for m in warning_msgs)
 
+    def test_compile_ignore_patterns_rejects_redos_shape(self, recwarn):
+        """8-wildcard fnmatch pattern is rejected on Python <3.12 (non-atomic
+        ``.*`` groups); on 3.12+ the atomic-group path makes it safe.
+
+        In both cases the compiled matcher must return near-instantly on a
+        200-char non-matching input — catastrophic backtracking would hang.
+        """
+        import sys
+        import time
+
+        from advisor.rank import _compile_ignore_patterns, _matches_compiled_pattern
+
+        # 8 ``*`` wildcards — at the old cap of 8 these compiled through
+        # fnmatch.translate; the new _MAX_FNMATCH_QUANTIFIERS=4 rejects them
+        # on Python <3.12 where fnmatch uses plain (non-atomic) ``.*``.
+        pattern = "*a*a*a*a*a*a*a*X"  # 8 wildcards
+        compiled = _compile_ignore_patterns([pattern])
+        assert compiled  # always produces a matcher (may be never-match sentinel)
+
+        if sys.version_info < (3, 12):
+            # Expect the fnmatch path to have been rejected with a UserWarning
+            warning_msgs = [str(w.message) for w in recwarn.list]
+            assert any("unsafe pattern" in m for m in warning_msgs)
+        else:
+            # 3.12+ uses atomic groups — pattern compiles without warning.
+            # Verify there is no catastrophic backtracking on a long non-match.
+            non_matching = "a" * 200  # won't end with 'X'
+            start = time.monotonic()
+            _matches_compiled_pattern(non_matching, compiled)
+            elapsed = time.monotonic() - start
+            assert elapsed < 1.0, f"matching took {elapsed:.3f}s — likely catastrophic backtracking"
+
 
 class TestGitignoreSemanticBoundaries:
     """Single ``*`` does NOT cross ``/``; trailing ``**/`` matches all contents.

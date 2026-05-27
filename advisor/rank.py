@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import fnmatch
 import re
+import sys
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -442,18 +443,30 @@ def load_advisorignore(base_dir: str | Path) -> list[str]:
 #: silently degrading to an infinite loop.
 _MAX_GLOB_QUANTIFIERS = 8
 
+# Python 3.12+ rewrote ``fnmatch.translate`` to emit possessive quantifiers
+# (atomic groups) so ``.*`` cannot catastrophically backtrack; Python 3.10/3.11
+# use plain ``.*``. Empirically, 4 consecutive greedy ``.*`` groups can exhaust
+# backtracking on a 50-char non-matching input on older Pythons. Cap the
+# fnmatch path at 4 on <3.12; 3.12+ can safely use the wider glob limit.
+_MAX_FNMATCH_QUANTIFIERS: int = 4 if sys.version_info < (3, 12) else _MAX_GLOB_QUANTIFIERS
+
 
 class GlobPatternError(ValueError):
     """Raised when a glob pattern is too complex to compile safely."""
 
 
-def _check_quantifier_count(pattern: str) -> None:
+def _check_quantifier_count(pattern: str, *, limit: int = _MAX_GLOB_QUANTIFIERS) -> None:
     """Raise :class:`GlobPatternError` if *pattern* has too many wildcards.
 
     Shared guard for :func:`_double_star_to_regex`, :func:`_slash_pattern_to_regex`,
     and the ``fnmatch.translate`` path in :func:`_compile_ignore_patterns` — all
     three translate user-supplied glob text into Python regex, and Python's ``re``
     engine has no timeout.
+
+    Pass ``limit=_MAX_FNMATCH_QUANTIFIERS`` for branches that route through
+    ``fnmatch.translate`` on Python < 3.12, where plain ``.*`` groups are used
+    instead of atomic groups, making them vulnerable to catastrophic backtracking
+    with fewer wildcards.
     """
     quantifier_count = 0
     j = 0
@@ -473,10 +486,10 @@ def _check_quantifier_count(pattern: str) -> None:
         elif ch == "?":
             quantifier_count += 1
         j += 1
-    if quantifier_count > _MAX_GLOB_QUANTIFIERS:
+    if quantifier_count > limit:
         raise GlobPatternError(
             f"glob pattern {pattern!r} has {quantifier_count} wildcards "
-            f"(>{_MAX_GLOB_QUANTIFIERS}); refusing to compile to avoid "
+            f"(>{limit}); refusing to compile to avoid "
             f"catastrophic-backtracking ReDoS"
         )
 
@@ -676,7 +689,7 @@ def _compile_ignore_patterns(patterns: list[str]) -> tuple[_IgnorePatternMatcher
         dir_re: re.Pattern[str] | None = None
         if pattern.endswith("/") and "**" not in pattern:
             try:
-                _check_quantifier_count(pattern.rstrip("/"))
+                _check_quantifier_count(pattern.rstrip("/"), limit=_MAX_FNMATCH_QUANTIFIERS)
                 dir_re = re.compile(fnmatch.translate(pattern.rstrip("/")))
             except GlobPatternError as exc:
                 warnings.warn(
@@ -698,14 +711,14 @@ def _compile_ignore_patterns(patterns: list[str]) -> tuple[_IgnorePatternMatcher
         filename_re: re.Pattern[str] | None = None
         if not dir_re and not recursive_re and not slash_re:
             try:
-                # ReDoS guard mirrors the dir_re branch above:
-                # ``fnmatch.translate`` emits non-atomic ``.*`` groups on
-                # Python 3.10/3.11, so a pattern like
-                # ``*a*a*a*a*a*a*a*a*a*X`` from a hostile ``.advisorignore``
-                # causes catastrophic backtracking on non-matching
-                # filenames. 3.12+ uses atomic groups and is safe, but the
-                # project supports >=3.10 so the guard must run here too.
-                _check_quantifier_count(pattern)
+                # ReDoS guard: ``fnmatch.translate`` emits non-atomic ``.*``
+                # groups on Python 3.10/3.11 — a pattern like
+                # ``*a*a*a*a*a*X`` from a hostile ``.advisorignore`` causes
+                # catastrophic backtracking on non-matching filenames.
+                # 3.12+ uses atomic groups and is safe; _MAX_FNMATCH_QUANTIFIERS
+                # is version-gated to 4 on <3.12 and the wider glob limit on
+                # 3.12+ so real-world patterns compile on all supported Pythons.
+                _check_quantifier_count(pattern, limit=_MAX_FNMATCH_QUANTIFIERS)
                 filename_re = re.compile(fnmatch.translate(pattern))
             except GlobPatternError as exc:
                 warnings.warn(
