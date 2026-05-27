@@ -106,7 +106,8 @@ advisor install                        # install nudge + /advisor skill (prints 
 advisor update                         # self-upgrade via uv tool / pipx, then re-runs install
 advisor changelog [VERSION]            # print bundled CHANGELOG section(s); --since X.Y.Z for a digest
 advisor uninstall                      # remove nudge + /advisor skill
-advisor ui                             # launch local web dashboard on 127.0.0.1:8765
+advisor ui                             # launch local web dashboard on 127.0.0.1:8765 (Findings · Live · Plan · Run config · Cost)
+advisor live tail                      # tail the live event stream (the Live tab subscribes to this)
 advisor history                        # recent findings from .advisor/history.jsonl
 advisor history --stats                # aggregate: confirm rate, breakdowns, top files
 advisor baseline create                # snapshot current findings as baseline
@@ -215,8 +216,35 @@ Code `Agent(...)` or `SendMessage(...)` call.
 - `advisor/sarif.py` — `findings_to_sarif`, SARIF 2.1.0 serializer
 - `advisor/suppressions.py` — `Suppression`, per-rule false-positive suppressions
 - `advisor/skill_asset.py` — `SKILL_MD`, bundled `/advisor` skill content
-- `advisor/web/` — local web dashboard served by `advisor ui`
+- `advisor/web/` — local web dashboard served by `advisor ui` (Findings · Live · Plan · Run config · Cost)
+- `advisor/live.py` — ephemeral event stream (`<target>/.advisor/live/events.jsonl`) the dashboard's **Live** tab subscribes to
 - `advisor/_style.py` — zero-dep ANSI styling (colors on by default)
+
+## Live dashboard (new in 0.8.0)
+
+Run `advisor ui` and open http://127.0.0.1:8765 to watch a `/advisor`
+run in real time without keeping Claude Code in the foreground. The
+**Live** tab polls `/api/events` every 2s and renders the team-lead's
+event stream as a feed: each runner spawn, every report relay, every
+fix dispatch, and the final run summary. Newly-arrived rows briefly
+flash; FIFO-trimmed at 500 rows; respects `prefers-reduced-motion`.
+
+The team-lead emits events via `advisor live record` at three
+checkpoints (`run_start`, every `report_relay`, `run_end`), instructed
+by the bundled `/advisor` skill body. Events are best-effort: a failed
+write never halts the pipeline. Users who never start `advisor ui` see
+no behavior change — the events file just accumulates harmlessly in
+`<target>/.advisor/live/events.jsonl`.
+
+The event store is deliberately separate from `history.jsonl`:
+- `history.jsonl` — authoritative CONFIRMED findings; drives ranker
+  boost, SARIF emission, repeat-offender analytics.
+- `live/events.jsonl` — ephemeral event feed; opaque to the
+  orchestrator, advisory to the dashboard, free-form payload.
+
+For ad-hoc inspection from the terminal: `advisor live tail --limit 50`
+(`--json` for scripting). `advisor live clear` removes the file; the
+cursor preserves cleanly so the next run resumes the stream.
 
 ## Orchestration rules
 
