@@ -647,6 +647,11 @@ def test_resolve_relative_handles_oserror(tmp_path: Path, monkeypatch: pytest.Mo
 
     monkeypatch.setattr(pathlib.Path, "resolve", raise_oserror)
 
+    # Build an absolute path that is_absolute() on both POSIX and Windows.
+    # `/abs/...` is not absolute on Windows (no drive), which would skip the
+    # resolve() branch entirely and fail to exercise the OSError handler.
+    abs_path = str(Path(tmp_path.anchor) / "abs" / "src" / "auth.py")
+
     # Should raise ValueError (not OSError) because the fix catches both.
     with pytest.raises(ValueError):
-        _resolve_relative("/abs/src/auth.py", tmp_path, target_resolved=target_resolved)
+        _resolve_relative(abs_path, tmp_path, target_resolved=target_resolved)
