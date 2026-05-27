@@ -18,6 +18,7 @@ import warnings
 from collections.abc import Callable, Sequence
 from dataclasses import fields as _dc_fields
 from pathlib import Path
+from typing import Literal, cast
 
 from . import _style
 from ._fs import atomic_write_text as _atomic_write
@@ -577,6 +578,34 @@ def _valid_port(raw: str) -> int:
     if not 0 <= n <= 65535:
         raise argparse.ArgumentTypeError(f"port {n} out of range — must be between 0 and 65535")
     return n
+
+
+def _valid_host(raw: str) -> str:
+    """argparse ``type=`` validator for ``--host``.
+
+    Only accepts loopback addresses (``127.0.0.1``, ``::1``, ``localhost``)
+    to prevent accidentally exposing the local dashboard to the network.
+    F-1: because this validator runs before ``cmd_ui`` is called, ``--json``
+    mode also rejects non-loopback hosts at parse time — no separate guard
+    needed in the JSON branch.
+    """
+    import ipaddress
+
+    normalized = raw.strip()
+    if normalized == "localhost":
+        return normalized
+    try:
+        addr = ipaddress.ip_address(normalized)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"invalid host {raw!r}: must be a loopback address (127.0.0.1, ::1, localhost)"
+        ) from None
+    if not addr.is_loopback:
+        raise argparse.ArgumentTypeError(
+            f"host {raw!r} is not a loopback address — "
+            "only 127.0.0.1, ::1, and localhost are accepted"
+        )
+    return normalized
 
 
 def _apply_exclude_patterns(target: Path, paths: list[str], patterns: list[str]) -> list[str]:
@@ -1209,9 +1238,9 @@ def _batches_from_checkpoint(cp: Checkpoint) -> list[FocusBatch]:
                 UserWarning,
                 stacklevel=2,
             )
-            batch_complexity = "medium"
+            batch_complexity: Literal["low", "medium", "high"] = "medium"
         else:
-            batch_complexity = raw_complexity
+            batch_complexity = cast(Literal["low", "medium", "high"], raw_complexity)
         out.append(
             FocusBatch(
                 batch_id=batch_id_val,
@@ -2000,7 +2029,27 @@ def _detect_install_method() -> tuple[str, list[str]] | None:
 
     Returns ``(label, command_argv)`` or ``None`` if we can't tell. Used by
     ``advisor update`` to pick the right upgrade command.
+
+    Prefers the ``INSTALLER`` file from ``importlib.metadata`` — it survives
+    renamed virtualenvs and symlink farms that can fool path-based heuristics.
+    Falls back to the executable-path heuristic when the metadata hint is
+    absent or unrecognised.
     """
+    import importlib.metadata as _meta
+
+    try:
+        dist = _meta.distribution("advisor-agent")
+        installer_text = dist.read_text("INSTALLER")
+        if installer_text:
+            installer = installer_text.strip().lower()
+            if installer == "uv":
+                return "uv tool", ["uv", "tool", "install", "--reinstall", "advisor-agent"]
+            if installer == "pipx":
+                return "pipx", ["pipx", "upgrade", "advisor-agent"]
+    except Exception:
+        pass
+
+    # Fall back to executable-path heuristic.
     exe = Path(sys.argv[0]).resolve() if sys.argv and sys.argv[0] else None
     if exe is None or not exe.exists():
         return None
@@ -2139,7 +2188,13 @@ def cmd_update(args: argparse.Namespace) -> int:
         print()
         print(_style.cta(label, " ".join(cmd)))
     try:
-        completed = subprocess.run(cmd, check=False)
+        completed = subprocess.run(cmd, check=False, timeout=300)
+    except subprocess.TimeoutExpired:
+        print(
+            _style.error_box("upgrade timed out after 300 s", stream=sys.stderr),
+            file=sys.stderr,
+        )
+        return 1
     except KeyboardInterrupt:
         print()
         print(_style.dim("  aborted"))
@@ -2170,7 +2225,13 @@ def cmd_update(args: argparse.Namespace) -> int:
     if quiet:
         install_cmd.append("--quiet")
     try:
-        rc = subprocess.run(install_cmd, check=False).returncode
+        rc = subprocess.run(install_cmd, check=False, timeout=300).returncode
+    except subprocess.TimeoutExpired:
+        print(
+            _style.error_box("post-upgrade install timed out after 300 s", stream=sys.stderr),
+            file=sys.stderr,
+        )
+        return 1
     except KeyboardInterrupt:
         print()
         print(_style.dim("  aborted"))
@@ -2858,6 +2919,15 @@ def _load_findings_from_input(
             text = _read_stdin_capped(source_label="findings input")
         else:
             src_path = Path(source)
+            if not src_path.is_file():
+                print(
+                    _style.error_box(
+                        f"findings input {src_path} is not a regular file",
+                        stream=sys.stderr,
+                    ),
+                    file=sys.stderr,
+                )
+                return [], 2
             # Bounded binary read closes the stat-then-read TOCTOU where a
             # concurrent appender could grow the file past _STDIN_LIMIT between
             # the size guard and the read. Mirrors ``_fs.read_text_capped`` but
@@ -3867,7 +3937,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_ui.add_argument(
         "--host",
         default="127.0.0.1",
-        help="Host to bind (default: 127.0.0.1 — loopback only)",
+        type=_valid_host,
+        help="Host to bind (default: 127.0.0.1 — loopback only; 127.0.0.1, ::1, localhost only)",
     )
     p_ui.add_argument(
         "--port",
