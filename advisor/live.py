@@ -59,7 +59,7 @@ import warnings
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, BinaryIO, cast
+from typing import Any, BinaryIO
 
 # Cross-module reuse of the history append-locking primitives. ``live.py``
 # and ``history.py`` both append to JSONL files where concurrent appenders
@@ -248,7 +248,7 @@ def append_event(
     # Writing encoded bytes keeps the tail seek byte-based and forces LF-only
     # JSONL across platforms.
     with path.open("a+b") as f:
-        _lock_exclusive(cast(Any, f))
+        _lock_exclusive(f)
         try:
             # Tail-read inside the lock so the seq we compute is the truly
             # latest one. ``a+b`` opens with position 0 on POSIX — seek to
@@ -263,10 +263,11 @@ def append_event(
                 "data": data,
             }
             line = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
-            if len(line.encode("utf-8")) > _MAX_LINE:
+            encoded_line = line.encode("utf-8")
+            if len(encoded_line) > _MAX_LINE:
                 raise ValueError(
-                    f"live event too large ({len(line)} chars > {_MAX_LINE} per-line cap); "
-                    "trim the data payload"
+                    f"live event too large ({len(encoded_line)} bytes > {_MAX_LINE} byte "
+                    "per-line cap); trim the data payload"
                 )
             # ``a`` mode always appends at end on POSIX regardless of the
             # current seek position; explicit seek_to_end is belt-and-
@@ -275,7 +276,7 @@ def append_event(
             f.write((line + "\n").encode("utf-8"))
             f.flush()
         finally:
-            _unlock_exclusive(cast(Any, f))
+            _unlock_exclusive(f)
     return path
 
 

@@ -24,7 +24,7 @@ from collections import deque
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import IO
+from typing import IO, Any
 
 from advisor.orchestrate._fence import fence
 
@@ -97,7 +97,7 @@ def history_path(target: str | Path) -> Path:
     return Path(target) / HISTORY_DIR_NAME / HISTORY_FILE_NAME
 
 
-def _lock_exclusive(fh: IO[str]) -> None:
+def _lock_exclusive(fh: IO[Any]) -> None:
     """Acquire an exclusive advisory lock on ``fh``, best-effort.
 
     Used by :func:`append_entries` so two concurrent ``advisor`` processes
@@ -160,7 +160,7 @@ def _maybe_warn_lock_unsupported(exc: OSError) -> None:
     )
 
 
-def _unlock_exclusive(fh: IO[str]) -> None:
+def _unlock_exclusive(fh: IO[Any]) -> None:
     """Release the lock acquired by :func:`_lock_exclusive`, best-effort.
 
     On POSIX, closing the file descriptor releases ``fcntl.flock`` so we
@@ -172,7 +172,7 @@ def _unlock_exclusive(fh: IO[str]) -> None:
     _unlock_windows(fh)
 
 
-def _lock_windows(fh: IO[str]) -> None:
+def _lock_windows(fh: IO[Any]) -> None:
     if not _IS_WINDOWS:  # pragma: no cover - platform guard
         return
     try:
@@ -189,7 +189,7 @@ def _lock_windows(fh: IO[str]) -> None:
         _maybe_warn_lock_unsupported(exc)
 
 
-def _unlock_windows(fh: IO[str]) -> None:
+def _unlock_windows(fh: IO[Any]) -> None:
     """Release a Windows ``msvcrt.locking`` lock acquired by :func:`_lock_windows`.
 
     ``msvcrt.locking`` does not auto-release on close — the OS keeps the
