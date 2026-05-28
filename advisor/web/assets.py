@@ -917,7 +917,7 @@ APP_JS = r"""(() => {
 
   function renderFindingDetail(e) {
     const fields = [];
-    if (e.description) fields.push(['Description', e.description]);
+    if (e.description) fields.push(['Description', escapeHtml(e.description)]);
     if (e.file_path) fields.push(['File', `<code>${escapeHtml(e.file_path)}</code>`]);
     if (e.line_number) fields.push(['Line', String(e.line_number)]);
     if (e.evidence) fields.push(['Evidence', `<code>${escapeHtml(e.evidence)}</code>`]);
