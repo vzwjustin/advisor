@@ -7,7 +7,7 @@ wiring and the server can serve them from memory without filesystem lookups.
 from __future__ import annotations
 
 INDEX_HTML = """<!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <title>advisor dashboard</title>
@@ -18,20 +18,30 @@ INDEX_HTML = """<!doctype html>
 <header>
   <h1>advisor</h1>
   <nav>
-    <button class="tab active" data-tab="findings">Findings</button>
-    <button class="tab" data-tab="live">Live</button>
-    <button class="tab" data-tab="plan">Plan</button>
-    <button class="tab" data-tab="config">Run config</button>
-    <button class="tab" data-tab="cost">Cost</button>
+    <button class="tab active" data-tab="findings" title="Findings (1)">Findings</button>
+    <button class="tab" data-tab="live" title="Live (2)">Live</button>
+    <button class="tab" data-tab="plan" title="Plan (3)">Plan</button>
+    <button class="tab" data-tab="config" title="Run config (4)">Run config</button>
+    <button class="tab" data-tab="cost" title="Cost (5)">Cost</button>
   </nav>
+  <div class="header-actions">
+    <button id="theme-toggle" class="icon-btn" title="Toggle theme (T)" aria-label="Toggle theme">
+      <svg id="theme-icon-dark" width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M6 .278a.768.768 0 0 1 .08.858 7.208 7.208 0 0 0-.878 3.46c0 4.021 3.278 7.277 7.318 7.277.527 0 1.04-.055 1.533-.16a.787.787 0 0 1 .81.316.733.733 0 0 1-.031.893A8.349 8.349 0 0 1 8.344 16C3.734 16 0 12.286 0 7.71 0 4.266 2.114 1.312 5.124.06A.752.752 0 0 1 6 .278z"/></svg>
+      <svg id="theme-icon-light" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" hidden><path d="M8 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM8 0a.5.5 0 0 1 .5.5v2a.5.5 0 0 1-1 0v-2A.5.5 0 0 1 8 0zm0 13a.5.5 0 0 1 .5.5v2a.5.5 0 0 1-1 0v-2A.5.5 0 0 1 8 13zm8-5a.5.5 0 0 1-.5.5h-2a.5.5 0 0 1 0-1h2a.5.5 0 0 1 .5.5zM3 8a.5.5 0 0 1-.5.5h-2a.5.5 0 0 1 0-1h2A.5.5 0 0 1 3 8zm10.657-5.657a.5.5 0 0 1 0 .707l-1.414 1.415a.5.5 0 1 1-.707-.708l1.414-1.414a.5.5 0 0 1 .707 0zm-9.193 9.193a.5.5 0 0 1 0 .707L3.05 13.657a.5.5 0 0 1-.707-.707l1.414-1.414a.5.5 0 0 1 .707 0zm9.193 2.121a.5.5 0 0 1-.707 0l-1.414-1.414a.5.5 0 0 1 .707-.707l1.414 1.414a.5.5 0 0 1 0 .707zM4.464 4.465a.5.5 0 0 1-.707 0L2.343 3.05a.5.5 0 1 1 .707-.707l1.414 1.414a.5.5 0 0 1 0 .708z"/></svg>
+    </button>
+    <button id="shortcuts-btn" class="icon-btn" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M14 5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h12zM2 4a2 2 0 0 0-2 2v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2H2z"/><path d="M13 10.25a.25.25 0 0 1 .25-.25h.5a.25.25 0 0 1 .25.25v.5a.25.25 0 0 1-.25.25h-.5a.25.25 0 0 1-.25-.25v-.5zm0-2a.25.25 0 0 1 .25-.25h.5a.25.25 0 0 1 .25.25v.5a.25.25 0 0 1-.25.25h-.5a.25.25 0 0 1-.25-.25v-.5zm-5 0A.25.25 0 0 1 8.25 8h.5a.25.25 0 0 1 .25.25v.5a.25.25 0 0 1-.25.25h-.5A.25.25 0 0 1 8 8.75v-.5zm2 0a.25.25 0 0 1 .25-.25h.5a.25.25 0 0 1 .25.25v.5a.25.25 0 0 1-.25.25h-.5a.25.25 0 0 1-.25-.25v-.5zm-5 0A.25.25 0 0 1 5.25 8h.5a.25.25 0 0 1 .25.25v.5a.25.25 0 0 1-.25.25h-.5A.25.25 0 0 1 5 8.75v-.5zm-2 0A.25.25 0 0 1 3.25 8h.5a.25.25 0 0 1 .25.25v.5a.25.25 0 0 1-.25.25h-.5A.25.25 0 0 1 3 8.75v-.5zm-1 2a.25.25 0 0 1 .25-.25h.5a.25.25 0 0 1 .25.25v.5a.25.25 0 0 1-.25.25h-.5a.25.25 0 0 1-.25-.25v-.5zm11-4a.25.25 0 0 1 .25-.25h.5a.25.25 0 0 1 .25.25v.5a.25.25 0 0 1-.25.25h-.5a.25.25 0 0 1-.25-.25v-.5zm-2 0a.25.25 0 0 1 .25-.25h.5a.25.25 0 0 1 .25.25v.5a.25.25 0 0 1-.25.25h-.5a.25.25 0 0 1-.25-.25v-.5zm-2 0A.25.25 0 0 1 6.25 6h.5a.25.25 0 0 1 .25.25v.5a.25.25 0 0 1-.25.25h-.5A.25.25 0 0 1 6 6.75v-.5zm-2 0A.25.25 0 0 1 4.25 6h.5a.25.25 0 0 1 .25.25v.5a.25.25 0 0 1-.25.25h-.5A.25.25 0 0 1 4 6.75v-.5zm-2 0A.25.25 0 0 1 2.25 6h.5a.25.25 0 0 1 .25.25v.5a.25.25 0 0 1-.25.25h-.5A.25.25 0 0 1 2 6.75v-.5zm1 2a.25.25 0 0 1 .25-.25h5.5a.25.25 0 0 1 .25.25v.5a.25.25 0 0 1-.25.25h-5.5a.25.25 0 0 1-.25-.25v-.5z"/></svg>
+    </button>
+  </div>
   <div class="target">target: <code id="target-path">loading&hellip;</code></div>
 </header>
 
 <main>
   <section id="findings" class="panel active">
+    <div id="severity-stats" class="severity-stats" hidden></div>
     <div class="controls">
-      <input id="findings-search" type="search" placeholder="filter by file or description">
-      <select id="findings-severity">
+      <input id="findings-search" type="search" placeholder="filter by file or description&hellip;" aria-label="Filter findings">
+      <select id="findings-severity" aria-label="Filter by severity">
         <option value="">all severities</option>
         <option>CRITICAL</option>
         <option>HIGH</option>
@@ -43,11 +53,16 @@ INDEX_HTML = """<!doctype html>
         <span class="live-label">IDLE</span>
       </span>
       <span id="live-updated" class="live-updated"></span>
+      <button id="export-csv" class="btn-secondary" title="Export findings to CSV (E)">Export CSV</button>
       <span id="findings-count" class="count"></span>
     </div>
     <table id="findings-table">
       <thead><tr>
-        <th>When</th><th>File</th><th>Severity</th><th>Status</th><th>Description</th>
+        <th class="sortable" data-sort="timestamp">When <span class="sort-arrow"></span></th>
+        <th class="sortable" data-sort="file_path">File <span class="sort-arrow"></span></th>
+        <th class="sortable" data-sort="severity">Severity <span class="sort-arrow"></span></th>
+        <th class="sortable" data-sort="status">Status <span class="sort-arrow"></span></th>
+        <th>Description</th>
       </tr></thead>
       <tbody></tbody>
     </table>
@@ -123,13 +138,43 @@ INDEX_HTML = """<!doctype html>
   </section>
 </main>
 
+<div id="shortcuts-modal" class="modal" hidden>
+  <div class="modal-backdrop"></div>
+  <div class="modal-content">
+    <h2>Keyboard shortcuts</h2>
+    <div class="shortcuts-grid">
+      <div class="shortcut-group">
+        <h3>Navigation</h3>
+        <dl>
+          <dt><kbd>1</kbd>–<kbd>5</kbd></dt><dd>Switch tabs</dd>
+          <dt><kbd>/</kbd></dt><dd>Focus search</dd>
+          <dt><kbd>Esc</kbd></dt><dd>Close modal / blur search</dd>
+        </dl>
+      </div>
+      <div class="shortcut-group">
+        <h3>Actions</h3>
+        <dl>
+          <dt><kbd>E</kbd></dt><dd>Export findings to CSV</dd>
+          <dt><kbd>T</kbd></dt><dd>Toggle theme</dd>
+          <dt><kbd>R</kbd></dt><dd>Refresh current tab</dd>
+          <dt><kbd>?</kbd></dt><dd>Toggle this help</dd>
+        </dl>
+      </div>
+    </div>
+    <button class="modal-close" aria-label="Close">&times;</button>
+  </div>
+</div>
+
+<div id="toast-container" class="toast-container"></div>
+
 <script src="/static/app.js"></script>
 </body>
 </html>
 """
 
 
-APP_CSS = """:root {
+APP_CSS = """:root,
+[data-theme="dark"] {
   --bg: #0e1116;
   --panel: #161b22;
   --border: #30363d;
@@ -140,6 +185,24 @@ APP_CSS = """:root {
   --high: #db6d28;
   --med: #d29922;
   --low: #3fb950;
+  --thead-bg: #1f242c;
+  --hover-bg: rgba(88, 166, 255, 0.06);
+  --overlay: rgba(0, 0, 0, 0.6);
+}
+[data-theme="light"] {
+  --bg: #ffffff;
+  --panel: #f6f8fa;
+  --border: #d0d7de;
+  --text: #1f2328;
+  --muted: #656d76;
+  --accent: #0969da;
+  --crit: #cf222e;
+  --high: #bc4c00;
+  --med: #9a6700;
+  --low: #1a7f37;
+  --thead-bg: #f0f3f6;
+  --hover-bg: rgba(9, 105, 218, 0.04);
+  --overlay: rgba(0, 0, 0, 0.3);
 }
 * { box-sizing: border-box; }
 body {
@@ -147,6 +210,7 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   background: var(--bg);
   color: var(--text);
+  transition: background 0.2s, color 0.2s;
 }
 header {
   padding: 1rem 1.5rem;
@@ -166,14 +230,69 @@ nav { display: flex; gap: 0.25rem; }
   cursor: pointer;
   font-size: 0.9rem;
   border-radius: 4px;
+  transition: color 0.15s, border-color 0.15s;
 }
+.tab:hover { color: var(--text); }
 .tab.active { color: var(--text); border-color: var(--accent); }
-.target { margin-left: auto; color: var(--muted); font-size: 0.85rem; }
+.header-actions { display: flex; gap: 0.4rem; margin-left: auto; }
+.icon-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.icon-btn:hover { color: var(--text); border-color: var(--accent); }
+.target { color: var(--muted); font-size: 0.85rem; width: 100%; }
 .target code { color: var(--accent); }
 
 main { padding: 1.5rem; max-width: 1100px; margin: 0 auto; }
 .panel { display: none; }
 .panel.active { display: block; }
+
+/* --- severity stats bar --- */
+.severity-stats {
+  display: flex;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+.stat-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.75rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.1s;
+  user-select: none;
+}
+.stat-badge:hover { transform: translateY(-1px); }
+.stat-badge.active { border-width: 2px; padding: 0.35rem 0.7rem; }
+.stat-badge .stat-count {
+  font-weight: 700;
+  font-size: 1rem;
+  font-variant-numeric: tabular-nums;
+}
+.stat-badge.sev-CRITICAL { color: var(--crit); }
+.stat-badge.sev-CRITICAL.active { border-color: var(--crit); }
+.stat-badge.sev-HIGH { color: var(--high); }
+.stat-badge.sev-HIGH.active { border-color: var(--high); }
+.stat-badge.sev-MEDIUM { color: var(--med); }
+.stat-badge.sev-MEDIUM.active { border-color: var(--med); }
+.stat-badge.sev-LOW { color: var(--low); }
+.stat-badge.sev-LOW.active { border-color: var(--low); }
+.stat-badge.sev-total { color: var(--text); }
 
 .controls {
   display: flex;
@@ -190,9 +309,20 @@ main { padding: 1.5rem; max-width: 1100px; margin: 0 auto; }
   border-radius: 4px;
   font-size: 0.9rem;
 }
-.controls input[type="search"] { min-width: 260px; }
-.controls button { cursor: pointer; }
+.controls input[type="search"] { min-width: 220px; flex: 1; max-width: 320px; }
+.controls button { cursor: pointer; transition: border-color 0.15s; }
 .controls button:hover { border-color: var(--accent); }
+.btn-secondary {
+  background: var(--panel);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  padding: 0.4rem 0.7rem;
+  border-radius: 4px;
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.btn-secondary:hover { color: var(--text); border-color: var(--accent); }
 .count { color: var(--muted); font-size: 0.85rem; margin-left: auto; }
 
 table {
@@ -204,7 +334,7 @@ table {
   overflow: hidden;
   font-size: 0.9rem;
 }
-thead { background: #1f242c; }
+thead { background: var(--thead-bg); }
 th, td {
   text-align: left;
   padding: 0.6rem 0.8rem;
@@ -212,6 +342,53 @@ th, td {
 }
 tr:last-child td { border-bottom: 0; }
 td code { color: var(--accent); }
+
+/* --- sortable columns --- */
+th.sortable {
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.15s;
+  white-space: nowrap;
+}
+th.sortable:hover { color: var(--accent); }
+th.sortable .sort-arrow { font-size: 0.7rem; margin-left: 0.3rem; opacity: 0.4; }
+th.sortable.sort-asc .sort-arrow::after { content: "\\25B2"; opacity: 1; }
+th.sortable.sort-desc .sort-arrow::after { content: "\\25BC"; opacity: 1; }
+
+/* --- expandable row detail --- */
+tr.expandable { cursor: pointer; transition: background 0.1s; }
+tr.expandable:hover { background: var(--hover-bg); }
+tr.detail-row td {
+  padding: 0;
+  border-bottom: 1px solid var(--border);
+}
+.detail-content {
+  padding: 0.8rem 1rem;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+.detail-content dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.3rem 1rem;
+  margin: 0;
+}
+.detail-content dt {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.detail-content dd { margin: 0; word-break: break-word; }
+.detail-content dd code {
+  background: var(--panel);
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  font-size: 0.82rem;
+}
 
 .sev { font-weight: 600; padding: 2px 6px; border-radius: 3px; font-size: 0.75rem; }
 .sev-CRITICAL { color: var(--crit); border: 1px solid var(--crit); }
@@ -274,20 +451,17 @@ td code { color: var(--accent); }
   font-variant-numeric: tabular-nums;
 }
 
-/* Newly-arrived rows briefly flash, then settle. The animation runs once
-   via JS adding the `.row-new` class; JS removes it after ~2s so a row
-   animates again only when it's genuinely new on a later poll. */
 @keyframes row-flash {
   0%   { background: rgba(88, 166, 255, 0.22); }
   100% { background: transparent; }
 }
 tr.row-new td { animation: row-flash 2s ease-out; }
 
-/* Respect users who asked the OS for reduced motion — no pulses or flashes. */
 @media (prefers-reduced-motion: reduce) {
   .live.active .live-dot { animation: none; }
   tr.row-new td { animation: none; }
   .feed-item.feed-new { animation: none; }
+  .toast { animation: none; }
 }
 
 /* --- live feed (events tab) --- */
@@ -410,6 +584,101 @@ pre {
 }
 .cost-card h4 { margin: 0 0 0.4rem; font-size: 0.8rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
 .cost-card .val { font-size: 1.2rem; font-weight: 600; color: var(--accent); }
+
+/* --- modal --- */
+.modal { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; }
+.modal[hidden] { display: none; }
+.modal-backdrop { position: absolute; inset: 0; background: var(--overlay); }
+.modal-content {
+  position: relative;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.5rem 2rem;
+  max-width: 480px;
+  width: 90%;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.3);
+}
+.modal-content h2 { margin: 0 0 1rem; font-size: 1.1rem; }
+.modal-close {
+  position: absolute;
+  top: 0.8rem;
+  right: 1rem;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 1.5rem;
+  cursor: pointer;
+  line-height: 1;
+}
+.modal-close:hover { color: var(--text); }
+.shortcuts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+.shortcut-group h3 { margin: 0 0 0.5rem; font-size: 0.85rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.shortcut-group dl { margin: 0; }
+.shortcut-group dt { float: left; clear: left; margin-right: 0.5rem; margin-bottom: 0.4rem; }
+.shortcut-group dd { margin: 0 0 0.4rem; font-size: 0.85rem; color: var(--text); }
+kbd {
+  display: inline-block;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0.1rem 0.4rem;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.75rem;
+  box-shadow: 0 1px 0 var(--border);
+}
+
+/* --- toast notifications --- */
+.toast-container {
+  position: fixed;
+  bottom: 1.5rem;
+  right: 1.5rem;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  pointer-events: none;
+}
+.toast {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.6rem 1rem;
+  font-size: 0.85rem;
+  color: var(--text);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+  animation: toast-in 0.2s ease-out;
+  pointer-events: auto;
+}
+.toast.toast-out { animation: toast-out 0.2s ease-in forwards; }
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes toast-out {
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(8px); }
+}
+
+/* --- responsive --- */
+@media (max-width: 768px) {
+  header { padding: 0.8rem 1rem; gap: 0.8rem; }
+  header h1 { font-size: 1.1rem; }
+  nav { flex-wrap: wrap; gap: 0.2rem; }
+  .tab { padding: 0.35rem 0.6rem; font-size: 0.8rem; }
+  .header-actions { order: -1; margin-left: 0; }
+  .target { font-size: 0.78rem; }
+  main { padding: 1rem; }
+  .controls { gap: 0.5rem; }
+  .controls input[type="search"] { min-width: 0; width: 100%; max-width: none; }
+  .feed-item { grid-template-columns: 6rem 5.5rem 1fr; gap: 0.4rem; padding: 0.4rem 0.6rem; }
+  .shortcuts-grid { grid-template-columns: 1fr; }
+  .severity-stats { gap: 0.4rem; }
+  .stat-badge { padding: 0.3rem 0.55rem; font-size: 0.75rem; }
+  .stat-badge .stat-count { font-size: 0.85rem; }
+  .detail-content dl { grid-template-columns: 1fr; }
+  .detail-content dt { margin-top: 0.4rem; }
+}
 """
 
 
@@ -417,89 +686,257 @@ APP_JS = r"""(() => {
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => document.querySelectorAll(sel);
 
-  // --- tab switching ---
-  // Track which tabs have been auto-loaded so we only fetch their data
-  // once per session — clicking back into a tab shouldn't re-fetch.
-  const autoLoaded = new Set();
-  $$('.tab').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      $$('.tab').forEach((b) => b.classList.remove('active'));
-      $$('.panel').forEach((p) => p.classList.remove('active'));
-      btn.classList.add('active');
-      $('#' + btn.dataset.tab).classList.add('active');
-      // Poll is only useful on the findings tab; kick it immediately when
-      // the user switches to that tab so they don't wait a full interval.
-      if (btn.dataset.tab === 'findings') schedulePoll(0);
-      // Auto-load the Cost and Plan tabs on first visit so the user
-      // doesn't have to click a button just to see what the tab is for.
-      // The dedicated Refresh / Estimate buttons remain for re-fetch.
-      if (btn.dataset.tab === 'cost' && !autoLoaded.has('cost')) {
-        autoLoaded.add('cost');
-        loadCost();
-      }
-      if (btn.dataset.tab === 'plan' && !autoLoaded.has('plan')) {
-        autoLoaded.add('plan');
-        loadPlan();
-      }
-    });
+  // --- toast notifications ---
+  function showToast(msg, durationMs) {
+    const container = $('#toast-container');
+    if (!container) return;
+    const el = document.createElement('div');
+    el.className = 'toast';
+    el.textContent = msg;
+    container.appendChild(el);
+    const dur = durationMs || 2000;
+    setTimeout(() => {
+      el.classList.add('toast-out');
+      setTimeout(() => el.remove(), 200);
+    }, dur);
+  }
+
+  // --- theme toggle ---
+  function getTheme() {
+    return localStorage.getItem('advisor-theme') || 'dark';
+  }
+  function setTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('advisor-theme', theme);
+    const darkIcon = $('#theme-icon-dark');
+    const lightIcon = $('#theme-icon-light');
+    if (darkIcon && lightIcon) {
+      darkIcon.hidden = theme === 'light';
+      lightIcon.hidden = theme === 'dark';
+    }
+  }
+  setTheme(getTheme());
+  $('#theme-toggle').addEventListener('click', () => {
+    const next = getTheme() === 'dark' ? 'light' : 'dark';
+    setTheme(next);
+    showToast('Theme: ' + next);
   });
+
+  // --- shortcuts modal ---
+  function toggleShortcuts() {
+    const modal = $('#shortcuts-modal');
+    modal.hidden = !modal.hidden;
+  }
+  $('#shortcuts-btn').addEventListener('click', toggleShortcuts);
+  $('#shortcuts-modal .modal-backdrop').addEventListener('click', () => {
+    $('#shortcuts-modal').hidden = true;
+  });
+  $('#shortcuts-modal .modal-close').addEventListener('click', () => {
+    $('#shortcuts-modal').hidden = true;
+  });
+
+  // --- tab switching ---
+  const TAB_ORDER = ['findings', 'live', 'plan', 'config', 'cost'];
+  const autoLoaded = new Set();
+
+  function switchTab(tabName) {
+    $$('.tab').forEach((b) => b.classList.remove('active'));
+    $$('.panel').forEach((p) => p.classList.remove('active'));
+    const btn = document.querySelector(`.tab[data-tab="${tabName}"]`);
+    if (btn) btn.classList.add('active');
+    const panel = $('#' + tabName);
+    if (panel) panel.classList.add('active');
+    if (tabName === 'findings') schedulePoll(0);
+    if (tabName === 'cost' && !autoLoaded.has('cost')) {
+      autoLoaded.add('cost');
+      loadCost();
+    }
+    if (tabName === 'plan' && !autoLoaded.has('plan')) {
+      autoLoaded.add('plan');
+      loadPlan();
+    }
+    if (tabName === 'live') scheduleLiveStreamPoll(0);
+  }
+
+  $$('.tab').forEach((btn) => {
+    btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+  });
+
+  // --- keyboard shortcuts ---
+  document.addEventListener('keydown', (e) => {
+    // Ignore when typing in inputs
+    const tag = (e.target.tagName || '').toLowerCase();
+    const isInput = tag === 'input' || tag === 'textarea' || tag === 'select';
+
+    if (e.key === 'Escape') {
+      if (!$('#shortcuts-modal').hidden) { $('#shortcuts-modal').hidden = true; return; }
+      if (isInput) { e.target.blur(); return; }
+      return;
+    }
+    if (isInput) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+    switch (e.key) {
+      case '1': case '2': case '3': case '4': case '5':
+        e.preventDefault();
+        switchTab(TAB_ORDER[parseInt(e.key) - 1]);
+        break;
+      case '/':
+        e.preventDefault();
+        switchTab('findings');
+        $('#findings-search').focus();
+        break;
+      case '?':
+        e.preventDefault();
+        toggleShortcuts();
+        break;
+      case 't': case 'T':
+        e.preventDefault();
+        setTheme(getTheme() === 'dark' ? 'light' : 'dark');
+        showToast('Theme: ' + getTheme());
+        break;
+      case 'e': case 'E':
+        e.preventDefault();
+        exportFindings();
+        break;
+      case 'r': case 'R':
+        e.preventDefault();
+        refreshCurrentTab();
+        break;
+    }
+  });
+
+  function refreshCurrentTab() {
+    const active = document.querySelector('.tab.active');
+    if (!active) return;
+    const tab = active.dataset.tab;
+    if (tab === 'findings') schedulePoll(0);
+    else if (tab === 'plan') loadPlan();
+    else if (tab === 'cost') loadCost();
+    else if (tab === 'live') scheduleLiveStreamPoll(0);
+    showToast('Refreshed');
+  }
 
   // --- findings ---
   let findingsRaw = [];
   let findingsErrorMessage = '';
-  // Keys of entries we've already seen in a previous render. Entries whose
-  // key is NOT in here get the `.row-new` highlight on the next render.
-  // See `findingKey` below for the identity contract.
   let seenKeys = new Set();
-  // Hard ceiling on seenKeys to bound memory in long-lived sessions
-  // (e.g. dashboard left open for hours / days). 5000 is well above the
-  // realistic findings-per-session count; if a user genuinely scrolls
-  // past 5000 distinct findings, the older entries get FIFO-dropped from
-  // the "have we already flashed this row?" set — which at worst causes
-  // a stale row to re-flash on the next render, not data corruption.
   const MAX_SEEN_KEYS = 5000;
 
-  // --------------------------------------------------------------
-  // USER CONTRIBUTION POINT — identity of a finding for "is this new?"
-  //
-  // Returns a stable string key for one history entry. The poll loop
-  // diffs incoming entries against `seenKeys`; anything whose key isn't
-  // in the set is treated as new and gets the yellow-flash animation.
-  //
-  // Design trade-offs (pick one):
-  //   (a) `${entry.timestamp}|${entry.file_path}|${entry.description}`
-  //       — safest: two entries collide only if they are effectively the
-  //         same finding. Flash is stable across filter changes.
-  //   (b) `${entry.run_id}|${entry.file_path}|${entry.severity}`
-  //       — groups by run, ignores description edits. Cleaner if a
-  //         runner rewrites descriptions mid-run.
-  //   (c) `${entry.timestamp}|${entry.file_path}`
-  //       — loosest: collides when one run flags the same file twice in
-  //         the same second. Cheapest to compute, lossiest correctness.
-  //
-  // Return "" to disable highlighting for this entry.
-  // --------------------------------------------------------------
+  // Sort state
+  let sortField = '';
+  let sortDir = '';  // 'asc' or 'desc'
+
   function findingKey(entry) {
-    // Tight identity: two entries are "the same finding" only when
-    // timestamp, file, AND description all match. Rationale:
-    //   - timestamp alone collides when two findings land in the same
-    //     second (common during a noisy run).
-    //   - file_path alone collides across unrelated findings in one file.
-    //   - adding description makes description-rewrites re-flash, which
-    //     is the correct UX: if the user-visible text changed, the row
-    //     really is "new" to the reader.
-    // `\u241f` (SYMBOL FOR UNIT SEPARATOR) is a zero-risk delimiter —
-    // never appears in timestamps, paths, or natural-language descriptions.
     const ts = entry.timestamp || '';
     const fp = entry.file_path || '';
     const desc = entry.description || '';
     return ts + '\u241f' + fp + '\u241f' + desc;
   }
 
+  // --- severity stats ---
+  function renderSeverityStats() {
+    const stats = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0 };
+    findingsRaw.forEach((e) => {
+      const s = (e.severity || '').toUpperCase();
+      if (s in stats) stats[s]++;
+    });
+    const container = $('#severity-stats');
+    const total = findingsRaw.length;
+    if (total === 0) { container.hidden = true; return; }
+    container.hidden = false;
+    const currentSev = $('#findings-severity').value;
+    container.innerHTML = `
+      <span class="stat-badge sev-total${!currentSev ? ' active' : ''}" data-sev="">
+        <span class="stat-count">${total}</span> total
+      </span>
+      <span class="stat-badge sev-CRITICAL${currentSev === 'CRITICAL' ? ' active' : ''}" data-sev="CRITICAL">
+        <span class="stat-count">${stats.CRITICAL}</span> critical
+      </span>
+      <span class="stat-badge sev-HIGH${currentSev === 'HIGH' ? ' active' : ''}" data-sev="HIGH">
+        <span class="stat-count">${stats.HIGH}</span> high
+      </span>
+      <span class="stat-badge sev-MEDIUM${currentSev === 'MEDIUM' ? ' active' : ''}" data-sev="MEDIUM">
+        <span class="stat-count">${stats.MEDIUM}</span> medium
+      </span>
+      <span class="stat-badge sev-LOW${currentSev === 'LOW' ? ' active' : ''}" data-sev="LOW">
+        <span class="stat-count">${stats.LOW}</span> low
+      </span>
+    `;
+    container.querySelectorAll('.stat-badge').forEach((badge) => {
+      badge.addEventListener('click', () => {
+        const sev = badge.dataset.sev;
+        $('#findings-severity').value = sev;
+        renderFindings();
+      });
+    });
+  }
+
+  // --- sortable columns ---
+  const SEV_ORDER = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
+  function sortFindings(arr) {
+    if (!sortField || !sortDir) return arr;
+    const copy = [...arr];
+    const dir = sortDir === 'asc' ? 1 : -1;
+    copy.sort((a, b) => {
+      let va, vb;
+      if (sortField === 'severity') {
+        va = SEV_ORDER[(a.severity || '').toUpperCase()] || 0;
+        vb = SEV_ORDER[(b.severity || '').toUpperCase()] || 0;
+        return (va - vb) * dir;
+      }
+      va = (a[sortField] || '').toLowerCase();
+      vb = (b[sortField] || '').toLowerCase();
+      if (va < vb) return -1 * dir;
+      if (va > vb) return 1 * dir;
+      return 0;
+    });
+    return copy;
+  }
+
+  $$('#findings-table th.sortable').forEach((th) => {
+    th.addEventListener('click', () => {
+      const field = th.dataset.sort;
+      if (sortField === field) {
+        sortDir = sortDir === 'asc' ? 'desc' : sortDir === 'desc' ? '' : 'asc';
+        if (!sortDir) sortField = '';
+      } else {
+        sortField = field;
+        sortDir = 'asc';
+      }
+      $$('#findings-table th.sortable').forEach((h) => {
+        h.classList.remove('sort-asc', 'sort-desc');
+      });
+      if (sortDir) th.classList.add('sort-' + sortDir);
+      renderFindings();
+    });
+  });
+
+  // --- expandable finding detail ---
+  let expandedKey = null;
+
+  function renderFindingDetail(e) {
+    const fields = [];
+    if (e.description) fields.push(['Description', e.description]);
+    if (e.file_path) fields.push(['File', `<code>${escapeHtml(e.file_path)}</code>`]);
+    if (e.line_number) fields.push(['Line', String(e.line_number)]);
+    if (e.evidence) fields.push(['Evidence', `<code>${escapeHtml(e.evidence)}</code>`]);
+    if (e.fix) fields.push(['Fix', escapeHtml(e.fix)]);
+    if (e.rule_id) fields.push(['Rule', escapeHtml(e.rule_id)]);
+    if (e.tool) fields.push(['Tool', escapeHtml(e.tool)]);
+    if (e.run_id) fields.push(['Run ID', escapeHtml(e.run_id)]);
+    let html = '<dl>';
+    fields.forEach(([label, val]) => {
+      html += `<dt>${escapeHtml(label)}</dt><dd>${val}</dd>`;
+    });
+    html += '</dl>';
+    return html;
+  }
+
   function renderFindings() {
     const q = $('#findings-search').value.toLowerCase();
     const sev = $('#findings-severity').value;
-    const filtered = findingsRaw.filter((e) => {
+    let filtered = findingsRaw.filter((e) => {
       if (sev && (e.severity || '').toUpperCase() !== sev) return false;
       if (!q) return true;
       return (
@@ -507,15 +944,17 @@ APP_JS = r"""(() => {
         (e.description || '').toLowerCase().includes(q)
       );
     });
+    filtered = sortFindings(filtered);
     const tbody = $('#findings-table tbody');
     tbody.innerHTML = '';
     filtered.forEach((e) => {
       const key = findingKey(e);
-      // seenKeys.size === 0 means initial load — suppress flash so existing
-      // findings don't all light up blue on page open.
       const isNew = seenKeys.size > 0 && key && !seenKeys.has(key);
+      const isExpanded = key === expandedKey;
       const tr = document.createElement('tr');
+      tr.className = 'expandable';
       if (isNew) tr.classList.add('row-new');
+      if (isExpanded) tr.classList.add('expanded');
       tr.innerHTML = `
         <td>${escapeHtml(e.timestamp || '')}</td>
         <td><code>${escapeHtml(e.file_path || '')}</code></td>
@@ -523,17 +962,26 @@ APP_JS = r"""(() => {
         <td>${escapeHtml(e.status || '')}</td>
         <td>${escapeHtml(e.description || '')}</td>
       `;
+      tr.addEventListener('click', () => {
+        if (expandedKey === key) {
+          expandedKey = null;
+        } else {
+          expandedKey = key;
+        }
+        renderFindings();
+      });
       tbody.appendChild(tr);
+      if (isExpanded) {
+        const detailTr = document.createElement('tr');
+        detailTr.className = 'detail-row';
+        const td = document.createElement('td');
+        td.colSpan = 5;
+        td.innerHTML = `<div class="detail-content">${renderFindingDetail(e)}</div>`;
+        detailTr.appendChild(td);
+        tbody.appendChild(detailTr);
+      }
       if (isNew) setTimeout(() => tr.classList.remove('row-new'), 2100);
     });
-    // Track ALL raw entries (not just the filtered view) so clearing a filter
-    // never re-flashes entries that were merely hidden by the current query.
-    // FIFO trim: in a long-lived session that polls /api/history every few
-    // seconds, seenKeys would otherwise grow without bound, retaining one
-    // string per finding the user has ever scrolled through. Cap at
-    // MAX_SEEN_KEYS and drop the oldest insertion-order entries when the
-    // cap is exceeded — Set iteration is insertion-ordered in ES2015+, so
-    // .values().next() yields the oldest key first.
     findingsRaw.forEach((e) => { const k = findingKey(e); if (k) seenKeys.add(k); });
     if (seenKeys.size > MAX_SEEN_KEYS) {
       const drop = seenKeys.size - MAX_SEEN_KEYS;
@@ -542,18 +990,12 @@ APP_JS = r"""(() => {
     }
     $('#findings-count').textContent = `${filtered.length} of ${findingsRaw.length}`;
     const hasVisibleFindings = filtered.length !== 0;
-    // When the Live tab is showing activity but no findings have
-    // been confirmed yet, swap the generic "no findings" copy for a
-    // hint that explains the disconnect — confirmed findings only
-    // land in history.jsonl after a /advisor run wraps and the user
-    // accepts each finding. Otherwise the user sees "no findings" +
-    // a bustling Live tab and thinks the Findings tab is broken.
     let emptyCopy;
     if (findingsErrorMessage) {
       emptyCopy = findingsErrorMessage;
     } else if (findingsRaw.length === 0) {
       emptyCopy = (lastStatus && lastStatus.live_is_active)
-        ? 'A /advisor run is in progress on this target — confirmed findings will appear here when the run wraps and you accept them. Watch the Live tab for real-time activity.'
+        ? 'A /advisor run is in progress on this target \u2014 confirmed findings will appear here when the run wraps and you accept them. Watch the Live tab for real-time activity.'
         : 'No findings yet. Run the advisor on this target first.';
     } else {
       emptyCopy = 'No findings match the current filters.';
@@ -561,9 +1003,38 @@ APP_JS = r"""(() => {
     $('#findings-empty').textContent = emptyCopy;
     $('#findings-empty').hidden = hasVisibleFindings;
     $('#findings-table').hidden = !hasVisibleFindings;
+    renderSeverityStats();
   }
   $('#findings-search').addEventListener('input', renderFindings);
   $('#findings-severity').addEventListener('change', renderFindings);
+
+  // --- export to CSV ---
+  function exportFindings() {
+    if (findingsRaw.length === 0) {
+      showToast('No findings to export');
+      return;
+    }
+    const headers = ['timestamp', 'file_path', 'severity', 'status', 'description', 'evidence', 'fix', 'rule_id', 'tool'];
+    const csvRows = [headers.join(',')];
+    findingsRaw.forEach((e) => {
+      const row = headers.map((h) => {
+        const val = String(e[h] || '').replace(/"/g, '""');
+        return '"' + val + '"';
+      });
+      csvRows.push(row.join(','));
+    });
+    const blob = new Blob([csvRows.join('\n')], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'advisor-findings.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast('Exported ' + findingsRaw.length + ' findings');
+  }
+  $('#export-csv').addEventListener('click', exportFindings);
 
   function showFindingsError(message) {
     findingsRaw = [];
@@ -573,6 +1044,7 @@ APP_JS = r"""(() => {
     $('#findings-empty').textContent = message;
     $('#findings-empty').hidden = false;
     $('#findings-table').hidden = true;
+    renderSeverityStats();
   }
 
   // --- live poll loop ---
@@ -805,10 +1277,9 @@ APP_JS = r"""(() => {
   $('#copy-cli').addEventListener('click', async () => {
     try {
       await navigator.clipboard.writeText($('#cli-command').textContent);
-      $('#copy-feedback').textContent = 'copied';
-      setTimeout(() => { $('#copy-feedback').textContent = ''; }, 1500);
+      showToast('Copied to clipboard');
     } catch (_) {
-      $('#copy-feedback').textContent = 'copy failed — select manually';
+      showToast('Copy failed \u2014 select manually');
     }
   });
 
@@ -1028,13 +1499,6 @@ APP_JS = r"""(() => {
   liveStreamPill.addEventListener('click', toggleLiveStream);
   liveStreamPill.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleLiveStream(); }
-  });
-  // Kick the live-stream poll when the user switches to the Live tab —
-  // additive to the existing findings-tab kick at the top of the file.
-  $$('.tab').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      if (btn.dataset.tab === 'live') scheduleLiveStreamPoll(0);
-    });
   });
 
   // --- helpers ---
