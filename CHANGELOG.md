@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-05-27
+
+Fixes the long-standing empty-Findings-tab bug. The dashboard read from
+`<target>/.advisor/history.jsonl`, but nothing in the pipeline ever wrote
+to it — `append_entries` was a public API with zero internal callers, so
+every `/advisor` run emitted CONFIRMED findings in chat that vanished on
+session end.
+
+### Added
+
+- **`advisor history-append [TARGET]`** — new top-level subcommand that
+  reads newline-delimited JSON (or a JSON array) from stdin and appends
+  each finding to `<target>/.advisor/history.jsonl`. Schema-validated at
+  the boundary (file_path/severity/description required, severity and
+  status normalized to uppercase and allowlisted). Auto-fills `run_id`
+  (one per invocation, override with `--run-id`) and `timestamp` (now
+  UTC). `--dedup` skips entries whose
+  `(run_id, file_path, severity, description)` tuple already exists in
+  the last 500 entries, making it safe to call multiple times in one
+  run (per-CONFIRM incremental writes + end-of-run reconciliation).
+- **Advisor prompt teaches the agent to persist findings.** Step 6 of
+  the advisor agent prompt now mandates writing CONFIRMED findings via
+  `advisor history-append --dedup` before sending the final report. The
+  minimum acceptable pattern is a single end-of-run batch; belt-and-
+  suspenders (per-CONFIRM incremental + end-of-run reconcile) is
+  documented as an option.
+
+### Fixed
+
+- **Dashboard Findings tab populates after every run.** Was empty since
+  the history-aware ranker was wired up to *read* `history.jsonl` —
+  nothing wrote it.
+
 ## [0.8.2] - 2026-05-27
 
 Second full sub-agent self-audit cycle on top of v0.8.1. Four rounds
