@@ -50,19 +50,25 @@ __VERSION_BADGE__
 **Step 3 (BEFORE any Bash):** Call `TeamCreate(name="review")` — creates team
 
 **Step 4 (only AFTER steps 2+3 complete):** Build the prompt via Bash —
-write it to a unique temp file (mktemp avoids the `/tmp/advisor_prompt.txt`
-symlink-overwrite footgun on multi-user hosts), then Read it back and
-pass the content directly as the `prompt` parameter to Agent:
+write it to a unique temp file, then Read it back and pass the content
+directly as the `prompt` parameter to Agent:
 
 ```bash
-python3 -c "
-import tempfile
-from advisor import default_team_config, build_advisor_prompt
-config = default_team_config(target_dir='TARGET', context='CONTEXT')
-with tempfile.NamedTemporaryFile('w', prefix='advisor_prompt.', suffix='.txt', delete=False) as f:
-    f.write(build_advisor_prompt(config))
-    print(f.name)
-"
+TMPF=$(mktemp /tmp/advisor_prompt.XXXXXX.txt) && \
+advisor prompt advisor TARGET --context 'CONTEXT' --quiet > "$TMPF" && \
+echo "$TMPF"
+```
+
+If `advisor` is not on `python3`'s path (uv-tool installs), the command
+above still works because `advisor` resolves via `$PATH`. If you get
+`command not found`, find the tool interpreter with
+`head -1 $(which advisor)` and substitute it for `python3`:
+
+```bash
+TMPF=$(mktemp /tmp/advisor_prompt.XXXXXX.txt) && \
+/home/USER/.local/share/uv/tools/advisor-agent/bin/python3 -m advisor \
+  prompt advisor TARGET --context 'CONTEXT' --quiet > "$TMPF" && \
+echo "$TMPF"
 ```
 
 The Bash command prints the unique tmpfile path. Then `Read("<that path>")`
@@ -75,7 +81,7 @@ mailbox mode go idle until a message arrives. Without this, the advisor's
 first turn will never start:
 
 ```
-SendMessage({ to: "advisor", message: "Begin." })
+SendMessage({ to: "advisor", summary: "Begin.", message: "Begin." })
 ```
 
 **Keep ALL output minimal:**
@@ -110,21 +116,14 @@ default_team_config(
 
 **Concrete example (use this pattern verbatim):**
 ```bash
-python3 -c "
-import tempfile
-from advisor import default_team_config, build_advisor_prompt
-config = default_team_config(
-    target_dir='/Users/.../project',
-    context='Audit codebase for UI enhancements'
-)
-with tempfile.NamedTemporaryFile('w', prefix='advisor_prompt.', suffix='.txt', delete=False) as f:
-    f.write(build_advisor_prompt(config))
-    print(f.name)
-"
+TMPF=$(mktemp /tmp/advisor_prompt.XXXXXX.txt) && \
+advisor prompt advisor /Users/.../project \
+  --context 'Audit codebase for UI enhancements' \
+  --quiet > "$TMPF" && \
+echo "$TMPF"
 ```
 
 **NEVER do these:**
-- ❌ `advisor prompt advisor ./src` (CLI dumps prompt text)
 - ❌ Use kwarg `user_request` (it doesn't exist — use `context`)
 - ❌ Pass Python code as the Agent prompt — the prompt must be the built string,
   not the code that builds it
@@ -205,10 +204,10 @@ Agent({
 mode go idle until a message arrives:
 
 ```
-SendMessage({ to: "advisor", message: "Begin." })
+SendMessage({ to: "advisor", summary: "Begin.", message: "Begin." })
 ```
 
-Build the prompt silently via inline Python (see IMPORTANT section above).
+Build the prompt silently via Bash (see IMPORTANT section above).
 The advisor prompt encodes the full six-step flow:
 
 1. **Glob + Grep directly** — Opus builds the structural map itself.
@@ -268,9 +267,14 @@ After spawning the pool, tell Opus they're up — and that runners already start
 ```
 SendMessage({
   to: "advisor",
+  summary: "Pool is up, runners reading",
   message: "Pool of N runners is up. Runners have their batch assignments from initial prompts and are reading now — do NOT send separate explore dispatch messages. Watch your inbox for runner reports, which team-lead will relay to you verbatim."
 })
 ```
+
+**After dispatching, do NOT poll or sleep waiting for runner reports.**
+Runner messages arrive as automatic new conversation turns — just stop
+and wait; the harness delivers them when they land.
 
 ### 4. Watch the live dialogue — relay runner reports to advisor
 
@@ -279,6 +283,7 @@ Runners send their reports to **team-lead** (not directly to the advisor). When 
 ```
 SendMessage({
   to: "advisor",
+  summary: "Runner-N report",
   message: "Runner-N report (verbatim):\\n\\n<full message body>"
 })
 ```
@@ -415,7 +420,7 @@ Schema details and additional kinds: see `advisor live --help`.
 
 The local `advisor` binary provides:
 - `advisor pipeline <dir>` — pipeline reference as a sanity check
-- `advisor prompt advisor <dir>` — the exact Opus advisor prompt
+- `advisor prompt advisor <dir> --context '...' --quiet` — generate the advisor prompt (used in Step 4)
 - `advisor plan <dir>` — local batch dispatch plan (no agents spawned)
 """
 
