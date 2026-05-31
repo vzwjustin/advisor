@@ -994,7 +994,7 @@ def _score_file(
         regex, group_map = _regex_with_extras(language, extra_keywords)
     else:
         regex, group_map = _combined_regex_for(language)
-    combined = f"{path} {content[:CONTENT_SCAN_LIMIT]}"
+    combined = f"{path[:256]} {content[:CONTENT_SCAN_LIMIT]}"
     matches_per_tier: dict[int, list[str]] = {}
 
     for m in regex.finditer(combined):

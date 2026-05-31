@@ -128,6 +128,14 @@ def _run_git(cwd: Path, *args: str) -> list[str]:
                 proc.communicate(timeout=5)
             except subprocess.TimeoutExpired:
                 pass
+            finally:
+                # Ensure the process is reaped even if communicate() timed out
+                # a second time. The process is already SIGKILL'd so wait()
+                # returns immediately unless it is in uninterruptible D-state.
+                try:
+                    proc.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    pass
             raise GitScopeError(
                 f"git {' '.join(args)} timed out after {_GIT_TIMEOUT_SECONDS}s"
             ) from exc

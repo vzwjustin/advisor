@@ -156,12 +156,18 @@ def _semver_tuple(v: str) -> tuple[int, ...] | None:
     return tuple(numeric_parts)
 
 
+def _semver_gt(a: tuple[int, ...], b: tuple[int, ...]) -> bool:
+    """Compare two semver tuples, zero-padding the shorter one."""
+    length = max(len(a), len(b))
+    return (a + (0,) * (length - len(a))) > (b + (0,) * (length - len(b)))
+
+
 def _is_semver_newer(installed: str, bundled: str) -> bool:
     """Return True if ``installed`` parses as strictly newer than ``bundled``."""
     a, b = _semver_tuple(installed), _semver_tuple(bundled)
     if a is None or b is None:
         return False
-    return a > b
+    return _semver_gt(a, b)
 
 
 #: Bundled in the wheel via pyproject force-include. The repo-root fallback
@@ -350,7 +356,7 @@ def check_for_update_cached(
     lat_t = _semver_tuple(latest)
     if cur_t is None or lat_t is None:
         return None
-    return latest if lat_t > cur_t else None
+    return latest if _semver_gt(lat_t, cur_t) else None
 
 
 def fetch_remote_changelog(

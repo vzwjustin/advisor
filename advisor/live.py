@@ -135,16 +135,20 @@ def _last_seq_from_tail(tail: bytes) -> int:
     lines = [ln for ln in tail.splitlines() if ln.strip()]
     if not lines:
         return 0
-    try:
-        record = json.loads(lines[-1])
-    except (ValueError, json.JSONDecodeError):
-        return 0
-    if not isinstance(record, dict):
-        return 0
-    last_seq = record.get("seq")
-    if not isinstance(last_seq, int) or last_seq < 0:
-        return 0
-    return last_seq
+    # Scan backwards so a truncated/corrupt final line doesn't mask valid
+    # records above it — return the seq from the last parseable line.
+    for line in reversed(lines):
+        try:
+            record = json.loads(line)
+        except (ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(record, dict):
+            continue
+        last_seq = record.get("seq")
+        if not isinstance(last_seq, int) or last_seq < 0:
+            continue
+        return last_seq
+    return 0
 
 
 def _read_final_line_tail(fh: BinaryIO) -> bytes:

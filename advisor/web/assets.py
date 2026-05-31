@@ -919,7 +919,7 @@ APP_JS = r"""(() => {
     const fields = [];
     if (e.description) fields.push(['Description', escapeHtml(e.description)]);
     if (e.file_path) fields.push(['File', `<code>${escapeHtml(e.file_path)}</code>`]);
-    if (e.line_number) fields.push(['Line', String(e.line_number)]);
+    if (e.line_number) fields.push(['Line', escapeHtml(String(e.line_number))]);
     if (e.evidence) fields.push(['Evidence', `<code>${escapeHtml(e.evidence)}</code>`]);
     if (e.fix) fields.push(['Fix', escapeHtml(e.fix)]);
     if (e.rule_id) fields.push(['Rule', escapeHtml(e.rule_id)]);

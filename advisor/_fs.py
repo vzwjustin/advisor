@@ -43,6 +43,7 @@ def validate_file_types(pattern: str) -> None:
             raise ValueError(f"file_types pattern contains NUL byte: {piece!r}")
         if (
             ".." in piece.split("/")
+            or ".." in piece.split("\\")
             or piece.startswith("/")
             or piece.startswith("\\")
             or (len(piece) >= 2 and piece[1] == ":" and piece[0].isalpha())
