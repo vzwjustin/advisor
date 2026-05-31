@@ -572,17 +572,18 @@ def _pos_int_arg(value: str) -> int:
 
 
 def _valid_port(raw: str) -> int:
-    """argparse ``type=`` validator for TCP port numbers (0..65535).
+    """argparse ``type=`` validator for TCP port numbers (1..65535).
 
     Raises ``argparse.ArgumentTypeError`` on out-of-range or non-integer
     input so the CLI shows a clean usage error instead of a cryptic OS
-    bind failure. See :func:`_pos_int_arg` for the ASCII-only rationale.
+    bind failure. Port 0 is rejected — an OS-assigned port is unreachable
+    via the dashboard URL. See :func:`_pos_int_arg` for the ASCII-only rationale.
     """
     if not raw.isascii() or not raw.isdigit():
         raise argparse.ArgumentTypeError(f"invalid port {raw!r}: expected ASCII decimal digits")
     n = int(raw)
-    if not 0 <= n <= 65535:
-        raise argparse.ArgumentTypeError(f"port {n} out of range — must be between 0 and 65535")
+    if not 1 <= n <= 65535:
+        raise argparse.ArgumentTypeError(f"port {n} out of range — must be between 1 and 65535")
     return n
 
 
@@ -2221,6 +2222,10 @@ def cmd_update(args: argparse.Namespace) -> int:
     # subprocess has succeeded, then re-exec ``advisor install`` in a fresh
     # subprocess so the new version's bundled CHANGELOG is what prints the
     # post-upgrade ``What's new`` digest.
+    if latest is None and not quiet:
+        # --no-preview skipped PyPI fetch; re-read the just-installed version so
+        # the banner can show the actual new version rather than staying silent.
+        latest = _get_installed_version()
     if not quiet and latest is not None and latest != current:
         print()
         print(_style.banner(f"Updated: v{current} → v{latest}"))
@@ -2575,7 +2580,8 @@ def cmd_history_append(args: argparse.Namespace) -> int:
         # Read recent entries to build a dedup set. The 500-entry window
         # matches the ranker window — anything older than that already
         # can't influence ranking, so re-adding it is harmless.
-        existing = load_recent_findings(history_path(target), limit=500)
+        hist_path = history_path(target)
+        existing = load_recent_findings(hist_path, limit=500)
         seen = {(e.run_id, e.file_path, e.severity, e.description) for e in existing}
         deduped: list[HistoryEntry] = []
         skipped = 0
@@ -2970,6 +2976,7 @@ _SEVERITY_RANK: dict[str, int] = {
     "MEDIUM": 2,
     "HIGH": 3,
     "CRITICAL": 4,
+    "UNKNOWN": 99,
 }
 _FAIL_ON_EXIT_CODE = 4
 
@@ -3200,6 +3207,8 @@ def _load_findings_from_input(
                         )
                     )
                 except KeyError:
+                    if not args.quiet:
+                        logger.warning(f"skipping malformed finding entry (missing required keys): {f}")
                     continue
             # Surface "parsed JSON but recognized no findings" so a
             # mis-shaped input (wrong top-level key, or an array of

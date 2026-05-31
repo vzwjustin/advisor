@@ -709,7 +709,7 @@ def _compile_ignore_patterns(patterns: list[str]) -> tuple[_IgnorePatternMatcher
                 dir_re = re.compile(r"$.^")
 
         filename_re: re.Pattern[str] | None = None
-        if not dir_re and not recursive_re and not slash_re:
+        if not dir_re and not recursive_re and not slash_re and any(c in pattern for c in "*?[."):
             try:
                 # ReDoS guard: ``fnmatch.translate`` emits non-atomic ``.*``
                 # groups on Python 3.10/3.11 — a pattern like
@@ -738,7 +738,7 @@ def _compile_ignore_patterns(patterns: list[str]) -> tuple[_IgnorePatternMatcher
                 filename_re = re.compile(r"$.^")
 
         bare_re: re.Pattern[str] | None = None
-        if not dir_re and not any(c in pattern for c in "*?[./"):
+        if not filename_re and not dir_re and not any(c in pattern for c in "*?[./"):
             try:
                 bare_re = re.compile(fnmatch.translate(pattern))
             except (re.error, TypeError) as exc:

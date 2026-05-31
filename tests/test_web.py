@@ -713,16 +713,17 @@ class TestUiCommand:
         assert args.port == 9000
         assert args.host == "127.0.0.1"
 
-    def test_parser_accepts_port_zero(self):
+    def test_parser_rejects_port_zero(self, capsys):
         parser = build_parser()
-        args = parser.parse_args(["ui", ".", "--port", "0"])
-        assert args.port == 0
+        with pytest.raises(SystemExit):
+            parser.parse_args(["ui", ".", "--port", "0"])
+        assert "out of range" in capsys.readouterr().err
 
-    def test_json_rejects_port_zero(self, tmp_path, capsys):
+    def test_parser_rejects_port_zero_with_json(self, capsys):
         parser = build_parser()
-        args = parser.parse_args(["ui", str(tmp_path), "--json", "--port", "0"])
-        assert cmd_ui(args) == 2
-        assert "--json cannot be combined with --port 0" in capsys.readouterr().err
+        with pytest.raises(SystemExit):
+            parser.parse_args(["ui", ".", "--json", "--port", "0"])
+        assert "out of range" in capsys.readouterr().err
 
     def test_ui_skips_nudge(self):
         assert "ui" in _NUDGE_SKIP_COMMANDS

@@ -363,7 +363,6 @@ def diff_against_baseline(
                     bp = _normalize_identity_path(e.file_path)
                     if bp.endswith(f"/{key[0]}") or key[0].endswith(f"/{bp}"):
                         matched_baseline_keys.add(e.key())
-                        break
             persisting.append(f)
         else:
             new_findings.append(f)

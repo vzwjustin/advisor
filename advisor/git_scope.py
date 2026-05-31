@@ -57,10 +57,10 @@ _GIT_MAX_STDERR_BYTES = 1024 * 1024
 
 # Characters legal in a git ref or revspec we want to support
 # (branch/tag names, ``HEAD~N``, ``main^``, ``origin/foo``, reflog
-# ``@{2.weeks.ago}``). Anything outside this class is rejected at the
-# public boundary so a value like ``main --output=/tmp/x`` or ``HEAD..main``
-# cannot smuggle option-like tokens into git's parser via concatenation
-# in ``files_branch``.
+# ``@{2.weeks.ago}`` with interior hyphens, ``@{-1}`` for previous branch).
+# Anything outside this class is rejected at the public boundary so a value
+# like ``main --output=/tmp/x`` or ``HEAD..main`` cannot smuggle option-like
+# tokens into git's parser via concatenation in ``files_branch``.
 _REF_ALLOWED = re.compile(r"^[A-Za-z0-9_./~^@{}\-]+$")
 
 

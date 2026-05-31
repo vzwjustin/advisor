@@ -543,7 +543,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             # tabs in the browser. Nothing actionable.
             return
         except ValueError as exc:
-            self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
+            logger.warning("bad request: %s", exc)
+            self._send_error(HTTPStatus.BAD_REQUEST, "bad request")
             return
         except OSError:
             # Filesystem races (deleted target, permission changes, stale

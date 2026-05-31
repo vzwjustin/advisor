@@ -184,6 +184,7 @@ def _lock_windows(fh: IO[Any]) -> None:
     if not callable(locking) or not isinstance(lk_lock, int):
         return
     try:
+        fh.seek(0)
         locking(fh.fileno(), lk_lock, 0x7FFFFFFF)
     except OSError as exc:
         _maybe_warn_lock_unsupported(exc)
@@ -208,6 +209,7 @@ def _unlock_windows(fh: IO[Any]) -> None:
     if not callable(locking) or not isinstance(lk_unlck, int):
         return
     try:
+        fh.seek(0)
         locking(fh.fileno(), lk_unlck, 0x7FFFFFFF)
     except OSError:
         pass
@@ -457,10 +459,12 @@ def load_recent_findings(history_path: Path, *, limit: int = 500) -> list[Histor
             break
         buffer_size = min(buffer_size * 2, _max_buffer)
 
-    # Newest-first per contract. We don't know whether the file is in
-    # chronological order, but by convention entries are appended — so
-    # reversing the tail yields the newest-first view.
+    # Newest-first per contract. Stable sort by timestamp descending handles
+    # hand-edited files that may not be in chronological order. Equal timestamps
+    # preserve reverse-append order (entries.reverse then stable-sort keeps
+    # appended-last first when timestamps are equal).
     entries.reverse()
+    entries.sort(key=lambda e: e.timestamp, reverse=True)
     return entries[:limit]
 
 

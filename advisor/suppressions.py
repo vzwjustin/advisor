@@ -38,6 +38,7 @@ via :func:`apply_suppressions`.
 from __future__ import annotations
 
 import fnmatch
+import functools
 import json
 import re
 import warnings
@@ -114,6 +115,7 @@ def _normalize_glob_pattern(pattern: str) -> str:
     return pattern.lstrip("\ufeff").replace("\\", "/")
 
 
+@functools.lru_cache(maxsize=1024)
 def _matches_glob(file_path: str, pattern: str) -> bool:
     """Match ``file_path`` against ``pattern`` with gitignore-style semantics.
 
@@ -129,6 +131,8 @@ def _matches_glob(file_path: str, pattern: str) -> bool:
     fallback is wider than ideal — fnmatch's ``*`` crosses ``/`` — but
     it keeps the load pass alive on a pathological pattern instead of
     aborting the whole suppressions file.
+
+    Caching avoids O(findings × suppressions) regex recompilation.
     """
     p = PurePath(file_path).as_posix()
     try:

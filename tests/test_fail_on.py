@@ -42,5 +42,8 @@ class TestFailOn:
     def test_no_findings_never_trips(self) -> None:
         assert _fail_on_findings("critical", []) is None
 
-    def test_unknown_severity_ignored(self) -> None:
-        assert _fail_on_findings("high", [_f("UNKNOWN")]) is None
+    def test_unknown_severity_fails_safe(self) -> None:
+        # UNKNOWN severity findings fail-safe (treated as rank 99) so they never
+        # silently pass CI when verify.py can't classify them.
+        assert _fail_on_findings("high", [_f("UNKNOWN")]) == _FAIL_ON_EXIT_CODE
+        assert _fail_on_findings("critical", [_f("UNKNOWN")]) == _FAIL_ON_EXIT_CODE
