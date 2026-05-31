@@ -159,7 +159,9 @@ def synthesize_rule_id(severity: str, description: str, *, prefix: str = "adviso
     finding count by orders of magnitude. SHA-1 is used for stability,
     not security; the input is severity-bucketed description text.
     """
-    slug = hashlib.sha1(description.encode("utf-8", errors="surrogatepass")).hexdigest()[:16]
+    slug = hashlib.sha1(
+        description.encode("utf-8", errors="surrogatepass"), usedforsecurity=False
+    ).hexdigest()[:16]
     return f"{prefix}/{severity.lower()}/{slug}"
 
 
@@ -466,7 +468,8 @@ def findings_to_sarif(
                 "partialFingerprints": {
                     "primaryLocationLineHash": hashlib.sha1(
                         f"{rule_id}|{_url_quote(rel, safe='/')}|"
-                        f"{'?' if line is None else line}".encode("utf-8", errors="surrogatepass")
+                        f"{'?' if line is None else line}".encode("utf-8", errors="surrogatepass"),
+                        usedforsecurity=False,
                     ).hexdigest()[:16]
                 },
                 "properties": {

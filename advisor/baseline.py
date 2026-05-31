@@ -150,7 +150,9 @@ def _description_hash(description: str) -> str:
     size. SHA-1 is used for stability, not security.
     """
     normalized = " ".join(description[:120].split())
-    return hashlib.sha1(normalized.encode("utf-8", errors="surrogatepass")).hexdigest()[:16]
+    return hashlib.sha1(
+        normalized.encode("utf-8", errors="surrogatepass"), usedforsecurity=False
+    ).hexdigest()[:16]
 
 
 def findings_to_entries(findings: list[Finding]) -> list[BaselineEntry]:
