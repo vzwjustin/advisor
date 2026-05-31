@@ -2225,7 +2225,7 @@ def cmd_update(args: argparse.Namespace) -> int:
     if latest is None and not quiet:
         # --no-preview skipped PyPI fetch; re-read the just-installed version so
         # the banner can show the actual new version rather than staying silent.
-        latest = _get_installed_version()
+        latest = _get_version()
     if not quiet and latest is not None and latest != current:
         print()
         print(_style.banner(f"Updated: v{current} → v{latest}"))
@@ -3207,8 +3207,11 @@ def _load_findings_from_input(
                         )
                     )
                 except KeyError:
-                    if not args.quiet:
-                        logger.warning(f"skipping malformed finding entry (missing required keys): {f}")
+                    warnings.warn(
+                        f"skipping malformed finding entry (missing required keys): {f}",
+                        UserWarning,
+                        stacklevel=2,
+                    )
                     continue
             # Surface "parsed JSON but recognized no findings" so a
             # mis-shaped input (wrong top-level key, or an array of
