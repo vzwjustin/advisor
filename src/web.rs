@@ -515,6 +515,7 @@ fn handle_get(state: &AppState, request: tiny_http::Request) {
     }
 }
 
+#[allow(unreachable_code)]
 pub fn run_server(
     state: AppState,
     host: &str,
@@ -580,7 +581,6 @@ pub fn run_server(
         handle_get(&state, request);
     }
 
-    #[allow(unreachable_code)]
     Ok(())
 }
 
