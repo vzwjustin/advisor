@@ -1,0 +1,9 @@
+# Force LF line endings for all text files to avoid \r\n mismatches in snapshot tests
+* text=auto eol=lf
+
+# Binaries
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff binary
+*.woff2 binary
