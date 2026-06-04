@@ -5,11 +5,19 @@
 //! migrated incrementally; until then the Python CLI remains the reference
 //! implementation and ships alongside this binary.
 
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+use advisor::config::{default_team_config, TeamConfigInput};
+use advisor::focus::{
+    self, create_focus_batches, create_focus_tasks, FocusBatch, FocusTask, DEFAULT_TASK_PROMPT,
+};
+use advisor::jsonutil::ensure_ascii;
 use advisor::presets;
+use advisor::rank::{self, fnmatch_match, load_advisorignore, rank_files};
 
 #[derive(Parser)]
 #[command(
@@ -30,12 +38,53 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Rank local files and print a dispatch plan — no agents spawned.
+    Plan {
+        /// Target directory to scan (default: current directory).
+        #[arg(default_value = ".")]
+        target: String,
+        /// Glob pattern(s) for files, comma-separated (e.g. `*.py` or `*.js,*.ts`).
+        #[arg(long, default_value = "*.py")]
+        file_types: String,
+        /// Minimum priority tier (1-5) to include as a task.
+        #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u8).range(1..=5))]
+        min_priority: u8,
+        /// Group tasks into batches of this size (0 = flat plan).
+        #[arg(long, default_value_t = 0)]
+        batch_size: usize,
+        /// Apply a rule-pack preset (see `advisor presets`).
+        #[arg(long)]
+        preset: Option<String>,
+        /// Emit the plan as JSON (byte-compatible with the Python CLI).
+        #[arg(long)]
+        json: bool,
+        /// Ignore `.advisor/history.jsonl` (currently always-on in the Rust port).
+        #[arg(long)]
+        no_history: bool,
+    },
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
         Command::Presets { json } => cmd_presets(json),
+        Command::Plan {
+            target,
+            file_types,
+            min_priority,
+            batch_size,
+            preset,
+            json,
+            no_history,
+        } => cmd_plan(PlanArgs {
+            target,
+            file_types,
+            min_priority,
+            batch_size,
+            preset,
+            json,
+            no_history,
+        }),
     }
 }
 
@@ -49,4 +98,227 @@ fn cmd_presets(json: bool) -> ExitCode {
         print!("{}", presets::presets_pretty(&packs));
     }
     ExitCode::SUCCESS
+}
+
+struct PlanArgs {
+    target: String,
+    file_types: String,
+    min_priority: u8,
+    batch_size: usize,
+    preset: Option<String>,
+    json: bool,
+    no_history: bool,
+}
+
+/// `advisor plan` — discovery → rank → focus → JSON/pretty. Mirrors `cmd_plan`
+/// for the core (non-git-scope, non-resume, non-checkpoint, non-estimate) path.
+///
+/// History-informed ranking is not yet wired (history.py is not ported), so the
+/// Rust port behaves as `--no-history`; on a target with no `.advisor/history.jsonl`
+/// this is identical to the Python default. See PORT_NOTES.md.
+fn cmd_plan(args: PlanArgs) -> ExitCode {
+    let _ = args.no_history; // history not yet ported; plan is always no-history
+
+    let target = Path::new(&args.target);
+    if !target.exists() {
+        eprintln!("✗ target not found: {}", target.display());
+        return ExitCode::from(2);
+    }
+    if !target.is_dir() {
+        eprintln!(
+            "✗ target must be a directory, got file: {}",
+            target.display()
+        );
+        return ExitCode::from(2);
+    }
+
+    // Resolve config (preset merge fills file_types / min_priority defaults).
+    let mut input = TeamConfigInput::new(args.target.clone());
+    input.file_types = args.file_types.clone();
+    input.min_priority = args.min_priority as i64;
+    input.preset = args.preset.clone();
+    let cfg = default_team_config(input);
+
+    // Preset keyword overlay for ranking.
+    let preset_extras: Option<Vec<(i64, Vec<String>)>> = match &args.preset {
+        Some(name) => match presets::get_preset(name) {
+            Ok(pack) => Some(
+                pack.extra_keywords_by_tier
+                    .iter()
+                    .map(|(tier, kws)| (*tier, kws.iter().map(|s| s.to_string()).collect()))
+                    .collect(),
+            ),
+            Err(e) => {
+                eprintln!("✗ {e}");
+                return ExitCode::from(2);
+            }
+        },
+        None => None,
+    };
+
+    let paths = match discover(target, &cfg.file_types) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("✗ {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    let ignore = load_advisorignore(&args.target);
+    let read = |p: &str| read_head(p);
+    let ranked = rank_files(
+        &paths,
+        Some(&read),
+        &ignore,
+        preset_extras.as_deref(),
+        None,
+        None,
+        90,
+    );
+    let tasks = create_focus_tasks(&ranked, None, cfg.min_priority as u8, DEFAULT_TASK_PROMPT);
+    let batches: Option<Vec<FocusBatch>> = if args.batch_size > 0 {
+        // create_focus_batches only errors on files_per_batch < 1 (guarded) or
+        // an invalid forced complexity (not used here), so this is infallible.
+        create_focus_batches(&tasks, args.batch_size, focus::AUTO_COMPLEXITY).ok()
+    } else {
+        None
+    };
+
+    if args.json {
+        let target_abs = target
+            .canonicalize()
+            .unwrap_or_else(|_| target.to_path_buf());
+        println!("{}", plan_json(&target_abs, &tasks, batches.as_deref()));
+    } else if let Some(b) = &batches {
+        print!("{}", focus::format_batch_plan(b));
+    } else {
+        print!("{}", focus::format_dispatch_plan(&tasks));
+    }
+    ExitCode::SUCCESS
+}
+
+/// Read the first `CONTENT_SCAN_LIMIT` characters of a file for keyword scanning.
+/// Mirrors `advisor._fs.read_head` (best-effort; errors → empty).
+fn read_head(path: &str) -> Option<String> {
+    match std::fs::read(path) {
+        Ok(bytes) => {
+            let s = String::from_utf8_lossy(&bytes);
+            Some(s.chars().take(rank::CONTENT_SCAN_LIMIT).collect())
+        }
+        Err(_) => Some(String::new()),
+    }
+}
+
+/// Recursively discover files under `target` whose filename matches any
+/// comma-separated sub-pattern of `file_types`. Mirrors `_safe_rglob`: returns
+/// absolute paths (target canonicalized, joined with the walked components),
+/// symlinks not followed. Order is unspecified — `rank_files` sorts the result.
+fn discover(target: &Path, file_types: &str) -> Result<Vec<String>, String> {
+    advisor::fs::validate_file_types(file_types)
+        .map_err(|e| format!("invalid --file-types pattern: {e}"))?;
+    let pats: Vec<&str> = file_types
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if pats.is_empty() {
+        return Ok(Vec::new());
+    }
+    let root = target
+        .canonicalize()
+        .map_err(|e| format!("filesystem error scanning {}: {e}", target.display()))?;
+
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut out: Vec<String> = Vec::new();
+    let mut stack: Vec<PathBuf> = vec![root.clone()];
+    while let Some(dir) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue, // skip unreadable dir, keep scanning
+        };
+        for entry in entries.flatten() {
+            let ft = match entry.file_type() {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            if ft.is_symlink() {
+                continue; // do not follow symlinks (loop/escape safety)
+            }
+            let path = entry.path();
+            if ft.is_dir() {
+                stack.push(path);
+            } else if ft.is_file() {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if pats.iter().any(|pat| fnmatch_match(&name, pat)) {
+                    let s = path.to_string_lossy().to_string();
+                    if seen.insert(s.clone()) {
+                        out.push(s);
+                    }
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Serialize a plan to match the Python CLI's `plan --json` payload (key order,
+/// 2-space indent, `ensure_ascii=True`). Mirrors `_plan_to_dict` + `json.dumps`.
+fn plan_json(target_abs: &Path, tasks: &[FocusTask], batches: Option<&[FocusBatch]>) -> String {
+    use serde::Serialize;
+
+    #[derive(Serialize)]
+    struct PlanTask<'a> {
+        file_path: &'a str,
+        priority: u8,
+    }
+    #[derive(Serialize)]
+    struct PlanBatch<'a> {
+        batch_id: usize,
+        complexity: &'a str,
+        top_priority: u8,
+        tasks: Vec<PlanTask<'a>>,
+    }
+    #[derive(Serialize)]
+    struct Payload<'a> {
+        schema_version: &'a str,
+        target: String,
+        task_count: usize,
+        tasks: Vec<PlanTask<'a>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        batches: Option<Vec<PlanBatch<'a>>>,
+    }
+
+    let task_data: Vec<PlanTask> = tasks
+        .iter()
+        .map(|t| PlanTask {
+            file_path: &t.file_path,
+            priority: t.priority,
+        })
+        .collect();
+    let batch_data = batches.map(|bs| {
+        bs.iter()
+            .map(|b| PlanBatch {
+                batch_id: b.batch_id,
+                complexity: b.complexity.as_str(),
+                top_priority: b.top_priority(),
+                tasks: b
+                    .tasks
+                    .iter()
+                    .map(|t| PlanTask {
+                        file_path: &t.file_path,
+                        priority: t.priority,
+                    })
+                    .collect(),
+            })
+            .collect()
+    });
+    let payload = Payload {
+        schema_version: "1.0",
+        target: target_abs.to_string_lossy().to_string(),
+        task_count: tasks.len(),
+        tasks: task_data,
+        batches: batch_data,
+    };
+    ensure_ascii(&serde_json::to_string_pretty(&payload).expect("plan payload serializes"))
 }

@@ -1035,6 +1035,15 @@ fn fnmatch_translate(pattern: &str) -> String {
     res
 }
 
+/// Match a filename against a single fnmatch glob (Python `fnmatch.fnmatch`
+/// semantics, used by `--file-types` discovery and git-scope filtering).
+pub fn fnmatch_match(name: &str, pattern: &str) -> bool {
+    match regex::Regex::new(&fnmatch_translate(pattern)) {
+        Ok(re) => re.is_match(name),
+        Err(_) => false,
+    }
+}
+
 /// Never-match regex used as the inert fallback (mirrors `re.compile(r"$.^")`).
 fn never_match() -> regex::Regex {
     regex::Regex::new(r"\z.\A").expect("never-match regex is valid")

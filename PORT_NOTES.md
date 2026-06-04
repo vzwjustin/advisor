@@ -45,7 +45,7 @@ parity assertions.
 | `src/rank.rs` | `rank.py` | `language_for_path`, shebang detection, keyword scoring (`finditer` simulation), test-path cap, history boost, `rank_files`, `rank_to_prompt`, `.advisorignore` glob engine, `load_advisorignore` | **Golden JSON** vs Python (language/shebang/score/test/rank/history/ignore — 60+ cases) |
 | `src/jsonutil.rs` | (CPython `json.dumps`) | `ensure_ascii` escaping (incl. surrogate pairs) | Unit tests vs CPython |
 | `src/version.rs` | `_version.py` | `resolve_version` (crate version) | Unit test |
-| `src/main.rs` | `__main__.py` (subset) | `advisor presets [--json]`, `advisor --version` | Binary diff vs Python (byte-identical) |
+| `src/main.rs` | `__main__.py` (subset) | `advisor presets [--json]`, `advisor plan [--file-types/--min-priority/--batch-size/--preset/--json/--no-history]`, `advisor --version` | Binary diff vs Python (byte-identical, incl. end-to-end `plan` on a fixture tree) |
 
 ### Parity matrix (verified surfaces)
 
@@ -53,6 +53,7 @@ parity assertions.
 |---------|--------|------|--------|-------|
 | `advisor presets --json` | ✓ | ✓ | **IDENTICAL** (byte-for-byte, incl. `—` escaping & key order) | `scripts/parity_check.sh` |
 | `advisor presets` (NO_COLOR) | ✓ | ✓ | **IDENTICAL** (markdown body + CTA) | golden `tests/parity/presets_plain.txt` |
+| `advisor plan --json` (flat/batch/min-priority/preset) | ✓ | ✓ | **IDENTICAL** end-to-end (discovery→rank→focus→JSON) on a fixture tree | `scripts/parity_check.sh` (4 variants) |
 | `advisor --version` | n/a (`advisor version`) | ✓ | Intentional difference — Rust uses clap `--version`; full `version` subcommand pending | classified *intentional* |
 | `sanitize_inline` / `fence` | ✓ | ✓ | IDENTICAL on tested inputs | |
 | `normalize_path` | ✓ | ✓ | IDENTICAL on 10-case reference table | |
@@ -113,13 +114,15 @@ remaining work, roughly in dependency order (see `RUST_PORT_PLAN.md` §6):
 
 ## Exact next recommended step
 
-`rank.py`, `focus.py`, and `config.py` (incl. `TeamConfig`/`default_team_config`)
-are now ported and parity-verified. The ranker, batcher, and config object are
-all in place — the next step is to surface them through the CLI. Next:
-1. Wire **`advisor plan <target> --json --no-history`** into the Rust CLI behind
-   the verified ranker + focus + config: filesystem discovery (glob walk honoring
-   `--file-types`, `SKIP_DIRS`, `.advisorignore`) → `rank_files` → `create_focus_*`
-   → JSON. Capture a Python golden for a fixture tree and add it as the third
-   cross-language check in `scripts/parity_check.sh`.
-2. Port **`verify.py`** (`Finding` parse/format state machine) — needed for the
-   findings-lifecycle commands (`baseline`, `audit`, `sarif`).
+`rank.py`, `focus.py`, `config.py`, and the **`advisor plan` CLI** (discovery →
+rank → focus → JSON) are now ported and end-to-end parity-verified. Next:
+1. Port **`verify.py`** (`Finding` parse/format state machine) — the gateway to
+   the findings-lifecycle commands.
+2. Then `sarif.py` (full `findings_to_sarif`), `pr_comment.py`, `baseline.py`,
+   `suppressions.py` to light up `advisor audit`/`baseline`/`--sarif`.
+3. Remaining `plan` flags not yet wired (documented gaps): `--since/--staged/--branch`
+   (needs `git_scope.py`), `--estimate`/`--pricing` (needs full `cost.py`),
+   `--checkpoint`/`--resume` (needs `checkpoint.py`), `--sarif`, `--exclude`,
+   `--output`, and **history-informed ranking** (needs `history.py` — the Rust
+   `plan` currently behaves as `--no-history`). Pretty (non-JSON) `plan` output
+   prints the core dispatch/batch plan but not the full colorized framing/tips.

@@ -36,6 +36,34 @@ check() {
 check "presets"        presets
 check "presets --json" presets --json
 
+# ── plan: build a small fixture tree and diff `plan --json` end-to-end ──
+plan_check() {
+  local name="$1"; shift
+  local fix py_out rs_out
+  fix="$(mktemp -d)"
+  mkdir -p "$fix/src" "$fix/api" "$fix/tests" "$fix/node_modules"
+  printf 'def login(password, token):\n    pass\n' > "$fix/src/auth.py"
+  printf 'def helper():\n    return 1\n'           > "$fix/src/util.py"
+  printf '@route\ndef handler():\n    query(sql)\n' > "$fix/api/routes.py"
+  printf "password='hunter2'\n"                     > "$fix/tests/test_auth.py"
+  printf 'auth\n'                                   > "$fix/node_modules/skip.py"
+  py_out="$(cd "$fix" && NO_COLOR=1 $PY plan . "$@" 2>/dev/null || true)"
+  rs_out="$(cd "$fix" && NO_COLOR=1 "$RUST_BIN" plan . "$@" 2>/dev/null || true)"
+  if [[ "$py_out" == "$rs_out" ]]; then
+    echo "PASS  $name"
+  else
+    echo "FAIL  $name"
+    diff <(printf '%s' "$py_out") <(printf '%s' "$rs_out") | sed 's/^/    /' || true
+    fail=1
+  fi
+  rm -rf "$fix"
+}
+
+plan_check "plan --json"                 --json --no-history
+plan_check "plan --json --batch-size 2"  --json --no-history --batch-size 2
+plan_check "plan --json --min-priority 1" --json --no-history --min-priority 1
+plan_check "plan --json --preset python-web" --json --no-history --preset python-web
+
 if [[ "$fail" -ne 0 ]]; then
   echo "parity check FAILED" >&2
   exit 1
