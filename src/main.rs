@@ -122,6 +122,20 @@ enum Command {
         #[arg(long = "baseline")]
         baseline_path: Option<String>,
     },
+    /// List or delete saved `.advisor/run-<id>.json` checkpoints.
+    Checkpoints {
+        #[arg(default_value = ".")]
+        target: String,
+        /// Delete a single checkpoint by run id.
+        #[arg(long)]
+        rm: Option<String>,
+        /// Delete all checkpoints for the target.
+        #[arg(long)]
+        clear: bool,
+        /// Emit as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Show recent confirmed findings from `.advisor/history.jsonl`.
     History {
         #[arg(default_value = ".")]
@@ -237,6 +251,12 @@ fn main() -> ExitCode {
             format,
             baseline_path,
         }),
+        Command::Checkpoints {
+            target,
+            rm,
+            clear,
+            json,
+        } => cmd_checkpoints(&target, rm, clear, json),
         Command::History {
             target,
             limit,
@@ -253,6 +273,100 @@ fn main() -> ExitCode {
             cmd_suppressions(&target, expired, json)
         }
     }
+}
+
+/// `advisor checkpoints` — list / delete saved run checkpoints. Mirrors
+/// `cmd_checkpoints` (JSON paths; pretty list deferred).
+fn cmd_checkpoints(target_str: &str, rm: Option<String>, clear: bool, json: bool) -> ExitCode {
+    let target = Path::new(target_str);
+    let target_abs = target
+        .canonicalize()
+        .unwrap_or_else(|_| target.to_path_buf());
+    if rm.is_some() && clear {
+        eprintln!("✗ --rm and --clear are mutually exclusive");
+        return ExitCode::from(2);
+    }
+    if let Some(id) = rm {
+        let path = match advisor::checkpoint::checkpoint_path(target, &id) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("✗ {e}");
+                return ExitCode::from(2);
+            }
+        };
+        if path.exists() {
+            if let Err(e) = std::fs::remove_file(&path) {
+                eprintln!("✗ {e}");
+                return ExitCode::from(2);
+            }
+            println!("✓ removed checkpoint {id}");
+        } else {
+            println!("no checkpoint {id} at {}", path.display());
+        }
+        return ExitCode::SUCCESS;
+    }
+    if clear {
+        let ids = advisor::checkpoint::list_checkpoints(target);
+        let mut removed = 0;
+        let mut failed = 0;
+        for rid in &ids {
+            if let Ok(p) = advisor::checkpoint::checkpoint_path(target, rid) {
+                match std::fs::remove_file(&p) {
+                    Ok(()) => removed += 1,
+                    Err(_) => failed += 1,
+                }
+            }
+        }
+        if json {
+            let payload = serde_json::json!({
+                "schema_version": "1.0",
+                "target": target_abs.to_string_lossy(),
+                "removed": removed,
+                "failed": failed,
+            });
+            println!(
+                "{}",
+                ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
+            );
+        } else if removed > 0 || failed > 0 {
+            let noun = if removed == 1 {
+                "checkpoint"
+            } else {
+                "checkpoints"
+            };
+            let mut msg = format!("removed {removed} {noun}");
+            if failed > 0 {
+                msg.push_str(&format!(", failed {failed}"));
+            }
+            println!("{msg}");
+        } else {
+            println!("no checkpoints to remove");
+        }
+        return ExitCode::from(if failed == 0 { 0 } else { 1 });
+    }
+    let ids = advisor::checkpoint::list_checkpoints(target);
+    if json {
+        let payload = serde_json::json!({
+            "schema_version": "1.0",
+            "target": target_abs.to_string_lossy(),
+            "count": ids.len(),
+            "run_ids": ids,
+        });
+        println!(
+            "{}",
+            ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
+        );
+        return ExitCode::SUCCESS;
+    }
+    if ids.is_empty() {
+        println!("no checkpoints yet at {}/.advisor/", target.display());
+        return ExitCode::SUCCESS;
+    }
+    println!("## Checkpoints ({})", ids.len());
+    for id in &ids {
+        println!("- `{id}`");
+    }
+    ExitCode::SUCCESS
 }
 
 /// `advisor history` — recent confirmed findings or aggregate stats. Mirrors

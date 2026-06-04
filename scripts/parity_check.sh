@@ -199,6 +199,22 @@ JSONL
 }
 history_check
 
+# ── checkpoints: --json list ──
+checkpoints_check() {
+  local tmp py rs; tmp="$(mktemp -d)"; mkdir -p "$tmp/.advisor"
+  cat > "$tmp/.advisor/run-20260604T000000Z-abcd1234.json" <<'JSON'
+{"run_id":"20260604T000000Z-abcd1234","created_at":"2026-06-04T00:00:00+00:00","target":"/repo","team_name":"review","file_types":"*.py","min_priority":3,"max_runners":5,"advisor_model":"claude-opus-4-7","runner_model":"claude-sonnet-4-6","max_fixes_per_runner":5,"large_file_line_threshold":800,"large_file_max_fixes":3,"test_command":"","context":"","tasks":[],"batches":[],"schema_version":"1.0"}
+JSON
+  cat > "$tmp/.advisor/run-20260603T000000Z-eeee2222.json" <<'JSON'
+{"run_id":"x","created_at":"y","target":"/r","team_name":"review","file_types":"*.py","min_priority":3,"max_runners":5,"advisor_model":"o","runner_model":"s","tasks":[],"batches":[]}
+JSON
+  py="$(cd "$tmp" && NO_COLOR=1 $PY checkpoints . --json 2>/dev/null || true)"
+  rs="$(cd "$tmp" && NO_COLOR=1 "$RUST_BIN" checkpoints . --json 2>/dev/null || true)"
+  if [[ "$py" == "$rs" ]]; then echo "PASS  checkpoints --json"; else echo "FAIL  checkpoints --json"; diff <(printf '%s' "$py") <(printf '%s' "$rs") | sed 's/^/    /'; fail=1; fi
+  rm -rf "$tmp"
+}
+checkpoints_check
+
 if [[ "$fail" -ne 0 ]]; then
   echo "parity check FAILED" >&2
   exit 1
