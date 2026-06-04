@@ -50,7 +50,7 @@ parity assertions.
 | `src/pr_comment.rs` | `pr_comment.py` | `format_pr_comment` (collapsible `<details>` blocks, severity table, HTML escaping `quote=True`, summary/inline-code escaping, evidence byte-cap + fence/`<details>` neutralization, severity sort, unknown→LOW clamp, body-byte truncation) | **Golden JSON** vs Python (empty, basic, unknown severity, hostile HTML) |
 | `src/jsonutil.rs` | (CPython `json.dumps`) | `ensure_ascii` escaping (incl. surrogate pairs) | Unit tests vs CPython |
 | `src/version.rs` | `_version.py` | `resolve_version` (crate version) | Unit test |
-| `src/main.rs` | `__main__.py` (subset) | `advisor presets [--json]`, `advisor plan [--file-types/--min-priority/--batch-size/--preset/--json/--no-history]`, `advisor --version` | Binary diff vs Python (byte-identical, incl. end-to-end `plan` on a fixture tree) |
+| `src/main.rs` | `__main__.py` (subset) | `advisor presets [--json]`, `advisor plan [...]`, `advisor baseline create/diff [--from/--output/--baseline/--json]` (incl. JSON+markdown findings input loader), `advisor --version` | Binary diff vs Python (byte-identical, incl. end-to-end `plan` + `baseline` on fixtures) |
 
 ### Parity matrix (verified surfaces)
 
@@ -59,6 +59,8 @@ parity assertions.
 | `advisor presets --json` | ✓ | ✓ | **IDENTICAL** (byte-for-byte, incl. `—` escaping & key order) | `scripts/parity_check.sh` |
 | `advisor presets` (NO_COLOR) | ✓ | ✓ | **IDENTICAL** (markdown body + CTA) | golden `tests/parity/presets_plain.txt` |
 | `advisor plan --json` (flat/batch/min-priority/preset) | ✓ | ✓ | **IDENTICAL** end-to-end (discovery→rank→focus→JSON) on a fixture tree | `scripts/parity_check.sh` (4 variants) |
+| `advisor baseline create` (file bytes) | ✓ | ✓ | **IDENTICAL** written `baseline.jsonl` (JSON findings input) | `scripts/parity_check.sh` |
+| `advisor baseline diff --json` | ✓ | ✓ | **IDENTICAL** (new/persisting_count/fixed) | `scripts/parity_check.sh` |
 | `advisor --version` | n/a (`advisor version`) | ✓ | Intentional difference — Rust uses clap `--version`; full `version` subcommand pending | classified *intentional* |
 | `sanitize_inline` / `fence` | ✓ | ✓ | IDENTICAL on tested inputs | |
 | `normalize_path` | ✓ | ✓ | IDENTICAL on 10-case reference table | |
@@ -122,10 +124,11 @@ remaining work, roughly in dependency order (see `RUST_PORT_PLAN.md` §6):
 **`advisor plan` CLI** are now ported and parity-verified. Next:
 1. Port **`audit.py`** (`AuditReport`, transcript regex analysis) then wire
    **`advisor audit`** (transcript → `parse_findings_with_drift` →
-   sarif/pr-comment/json + `--fail-on` + `--baseline`) and **`advisor baseline`
-   create/diff** into the CLI — all the rendering/lifecycle primitives
-   (verify, sarif, pr_comment, baseline, suppressions) are now ported.
-2. Remaining `plan` flags not yet wired (documented gaps): `--since/--staged/--branch`
+   sarif/pr-comment/json + `--fail-on` + `--baseline`) into the CLI — the
+   findings input loader, `verify`, `sarif`, `pr_comment`, `baseline`, and
+   `suppressions` are all ported, so `audit`'s sinks are ready.
+2. Wire **`advisor suppressions [--list/--expired/--json]`** (suppressions.rs done).
+3. Remaining `plan` flags not yet wired (documented gaps): `--since/--staged/--branch`
    (needs `git_scope.py`), `--estimate`/`--pricing` (needs full `cost.py`),
    `--checkpoint`/`--resume` (needs `checkpoint.py`), `--sarif`, `--exclude`,
    `--output`, and **history-informed ranking** (needs `history.py` — the Rust

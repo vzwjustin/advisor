@@ -64,6 +64,38 @@ plan_check "plan --json --batch-size 2"  --json --no-history --batch-size 2
 plan_check "plan --json --min-priority 1" --json --no-history --min-priority 1
 plan_check "plan --json --preset python-web" --json --no-history --preset python-web
 
+# ── baseline: create (file bytes) + diff --json, JSON and markdown inputs ──
+baseline_check() {
+  local tmp py rs
+  tmp="$(mktemp -d)"
+  cat > "$tmp/f.json" <<'JSON'
+[
+  {"file_path":"src/auth.py:42","severity":"high","description":"SQL injection in login","evidence":"concat","fix":"params"},
+  {"file_path":"lib/x.py","severity":"LOW","description":"weak md5","rule_id":"advisor/custom/1"}
+]
+JSON
+  printf '[CRITICAL] src/auth.py:9 — hardcoded secret\n' > "$tmp/f.md"
+  mkdir -p "$tmp/py" "$tmp/rs"
+  $PY baseline create "$tmp/py" --from "$tmp/f.json" --quiet 2>/dev/null
+  "$RUST_BIN" baseline create "$tmp/rs" --from "$tmp/f.json" --quiet 2>/dev/null
+  if diff -q "$tmp/py/.advisor/baseline.jsonl" "$tmp/rs/.advisor/baseline.jsonl" >/dev/null; then
+    echo "PASS  baseline create (file bytes)"
+  else
+    echo "FAIL  baseline create"; fail=1
+  fi
+  cat > "$tmp/f2.json" <<'JSON'
+[
+  {"file_path":"src/auth.py:42","severity":"high","description":"SQL injection in login","evidence":"concat","fix":"params"},
+  {"file_path":"brand/new.py:1","severity":"MEDIUM","description":"new issue"}
+]
+JSON
+  py="$($PY baseline diff "$tmp/py" --from "$tmp/f2.json" --json 2>/dev/null || true)"
+  rs="$("$RUST_BIN" baseline diff "$tmp/rs" --from "$tmp/f2.json" --json 2>/dev/null || true)"
+  if [[ "$py" == "$rs" ]]; then echo "PASS  baseline diff --json"; else echo "FAIL  baseline diff --json"; diff <(printf '%s' "$py") <(printf '%s' "$rs") | sed 's/^/    /'; fail=1; fi
+  rm -rf "$tmp"
+}
+baseline_check
+
 if [[ "$fail" -ne 0 ]]; then
   echo "parity check FAILED" >&2
   exit 1

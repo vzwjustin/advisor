@@ -6,18 +6,28 @@
 //! implementation and ships alongside this binary.
 
 use std::collections::HashSet;
+use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+use advisor::baseline::{
+    diff_against_baseline, findings_to_entries, read_baseline, write_baseline,
+};
 use advisor::config::{default_team_config, TeamConfigInput};
 use advisor::focus::{
     self, create_focus_batches, create_focus_tasks, FocusBatch, FocusTask, DEFAULT_TASK_PROMPT,
 };
 use advisor::jsonutil::ensure_ascii;
+use advisor::models::Severity;
 use advisor::presets;
 use advisor::rank::{self, fnmatch_match, load_advisorignore, rank_files};
+use advisor::verify::{parse_findings_from_text, INCOMPLETE_FILE_PATH};
+use advisor::Finding;
+
+/// Max bytes read from stdin / a findings file (`_STDIN_LIMIT`, 50 MiB).
+const STDIN_LIMIT: usize = 50 * 1024 * 1024;
 
 #[derive(Parser)]
 #[command(
@@ -62,6 +72,43 @@ enum Command {
         #[arg(long)]
         no_history: bool,
     },
+    /// Snapshot findings as a baseline, or diff current findings against it.
+    Baseline {
+        #[command(subcommand)]
+        action: BaselineAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum BaselineAction {
+    /// Snapshot findings (stdin or --from) as the accepted baseline.
+    Create {
+        #[arg(default_value = ".")]
+        target: String,
+        /// Read findings from PATH (JSON or markdown) instead of stdin.
+        #[arg(long = "from")]
+        from_file: Option<String>,
+        /// Write the baseline to PATH (default: <target>/.advisor/baseline.jsonl).
+        #[arg(long)]
+        output: Option<String>,
+        /// Suppress the success line.
+        #[arg(long)]
+        quiet: bool,
+    },
+    /// Diff current findings (stdin or --from) against a saved baseline.
+    Diff {
+        #[arg(default_value = ".")]
+        target: String,
+        /// Read findings from PATH (JSON or markdown) instead of stdin.
+        #[arg(long = "from")]
+        from_file: Option<String>,
+        /// Read the baseline from PATH (default: <target>/.advisor/baseline.jsonl).
+        #[arg(long = "baseline")]
+        baseline_path: Option<String>,
+        /// Emit the diff as JSON (byte-compatible with the Python CLI).
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -85,6 +132,7 @@ fn main() -> ExitCode {
             json,
             no_history,
         }),
+        Command::Baseline { action } => cmd_baseline(action),
     }
 }
 
@@ -321,4 +369,226 @@ fn plan_json(target_abs: &Path, tasks: &[FocusTask], batches: Option<&[FocusBatc
         batches: batch_data,
     };
     ensure_ascii(&serde_json::to_string_pretty(&payload).expect("plan payload serializes"))
+}
+
+// ── findings input + baseline ──────────────────────────────────────
+
+/// Read findings input from `--from FILE` or stdin (capped). Returns
+/// `Ok(None)` when stdin is a TTY and no file is given (mirrors the Python
+/// helper's empty-on-TTY behavior). Mirrors `_load_findings_from_input`'s I/O.
+fn read_findings_input(from_file: Option<&str>) -> Result<Option<String>, String> {
+    match from_file {
+        Some(path) => {
+            let p = Path::new(path);
+            if !p.is_file() {
+                return Err(format!("findings input {path} is not a regular file"));
+            }
+            let bytes = std::fs::read(p).map_err(|e| e.to_string())?;
+            if bytes.len() > STDIN_LIMIT {
+                return Err(format!(
+                    "findings input {path} exceeds {STDIN_LIMIT}-byte cap; refusing to load"
+                ));
+            }
+            Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
+        }
+        None => {
+            if std::io::stdin().is_terminal() {
+                return Ok(None);
+            }
+            let mut buf = Vec::new();
+            std::io::stdin()
+                .take((STDIN_LIMIT + 1) as u64)
+                .read_to_end(&mut buf)
+                .map_err(|e| e.to_string())?;
+            if buf.len() > STDIN_LIMIT {
+                return Err(format!(
+                    "findings input exceeds {STDIN_LIMIT}-byte cap; refusing to load"
+                ));
+            }
+            Ok(Some(String::from_utf8_lossy(&buf).into_owned()))
+        }
+    }
+}
+
+/// Parse findings input text — JSON (array, or object with `findings` /
+/// `findings_in_batch`) or markdown fallback. Mirrors `_load_findings_from_input`'s
+/// parsing (severity canonicalized, `<incomplete>` sentinel filtered).
+fn parse_findings_input(text: &str) -> Vec<Finding> {
+    let stripped = text.trim().trim_start_matches('\u{FEFF}');
+    if stripped.starts_with('{') || stripped.starts_with('[') {
+        if let Ok(doc) = serde_json::from_str::<serde_json::Value>(stripped) {
+            let raw: Vec<serde_json::Value> = if let Some(obj) = doc.as_object() {
+                obj.get("findings_in_batch")
+                    .or_else(|| obj.get("findings"))
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default()
+            } else if let Some(arr) = doc.as_array() {
+                arr.clone()
+            } else {
+                Vec::new()
+            };
+            let mut findings = Vec::new();
+            for f in &raw {
+                let Some(m) = f.as_object() else { continue };
+                let get = |k: &str| m.get(k).and_then(|v| v.as_str()).unwrap_or("");
+                let file_path = match m.get("file_path").and_then(|v| v.as_str()) {
+                    Some(s) => s.to_string(),
+                    None => continue, // missing required key
+                };
+                if file_path == INCOMPLETE_FILE_PATH {
+                    continue;
+                }
+                let (description, severity) = match (m.get("description"), m.get("severity")) {
+                    (Some(d), Some(s)) if d.as_str().is_some() && s.as_str().is_some() => (
+                        d.as_str().unwrap().to_string(),
+                        s.as_str().unwrap().to_string(),
+                    ),
+                    _ => continue, // missing required keys
+                };
+                let rule_id = m
+                    .get("rule_id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string());
+                findings.push(Finding {
+                    file_path,
+                    severity: Severity::canonical(&severity).as_str().to_string(),
+                    description,
+                    evidence: get("evidence").to_string(),
+                    fix: get("fix").to_string(),
+                    rule_id,
+                    expected_vs_actual: get("expected_vs_actual").to_string(),
+                });
+            }
+            return findings;
+        }
+    }
+    // Markdown fallback (mirrors parse_findings_from_text(None)).
+    parse_findings_from_text(text, None)
+}
+
+/// `advisor baseline create|diff` — mirrors `cmd_baseline`.
+fn cmd_baseline(action: BaselineAction) -> ExitCode {
+    match action {
+        BaselineAction::Create {
+            target,
+            from_file,
+            output,
+            quiet,
+        } => {
+            let target = Path::new(&target);
+            let out = output
+                .map(PathBuf::from)
+                .unwrap_or_else(|| target.join(".advisor").join("baseline.jsonl"));
+            let text = match read_findings_input(from_file.as_deref()) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("✗ {e}");
+                    return ExitCode::from(2);
+                }
+            };
+            let findings = text
+                .as_deref()
+                .map(parse_findings_input)
+                .unwrap_or_default();
+            if findings.is_empty() && from_file.is_none() && std::io::stdin().is_terminal() {
+                eprintln!("✗ baseline create: no findings on stdin and no --from FILE; refusing to overwrite baseline with zero findings");
+                return ExitCode::from(2);
+            }
+            let entries = findings_to_entries(&findings);
+            if let Err(e) = write_baseline(&out, &entries) {
+                eprintln!("✗ {e}");
+                return ExitCode::from(2);
+            }
+            if !quiet {
+                let word = if entries.len() == 1 {
+                    "finding"
+                } else {
+                    "findings"
+                };
+                println!(
+                    "✓ baseline saved: {} ({} {word})",
+                    out.display(),
+                    entries.len()
+                );
+            }
+            ExitCode::SUCCESS
+        }
+        BaselineAction::Diff {
+            target,
+            from_file,
+            baseline_path,
+            json,
+        } => {
+            let target = Path::new(&target);
+            let bpath = baseline_path
+                .clone()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| target.join(".advisor").join("baseline.jsonl"));
+            if !bpath.exists() {
+                if baseline_path.is_some() {
+                    eprintln!("✗ --baseline path not found: {}", bpath.display());
+                } else {
+                    eprintln!(
+                        "✗ no baseline at {}; run `advisor baseline create` first or pass --baseline PATH",
+                        bpath.display()
+                    );
+                }
+                return ExitCode::from(2);
+            }
+            let baseline = read_baseline(&bpath);
+            let text = match read_findings_input(from_file.as_deref()) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("✗ {e}");
+                    return ExitCode::from(2);
+                }
+            };
+            let findings = text
+                .as_deref()
+                .map(parse_findings_input)
+                .unwrap_or_default();
+            let diff = diff_against_baseline(&findings, &baseline);
+            if json {
+                let payload = serde_json::json!({
+                    "schema_version": "1.0",
+                    "new": diff.new.iter().map(|f| serde_json::json!({
+                        "file_path": f.file_path, "severity": f.severity, "description": f.description,
+                    })).collect::<Vec<_>>(),
+                    "persisting_count": diff.persisting.len(),
+                    "fixed": diff.fixed.iter().map(|e| serde_json::json!({
+                        "file_path": e.file_path, "rule_id": e.rule_id, "description": e.description,
+                    })).collect::<Vec<_>>(),
+                });
+                println!(
+                    "{}",
+                    ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
+                );
+                return ExitCode::SUCCESS;
+            }
+            let mut lines = vec![
+                "## Baseline diff".to_string(),
+                String::new(),
+                format!("New findings: **{}**", diff.new.len()),
+                format!("Persisting: {}", diff.persisting.len()),
+                format!("Fixed (in baseline, not seen): {}", diff.fixed.len()),
+                String::new(),
+            ];
+            if !diff.new.is_empty() {
+                lines.push("### New".to_string());
+                for f in &diff.new {
+                    lines.push(format!(
+                        "- [{}] `{}` — {}",
+                        f.severity, f.file_path, f.description
+                    ));
+                }
+            }
+            // Python prints `rstrip + "\n"` then print() adds another newline.
+            let body = format!("{}\n\n", lines.join("\n").trim_end());
+            print!("{body}");
+            ExitCode::SUCCESS
+        }
+    }
 }
