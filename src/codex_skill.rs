@@ -4,7 +4,7 @@ pub fn version_badge() -> String {
     format!("<!-- advisor:{} -->", resolve_version())
 }
 
-const SKILL_MD_CODEX_TEMPLATE: &str = include_str!("../advisor/codex_skill_md.txt");
+const SKILL_MD_CODEX_TEMPLATE: &str = include_str!("assets/codex_skill_md.txt");
 
 pub fn render_codex_skill_md() -> String {
     SKILL_MD_CODEX_TEMPLATE.replace("__VERSION_BADGE__", &version_badge())
@@ -81,13 +81,8 @@ mod tests {
     #[test]
     fn parity_codex_runner_prompt_basic() {
         let g = golden();
-        let result = build_codex_runner_prompt(
-            "runner-1",
-            &[
-                "- `src/foo.py` (P1)",
-                "- `src/bar.py` (P2)",
-            ],
-        );
+        let result =
+            build_codex_runner_prompt("runner-1", &["- `src/foo.py` (P1)", "- `src/bar.py` (P2)"]);
         assert_eq!(result, g["codex_runner_prompt_basic"].as_str().unwrap());
     }
 

@@ -22,8 +22,7 @@ pub const CODEX_SKILLS_SUBDIR: &str = "skills";
 const CLAUDE_MD_MAX_BYTES: usize = 1_048_576;
 const SKILL_MD_MAX_BYTES: usize = 262_144;
 
-static BADGE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"<!--\s*advisor:([^\s>]+)\s*-->").unwrap());
+static BADGE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"<!--\s*advisor:([^\s>]+)\s*-->").unwrap());
 static PYPI_VERSION_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^[A-Za-z0-9._+!\-]{1,64}$").unwrap());
 #[allow(dead_code)]
@@ -36,7 +35,7 @@ static BLOCK_RE: Lazy<Regex> = Lazy::new(|| {
     .unwrap()
 });
 
-pub static NUDGE_BODY: &str = include_str!("../advisor/nudge_body.txt");
+pub static NUDGE_BODY: &str = include_str!("assets/nudge_body.txt");
 
 // ── types ─────────────────────────────────────────────────────────────────
 
@@ -155,10 +154,10 @@ fn read_text_capped(path: &Path, max_bytes: usize) -> Result<String, std::io::Er
 fn atomic_write(target: &Path, text: &str) -> Result<(), std::io::Error> {
     // Refuse to follow a symlink at the final path component.
     if target.is_symlink() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("refusing to write through symlink: {}", target.display()),
-        ));
+        return Err(std::io::Error::other(format!(
+            "refusing to write through symlink: {}",
+            target.display()
+        )));
     }
     let dir = target.parent().unwrap_or(Path::new("."));
     let tmp = dir.join(format!(
@@ -201,7 +200,9 @@ pub fn apply_nudge(existing: &str, body: &str) -> (String, InstallAction) {
         let updated = if stripped.is_empty() {
             block.clone()
         } else {
-            format!("{stripped}\n\n{block}").trim_start_matches('\n').to_string()
+            format!("{stripped}\n\n{block}")
+                .trim_start_matches('\n')
+                .to_string()
         };
         if updated.trim() == existing.trim() {
             return (existing.to_string(), InstallAction::Unchanged);
@@ -273,7 +274,10 @@ pub fn update_skill_path_for(skill_path: Option<&Path>) -> PathBuf {
                     .join(UPDATE_SKILL_DIR_NAME)
                     .join(SKILL_FILE_NAME)
             } else {
-                p.parent().unwrap_or(Path::new(".")).join(UPDATE_SKILL_DIR_NAME).join(SKILL_FILE_NAME)
+                p.parent()
+                    .unwrap_or(Path::new("."))
+                    .join(UPDATE_SKILL_DIR_NAME)
+                    .join(SKILL_FILE_NAME)
             }
         }
     }
@@ -300,10 +304,10 @@ pub fn install(path: Option<&Path>, body: &str) -> Result<InstallResult, std::io
         None => {
             let t = default_claude_md();
             if t.is_symlink() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("refusing to install nudge through symlink: {}", t.display()),
-                ));
+                return Err(std::io::Error::other(format!(
+                    "refusing to install nudge through symlink: {}",
+                    t.display()
+                )));
             }
             t
         }
@@ -320,11 +324,17 @@ pub fn install(path: Option<&Path>, body: &str) -> Result<InstallResult, std::io
     if action != InstallAction::Unchanged {
         atomic_write(&target, &new_contents)?;
     }
-    Ok(InstallResult { path: target, action, error: None })
+    Ok(InstallResult {
+        path: target,
+        action,
+        error: None,
+    })
 }
 
 pub fn uninstall_nudge(path: Option<&Path>) -> Result<InstallResult, std::io::Error> {
-    let target = path.map(|p| p.to_path_buf()).unwrap_or_else(default_claude_md);
+    let target = path
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(default_claude_md);
     let current = match read_text_capped(&target, CLAUDE_MD_MAX_BYTES) {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -340,7 +350,11 @@ pub fn uninstall_nudge(path: Option<&Path>) -> Result<InstallResult, std::io::Er
     if action != InstallAction::Absent {
         atomic_write(&target, &new_contents)?;
     }
-    Ok(InstallResult { path: target, action, error: None })
+    Ok(InstallResult {
+        path: target,
+        action,
+        error: None,
+    })
 }
 
 fn install_file(
@@ -385,7 +399,9 @@ fn install_file(
 }
 
 pub fn install_skill(path: Option<&Path>) -> Result<InstallResult, std::io::Error> {
-    let target = path.map(|p| p.to_path_buf()).unwrap_or_else(default_skill_path);
+    let target = path
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(default_skill_path);
     install_file(&target, &skill_md(), "SKILL.md")
 }
 
@@ -397,7 +413,9 @@ pub fn install_update_skill(path: Option<&Path>) -> Result<InstallResult, std::i
 }
 
 pub fn uninstall_skill(path: Option<&Path>) -> Result<InstallResult, std::io::Error> {
-    let target = path.map(|p| p.to_path_buf()).unwrap_or_else(default_skill_path);
+    let target = path
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(default_skill_path);
     if !target.exists() {
         return Ok(InstallResult {
             path: target,
@@ -406,7 +424,11 @@ pub fn uninstall_skill(path: Option<&Path>) -> Result<InstallResult, std::io::Er
         });
     }
     std::fs::remove_file(&target)?;
-    Ok(InstallResult { path: target, action: InstallAction::Removed, error: None })
+    Ok(InstallResult {
+        path: target,
+        action: InstallAction::Removed,
+        error: None,
+    })
 }
 
 pub fn uninstall_update_skill(path: Option<&Path>) -> Result<InstallResult, std::io::Error> {
@@ -421,13 +443,19 @@ pub fn uninstall_update_skill(path: Option<&Path>) -> Result<InstallResult, std:
         });
     }
     std::fs::remove_file(&target)?;
-    Ok(InstallResult { path: target, action: InstallAction::Removed, error: None })
+    Ok(InstallResult {
+        path: target,
+        action: InstallAction::Removed,
+        error: None,
+    })
 }
 
 // ── status ────────────────────────────────────────────────────────────────
 
 pub fn get_installed_skill_version(path: Option<&Path>) -> Option<String> {
-    let target = path.map(|p| p.to_path_buf()).unwrap_or_else(default_skill_path);
+    let target = path
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(default_skill_path);
     let text = read_text_capped(&target, SKILL_MD_MAX_BYTES).ok()?;
     parse_badge(&text)
 }
@@ -533,20 +561,25 @@ fn read_changelog() -> Option<String> {
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()));
     let search_roots: Vec<PathBuf> = std::iter::once(std::env::current_dir().ok())
-        .chain(exe_dir.map(|d| {
-            // walk up to find CHANGELOG.md
-            let mut dirs = Vec::new();
-            let mut cur = d.as_path().to_path_buf();
-            for _ in 0..4 {
-                dirs.push(cur.clone());
-                if let Some(p) = cur.parent() {
-                    cur = p.to_path_buf();
-                } else {
-                    break;
-                }
-            }
-            dirs.into_iter().map(Some)
-        }).into_iter().flatten())
+        .chain(
+            exe_dir
+                .map(|d| {
+                    // walk up to find CHANGELOG.md
+                    let mut dirs = Vec::new();
+                    let mut cur = d.as_path().to_path_buf();
+                    for _ in 0..4 {
+                        dirs.push(cur.clone());
+                        if let Some(p) = cur.parent() {
+                            cur = p.to_path_buf();
+                        } else {
+                            break;
+                        }
+                    }
+                    dirs.into_iter().map(Some)
+                })
+                .into_iter()
+                .flatten(),
+        )
         .flatten()
         .collect();
     for root in &search_roots {
@@ -562,10 +595,7 @@ fn read_changelog() -> Option<String> {
 
 /// Parse a CHANGELOG body into `(version, heading_rest, body)` tuples newest-first.
 /// Skips `[Unreleased]`. When `since` is provided, only sections strictly newer.
-pub fn parse_changelog_sections(
-    text: &str,
-    since: Option<&str>,
-) -> Vec<(String, String, String)> {
+pub fn parse_changelog_sections(text: &str, since: Option<&str>) -> Vec<(String, String, String)> {
     // Collect (start_byte, version, heading_rest) for every ## [X] header.
     let mut headers: Vec<(usize, String, String)> = Vec::new();
     for cap in SECTION_START_RE.captures_iter(text) {
@@ -590,18 +620,26 @@ pub fn parse_changelog_sections(
             }
         }
         // body is from end_of_header to the start of the next header (or end of text)
-        let body_end = headers.get(i + 1).map(|(start, _, _)| {
-            // find the ## back from the start of the match
-            let before = &text[..*start];
-            // the ## [line starts at the last newline before start
-            before.rfind('\n').map(|p| p + 1).unwrap_or(0)
-        }).unwrap_or(text.len());
-        let body_start = if *end_of_header < text.len() && text.as_bytes()[*end_of_header] == b'\n' {
+        let body_end = headers
+            .get(i + 1)
+            .map(|(start, _, _)| {
+                // find the ## back from the start of the match
+                let before = &text[..*start];
+                // the ## [line starts at the last newline before start
+                before.rfind('\n').map(|p| p + 1).unwrap_or(0)
+            })
+            .unwrap_or(text.len());
+        let body_start = if *end_of_header < text.len() && text.as_bytes()[*end_of_header] == b'\n'
+        {
             end_of_header + 1
         } else {
             *end_of_header
         };
-        let body = text.get(body_start..body_end).unwrap_or("").trim().to_string();
+        let body = text
+            .get(body_start..body_end)
+            .unwrap_or("")
+            .trim()
+            .to_string();
         sections.push((version.clone(), rest.clone(), body));
     }
     sections
@@ -617,7 +655,10 @@ pub fn load_changelog_sections(since: Option<&str>) -> Vec<(String, String, Stri
 pub fn load_release_notes(version: &str) -> Option<String> {
     let text = read_changelog()?;
     let sections = parse_changelog_sections(&text, None);
-    sections.into_iter().find(|(v, _, _)| v == version).map(|(_, _, body)| body)
+    sections
+        .into_iter()
+        .find(|(v, _, _)| v == version)
+        .map(|(_, _, body)| body)
 }
 
 pub fn should_auto_nudge() -> bool {
@@ -632,6 +673,112 @@ pub fn codex_cli_available() -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+pub fn fetch_url_limited(url: &str, timeout_secs: u64, limit_bytes: u64) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let agent = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .build();
+    let response = agent.get(url).call().ok()?;
+    let reader = response.into_reader();
+    let mut buf = Vec::new();
+    reader.take(limit_bytes).read_to_end(&mut buf).ok()?;
+    Some(buf)
+}
+
+pub fn fetch_pypi_latest_version(package: &str, timeout_secs: u64) -> Option<String> {
+    let url = format!("https://pypi.org/pypi/{}/json", package);
+    let bytes = fetch_url_limited(&url, timeout_secs, 1_048_576)?;
+    let val: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let version = val.get("info")?.get("version")?.as_str()?;
+    if is_valid_pypi_version(version) {
+        Some(version.to_string())
+    } else {
+        None
+    }
+}
+
+pub fn fetch_remote_changelog(url: &str, timeout_secs: u64) -> Option<String> {
+    let bytes = fetch_url_limited(url, timeout_secs, 524_288)?;
+    String::from_utf8(bytes).ok()
+}
+
+pub fn update_check_cache_path() -> PathBuf {
+    dirs_home()
+        .join(".claude")
+        .join(".advisor")
+        .join("update-check.json")
+}
+
+pub fn invalidate_update_check_cache(cache_path: Option<&Path>) {
+    let path = cache_path
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(update_check_cache_path);
+    let _ = std::fs::remove_file(path);
+}
+
+pub fn check_for_update_cached(
+    current: &str,
+    ttl_seconds: u64,
+    cache_path: Option<&Path>,
+) -> Option<String> {
+    let path = cache_path
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(update_check_cache_path);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let mut cached_latest: Option<String> = None;
+    let mut cached_at: u64 = 0;
+
+    if path.exists() {
+        if let Ok(text) = read_text_capped(&path, 4096) {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) {
+                if let Some(latest_val) = val.get("latest").and_then(|v| v.as_str()) {
+                    if is_valid_pypi_version(latest_val) {
+                        cached_latest = Some(latest_val.to_string());
+                    }
+                }
+                if let Some(checked_at_val) = val.get("checked_at").and_then(|v| v.as_u64()) {
+                    cached_at = checked_at_val;
+                }
+            }
+        }
+    }
+
+    let elapsed = now.saturating_sub(cached_at);
+    let latest = if cached_latest.is_some() && elapsed < ttl_seconds {
+        cached_latest
+    } else {
+        let fetched = fetch_pypi_latest_version("advisor-agent", 5);
+        if fetched.is_none() {
+            cached_latest
+        } else {
+            if let Some(ref ver) = fetched {
+                if let Some(parent) = path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let payload = serde_json::json!({
+                    "latest": ver,
+                    "checked_at": now
+                });
+                if let Ok(text) = serde_json::to_string(&payload) {
+                    let _ = atomic_write(&path, &text);
+                }
+            }
+            fetched
+        }
+    };
+
+    let lat = latest?;
+    if is_semver_newer(&lat, current) {
+        Some(lat)
+    } else {
+        None
+    }
 }
 
 // ── parity tests ──────────────────────────────────────────────────────────
@@ -717,8 +864,14 @@ mod tests {
         );
 
         // newer_true / newer_false
-        assert_eq!(is_semver_newer("1.0.0", "0.9.9"), v["newer_true"].as_bool().unwrap());
-        assert_eq!(is_semver_newer("0.8.0", "1.0.0"), v["newer_false"].as_bool().unwrap());
+        assert_eq!(
+            is_semver_newer("1.0.0", "0.9.9"),
+            v["newer_true"].as_bool().unwrap()
+        );
+        assert_eq!(
+            is_semver_newer("0.8.0", "1.0.0"),
+            v["newer_false"].as_bool().unwrap()
+        );
 
         // valid / invalid version strings
         assert_eq!(
@@ -745,5 +898,34 @@ mod tests {
             contents.contains(START_MARKER) && contents.contains(END_MARKER),
             v["apply_empty_has_markers"].as_bool().unwrap()
         );
+    }
+
+    #[test]
+    fn test_update_check_cache() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("advisor_update_check_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let cache_file = temp_dir.join("update-check.json");
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let mock_cache = serde_json::json!({
+            "latest": "0.9.0",
+            "checked_at": now
+        });
+        std::fs::write(&cache_file, serde_json::to_string(&mock_cache).unwrap()).unwrap();
+
+        let res = check_for_update_cached("0.8.4", 86400, Some(&cache_file));
+        assert_eq!(res, Some("0.9.0".to_string()));
+
+        let res = check_for_update_cached("0.9.0", 86400, Some(&cache_file));
+        assert_eq!(res, None);
+
+        invalidate_update_check_cache(Some(&cache_file));
+        assert!(!cache_file.exists());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

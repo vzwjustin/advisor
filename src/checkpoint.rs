@@ -246,8 +246,14 @@ mod tests {
         );
         // checkpoint_path dir and suffix
         let p = checkpoint_path(std::path::Path::new("."), "run-abc").unwrap();
-        assert_eq!(p.file_name().unwrap().to_str().unwrap(), v["checkpoint_path_suffix"].as_str().unwrap());
-        assert_eq!(p.parent().unwrap().file_name().unwrap().to_str().unwrap(), v["checkpoint_path_dir"].as_str().unwrap());
+        assert_eq!(
+            p.file_name().unwrap().to_str().unwrap(),
+            v["checkpoint_path_suffix"].as_str().unwrap()
+        );
+        assert_eq!(
+            p.parent().unwrap().file_name().unwrap().to_str().unwrap(),
+            v["checkpoint_path_dir"].as_str().unwrap()
+        );
     }
 
     #[test]

@@ -11,13 +11,7 @@ pub const DEFAULT_FILE_READ_CEILING: usize = 20;
 pub const SOFT_WARN_FRACTION: f64 = 0.60;
 pub const ROTATE_FRACTION: f64 = 0.80;
 
-pub const SCOPE_STAGES: &[&str] = &[
-    "reading",
-    "hypothesizing",
-    "confirming",
-    "fixing",
-    "done",
-];
+pub const SCOPE_STAGES: &[&str] = &["reading", "hypothesizing", "confirming", "fixing", "done"];
 
 static SCOPE_RE: Lazy<Regex> = Lazy::new(|| {
     // Mirrors Python: ^\s*SCOPE\s*:\s*(?P<file>\S[^\n]*?)\s+[·|\-]\s+(?P<stage>\w+)\s*$
@@ -177,7 +171,7 @@ pub fn stage_regressed(prev: Option<&str>, current: Option<&str>) -> bool {
 }
 
 pub fn normalize_batch_files<'a, I: IntoIterator<Item = &'a str>>(paths: I) -> HashSet<String> {
-    paths.into_iter().map(|p| normalize_path(p)).collect()
+    paths.into_iter().map(normalize_path).collect()
 }
 
 pub fn out_of_batch(anchor: Option<&ScopeAnchor>, batch_files: &HashSet<String>) -> bool {
@@ -305,8 +299,9 @@ mod tests {
     #[test]
     fn parity_parse_scope_two() {
         let g = load_golden();
-        let anchors =
-            parse_scope_anchor("SCOPE: src/foo.py · reading\nsome text\nSCOPE: src/bar.py · fixing");
+        let anchors = parse_scope_anchor(
+            "SCOPE: src/foo.py · reading\nsome text\nSCOPE: src/bar.py · fixing",
+        );
         let v: Vec<Value> = anchors
             .iter()
             .map(|a| serde_json::json!({"file_path": a.file_path, "stage": a.stage}))
@@ -319,10 +314,19 @@ mod tests {
         let g = load_golden();
         let anchors = parse_scope_anchor("no anchors here");
         let empty: Vec<Value> = vec![];
-        assert_eq!(serde_json::json!(anchors.len()), g["parse_scope_none"].as_array().map(|a| serde_json::json!(a.len())).unwrap_or(serde_json::json!(0)));
+        assert_eq!(
+            serde_json::json!(anchors.len()),
+            g["parse_scope_none"]
+                .as_array()
+                .map(|a| serde_json::json!(a.len()))
+                .unwrap_or(serde_json::json!(0))
+        );
         assert!(anchors.is_empty());
         let _ = g; // suppress unused
-        assert_eq!(serde_json::json!(empty), serde_json::json!(g["parse_scope_none"]));
+        assert_eq!(
+            serde_json::json!(empty),
+            serde_json::json!(g["parse_scope_none"])
+        );
     }
 
     #[test]
@@ -343,33 +347,60 @@ mod tests {
     fn parity_budget_status() {
         let g = load_golden();
         let b_ok = new_budget("r", Some(100), Some(5), Some(3)).unwrap();
-        assert_eq!(status_str(&budget_status(&b_ok)), g["status_ok"].as_str().unwrap());
+        assert_eq!(
+            status_str(&budget_status(&b_ok)),
+            g["status_ok"].as_str().unwrap()
+        );
 
         let b_soft = update_budget(&b_ok, &"x".repeat(62), false, None);
-        assert_eq!(status_str(&budget_status(&b_soft)), g["status_soft"].as_str().unwrap());
+        assert_eq!(
+            status_str(&budget_status(&b_soft)),
+            g["status_soft"].as_str().unwrap()
+        );
 
         let b_rotate = update_budget(&b_soft, &"x".repeat(20), false, None);
-        assert_eq!(status_str(&budget_status(&b_rotate)), g["status_rotate"].as_str().unwrap());
+        assert_eq!(
+            status_str(&budget_status(&b_rotate)),
+            g["status_rotate"].as_str().unwrap()
+        );
 
         // fix ceiling
         let b_fix = new_budget("r", None, None, Some(2)).unwrap();
         let b_fix2 = update_budget(&b_fix, "a", true, None);
         let b_fix3 = update_budget(&b_fix2, "b", true, None);
-        assert_eq!(status_str(&budget_status(&b_fix3)), g["status_fix_rotate"].as_str().unwrap());
+        assert_eq!(
+            status_str(&budget_status(&b_fix3)),
+            g["status_fix_rotate"].as_str().unwrap()
+        );
 
         // explore-only
         let b_exp = new_budget("r", None, None, Some(0)).unwrap();
         let b_exp2 = update_budget(&b_exp, "a", true, None);
-        assert_eq!(status_str(&budget_status(&b_exp2)), g["status_explore_ok"].as_str().unwrap());
+        assert_eq!(
+            status_str(&budget_status(&b_exp2)),
+            g["status_explore_ok"].as_str().unwrap()
+        );
     }
 
     #[test]
     fn parity_stage_regressed() {
         let g = load_golden();
-        assert_eq!(stage_regressed(Some("reading"), Some("hypothesizing")), g["stage_ok"].as_bool().unwrap());
-        assert_eq!(stage_regressed(Some("fixing"), Some("reading")), g["stage_regressed"].as_bool().unwrap());
-        assert_eq!(stage_regressed(None, Some("reading")), g["stage_none"].as_bool().unwrap());
-        assert_eq!(stage_regressed(Some("reading"), Some("blorp")), g["stage_unknown"].as_bool().unwrap());
+        assert_eq!(
+            stage_regressed(Some("reading"), Some("hypothesizing")),
+            g["stage_ok"].as_bool().unwrap()
+        );
+        assert_eq!(
+            stage_regressed(Some("fixing"), Some("reading")),
+            g["stage_regressed"].as_bool().unwrap()
+        );
+        assert_eq!(
+            stage_regressed(None, Some("reading")),
+            g["stage_none"].as_bool().unwrap()
+        );
+        assert_eq!(
+            stage_regressed(Some("reading"), Some("blorp")),
+            g["stage_unknown"].as_bool().unwrap()
+        );
     }
 
     #[test]
@@ -391,12 +422,30 @@ mod tests {
     fn parity_out_of_batch() {
         let g = load_golden();
         let batch = normalize_batch_files(["src/foo.py"]);
-        let a_in = ScopeAnchor { file_path: "src/foo.py".to_string(), stage: "reading".to_string() };
-        let a_out = ScopeAnchor { file_path: "src/other.py".to_string(), stage: "reading".to_string() };
-        assert_eq!(out_of_batch(Some(&a_in), &batch), g["out_of_batch_in"].as_bool().unwrap());
-        assert_eq!(out_of_batch(Some(&a_out), &batch), g["out_of_batch_out"].as_bool().unwrap());
-        assert_eq!(out_of_batch(None, &batch), g["out_of_batch_none"].as_bool().unwrap());
-        assert_eq!(out_of_batch(Some(&a_out), &HashSet::new()), g["out_of_batch_empty"].as_bool().unwrap());
+        let a_in = ScopeAnchor {
+            file_path: "src/foo.py".to_string(),
+            stage: "reading".to_string(),
+        };
+        let a_out = ScopeAnchor {
+            file_path: "src/other.py".to_string(),
+            stage: "reading".to_string(),
+        };
+        assert_eq!(
+            out_of_batch(Some(&a_in), &batch),
+            g["out_of_batch_in"].as_bool().unwrap()
+        );
+        assert_eq!(
+            out_of_batch(Some(&a_out), &batch),
+            g["out_of_batch_out"].as_bool().unwrap()
+        );
+        assert_eq!(
+            out_of_batch(None, &batch),
+            g["out_of_batch_none"].as_bool().unwrap()
+        );
+        assert_eq!(
+            out_of_batch(Some(&a_out), &HashSet::new()),
+            g["out_of_batch_empty"].as_bool().unwrap()
+        );
     }
 
     #[test]
@@ -406,7 +455,10 @@ mod tests {
         let b2 = update_budget(&b, &"x".repeat(620), false, None);
         let (msg, b_after) = format_budget_nudge(&b2);
         assert_eq!(msg.as_deref(), g["nudge_soft_msg"].as_str());
-        assert_eq!(b_after.soft_nudge_sent, g["nudge_soft_flag"].as_bool().unwrap());
+        assert_eq!(
+            b_after.soft_nudge_sent,
+            g["nudge_soft_flag"].as_bool().unwrap()
+        );
 
         let (msg2, _) = format_budget_nudge(&b_after);
         assert!(msg2.is_none());
@@ -415,7 +467,10 @@ mod tests {
         let b3 = update_budget(&b_after, &"x".repeat(200), false, None);
         let (rot_msg, b_rot) = format_budget_nudge(&b3);
         assert_eq!(rot_msg.as_deref(), g["nudge_rotate_msg"].as_str());
-        assert_eq!(b_rot.rotate_nudge_sent, g["nudge_rotate_flag"].as_bool().unwrap());
+        assert_eq!(
+            b_rot.rotate_nudge_sent,
+            g["nudge_rotate_flag"].as_bool().unwrap()
+        );
 
         let (rot_msg2, _) = format_budget_nudge(&b_rot);
         assert!(rot_msg2.is_none());

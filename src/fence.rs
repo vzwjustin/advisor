@@ -120,19 +120,40 @@ mod tests {
         let raw = std::fs::read_to_string("tests/parity/fence.json").unwrap();
         let v: HashMap<String, serde_json::Value> = serde_json::from_str(&raw).unwrap();
         assert_eq!(fence("hello world", ""), v["fence_plain"].as_str().unwrap());
-        assert_eq!(fence("x = 1", "python"), v["fence_python"].as_str().unwrap());
-        assert_eq!(fence("code", "rust"), v["fence_with_lang"].as_str().unwrap());
+        assert_eq!(
+            fence("x = 1", "python"),
+            v["fence_python"].as_str().unwrap()
+        );
+        assert_eq!(
+            fence("code", "rust"),
+            v["fence_with_lang"].as_str().unwrap()
+        );
         // collision: body contains ``` → use ````
         let collision = fence("```triple```", "");
         assert_eq!(collision, v["fence_collision"].as_str().unwrap());
         // sanitize_inline
-        assert_eq!(sanitize_inline("hello"), v["sanitize_inline_basic"].as_str().unwrap());
-        assert_eq!(sanitize_inline("`code`"), v["sanitize_inline_backtick"].as_str().unwrap());
-        assert_eq!(sanitize_inline("line1\nline2"), v["sanitize_inline_newline"].as_str().unwrap());
+        assert_eq!(
+            sanitize_inline("hello"),
+            v["sanitize_inline_basic"].as_str().unwrap()
+        );
+        assert_eq!(
+            sanitize_inline("`code`"),
+            v["sanitize_inline_backtick"].as_str().unwrap()
+        );
+        assert_eq!(
+            sanitize_inline("line1\nline2"),
+            v["sanitize_inline_newline"].as_str().unwrap()
+        );
         // bidi: U+202E stripped
-        assert_eq!(sanitize_inline("test\u{202e}evil"), v["sanitize_inline_bidi"].as_str().unwrap());
+        assert_eq!(
+            sanitize_inline("test\u{202e}evil"),
+            v["sanitize_inline_bidi"].as_str().unwrap()
+        );
         // invisible: U+200B stripped
-        assert_eq!(sanitize_inline("a\u{200b}b"), v["sanitize_inline_invisible"].as_str().unwrap());
+        assert_eq!(
+            sanitize_inline("a\u{200b}b"),
+            v["sanitize_inline_invisible"].as_str().unwrap()
+        );
     }
 
     #[test]

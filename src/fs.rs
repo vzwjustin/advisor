@@ -237,11 +237,26 @@ mod tests {
         use std::collections::HashMap;
         let raw = std::fs::read_to_string("tests/parity/fs.json").unwrap();
         let v: HashMap<String, serde_json::Value> = serde_json::from_str(&raw).unwrap();
-        assert_eq!(CONTENT_SCAN_LIMIT, v["CONTENT_SCAN_LIMIT"].as_u64().unwrap() as usize);
-        assert_eq!(normalize_path("foo/bar.py"), v["normalize_no_dot"].as_str().unwrap());
-        assert_eq!(normalize_path("./foo/bar.py"), v["normalize_dotslash"].as_str().unwrap());
-        assert_eq!(normalize_path("/abs/path.py"), v["normalize_abs_passthrough"].as_str().unwrap());
-        assert_eq!(validate_file_types("*.py").is_ok(), v["validate_ok_noerr"].as_bool().unwrap());
+        assert_eq!(
+            CONTENT_SCAN_LIMIT,
+            v["CONTENT_SCAN_LIMIT"].as_u64().unwrap() as usize
+        );
+        assert_eq!(
+            normalize_path("foo/bar.py"),
+            v["normalize_no_dot"].as_str().unwrap()
+        );
+        assert_eq!(
+            normalize_path("./foo/bar.py"),
+            v["normalize_dotslash"].as_str().unwrap()
+        );
+        assert_eq!(
+            normalize_path("/abs/path.py"),
+            v["normalize_abs_passthrough"].as_str().unwrap()
+        );
+        assert_eq!(
+            validate_file_types("*.py").is_ok(),
+            v["validate_ok_noerr"].as_bool().unwrap()
+        );
         assert_eq!(
             validate_file_types("../evil").is_err(),
             v["validate_traversal_raises"].as_bool().unwrap()

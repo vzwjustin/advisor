@@ -13,16 +13,16 @@ pub mod baseline;
 pub mod checkpoint;
 pub mod codex_skill;
 pub mod config;
-pub mod doctor;
-pub mod install;
 pub mod cost;
+pub mod doctor;
 pub mod fence;
 pub mod focus;
 pub mod fs;
 pub mod git_scope;
 pub mod history;
-pub mod live;
+pub mod install;
 pub mod jsonutil;
+pub mod live;
 pub mod models;
 pub mod orchestrate;
 pub mod pr_comment;
@@ -35,6 +35,7 @@ pub mod style;
 pub mod suppressions;
 pub mod verify;
 pub mod version;
+pub mod web;
 
 // Re-export the most-used items at the crate root, mirroring the curated
 // surface of `advisor/__init__.py`.
@@ -52,6 +53,7 @@ pub use config::{
     DEFAULT_RUNNER_MODEL, POOL_SIZE_CEILING,
 };
 pub use cost::{estimate_cost, format_estimate, load_pricing, CostEstimate};
+pub use doctor::{format_report, run_doctor, Check, DoctorReport, HealthLevel};
 pub use fence::{fence, sanitize_inline};
 pub use focus::{
     create_focus_batches, create_focus_tasks, format_batch_plan, format_dispatch_plan, FocusBatch,
@@ -63,21 +65,24 @@ pub use history::{
     file_repeat_counts, file_repeat_scores, format_history_block, history_path, load_recent,
     load_recent_findings, new_run_id, summarize, HistoryEntry,
 };
+pub use install::{
+    apply_nudge, check_for_update_cached, get_installed_skill_version, get_status, install,
+    install_skill, install_update_skill, invalidate_update_check_cache, parse_badge,
+    uninstall_nudge, uninstall_skill, ComponentStatus, InstallAction, InstallResult, Status,
+    NUDGE_BODY, OPT_OUT_ENV,
+};
+pub use live::{
+    append_event, latest_seq, live_events_path, load_recent_events, LIVE_DIR_NAME, LIVE_FILE_NAME,
+    LIVE_SCHEMA_VERSION,
+};
 pub use models::{Finding, RankedFile, Severity};
 pub use pr_comment::format_pr_comment;
 pub use presets::{get_preset, list_presets, RulePack};
 pub use rank::{language_for_path, load_advisorignore, rank_files, rank_to_prompt};
+pub use runner_budget::{new_budget, update_budget, BudgetStatus, RunnerBudget, ScopeAnchor};
 pub use sarif::{
     findings_to_sarif, level_for, synthesize_rule_id, SARIF_SCHEMA_URI, SARIF_VERSION,
 };
-pub use doctor::{format_report, run_doctor, Check, DoctorReport, HealthLevel};
-pub use install::{
-    apply_nudge, get_installed_skill_version, get_status, install, install_skill,
-    install_update_skill, parse_badge, uninstall_nudge, uninstall_skill, InstallAction,
-    InstallResult, ComponentStatus, Status, NUDGE_BODY, OPT_OUT_ENV,
-};
-pub use live::{append_event, latest_seq, live_events_path, load_recent_events, LIVE_DIR_NAME, LIVE_FILE_NAME, LIVE_SCHEMA_VERSION};
-pub use runner_budget::{BudgetStatus, RunnerBudget, ScopeAnchor, new_budget, update_budget};
 pub use skill_asset::{skill_md, skill_md_update, version_badge};
 pub use style::strip_ansi;
 pub use suppressions::{apply_suppressions, load_suppressions, Suppression};

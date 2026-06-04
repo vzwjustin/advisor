@@ -9,7 +9,7 @@ use super::FINDING_SCHEMA;
 
 /// The advisor prompt body, embedded at compile time (mirrors the runtime
 /// `importlib.resources` load of `_prompts/advisor.txt`).
-const ADVISOR_TEMPLATE: &str = include_str!("../../advisor/orchestrate/_prompts/advisor.txt");
+const ADVISOR_TEMPLATE: &str = include_str!("../assets/advisor.txt");
 
 const PLACEHOLDERS: [&str; 13] = [
     "team_name",

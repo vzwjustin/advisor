@@ -98,15 +98,11 @@ pub fn append_event(
     }
     let data = data.unwrap_or_else(|| json!({}));
     if !data.is_object() {
-        return Err(format!(
-            "data must be a dict or None, got {}",
-            data.to_string()
-        ));
+        return Err(format!("data must be a dict or None, got {}", data));
     }
     let path = live_events_path(target);
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("create_dir_all: {e}"))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("create_dir_all: {e}"))?;
     }
 
     let ts_string: String = match ts {
@@ -163,11 +159,7 @@ pub fn append_event(
 }
 
 /// Return events with seq > since, up to limit. Chronological order.
-pub fn load_recent_events(
-    target: &Path,
-    since: Option<i64>,
-    limit: usize,
-) -> Vec<Value> {
+pub fn load_recent_events(target: &Path, since: Option<i64>, limit: usize) -> Vec<Value> {
     if limit == 0 {
         return vec![];
     }
@@ -269,13 +261,23 @@ fn is_leap(y: u32) -> bool {
     (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
 }
 fn days_in_year(y: u32) -> u32 {
-    if is_leap(y) { 366 } else { 365 }
+    if is_leap(y) {
+        366
+    } else {
+        365
+    }
 }
 fn days_in_month(y: u32, m: u32) -> u32 {
     match m {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
-        2 => if is_leap(y) { 29 } else { 28 },
+        2 => {
+            if is_leap(y) {
+                29
+            } else {
+                28
+            }
+        }
         _ => 0,
     }
 }
@@ -297,10 +299,16 @@ mod tests {
         assert_eq!(LIVE_DIR_NAME, g["LIVE_DIR_NAME"].as_str().unwrap());
         assert_eq!(LIVE_SUBDIR, g["LIVE_SUBDIR"].as_str().unwrap());
         assert_eq!(LIVE_FILE_NAME, g["LIVE_FILE_NAME"].as_str().unwrap());
-        assert_eq!(LIVE_SCHEMA_VERSION, g["LIVE_SCHEMA_VERSION"].as_str().unwrap());
+        assert_eq!(
+            LIVE_SCHEMA_VERSION,
+            g["LIVE_SCHEMA_VERSION"].as_str().unwrap()
+        );
         assert_eq!(MAX_LINE, g["_MAX_LINE"].as_u64().unwrap() as usize);
         assert_eq!(MAX_TAIL, g["_MAX_TAIL"].as_u64().unwrap() as usize);
-        assert_eq!(TAIL_READ_BYTES, g["_TAIL_READ_BYTES"].as_u64().unwrap() as usize);
+        assert_eq!(
+            TAIL_READ_BYTES,
+            g["_TAIL_READ_BYTES"].as_u64().unwrap() as usize
+        );
     }
 
     #[test]
@@ -316,7 +324,10 @@ mod tests {
     #[test]
     fn parity_last_seq_from_tail() {
         let g = golden();
-        assert_eq!(last_seq_from_tail(b""), g["last_seq_empty"].as_i64().unwrap());
+        assert_eq!(
+            last_seq_from_tail(b""),
+            g["last_seq_empty"].as_i64().unwrap()
+        );
         assert_eq!(
             last_seq_from_tail(b"{\"seq\":5,\"kind\":\"run_start\"}\n"),
             g["last_seq_single"].as_i64().unwrap()
@@ -434,10 +445,7 @@ mod tests {
             .collect();
         assert_eq!(limit1, exp_limit1);
 
-        assert_eq!(
-            latest_seq(&target),
-            g["latest_seq_val"].as_i64().unwrap()
-        );
+        assert_eq!(latest_seq(&target), g["latest_seq_val"].as_i64().unwrap());
     }
 
     #[test]
@@ -449,6 +457,9 @@ mod tests {
         assert!(events.is_empty());
         let exp: Vec<Value> = g["load_missing"].as_array().unwrap().to_vec();
         assert_eq!(events, exp);
-        assert_eq!(latest_seq(&missing), g["latest_seq_missing"].as_i64().unwrap());
+        assert_eq!(
+            latest_seq(&missing),
+            g["latest_seq_missing"].as_i64().unwrap()
+        );
     }
 }

@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>advisor dashboard</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header>
+  <h1>advisor</h1>
+  <nav>
+    <button class="tab active" data-tab="findings" title="Findings (1)">Findings</button>
+    <button class="tab" data-tab="live" title="Live (2)">Live</button>
+    <button class="tab" data-tab="plan" title="Plan (3)">Plan</button>
+    <button class="tab" data-tab="config" title="Run config (4)">Run config</button>
+    <button class="tab" data-tab="cost" title="Cost (5)">Cost</button>
+  </nav>
+  <div class="header-actions">
+    <button id="theme-toggle" class="icon-btn" title="Toggle theme (T)" aria-label="Toggle theme">
+      <svg id="theme-icon-dark" width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M6 .278a.768.768 0 0 1 .08.858 7.208 7.208 0 0 0-.878 3.46c0 4.021 3.278 7.277 7.318 7.277.527 0 1.04-.055 1.533-.16a.787.787 0 0 1 .81.316.733.733 0 0 1-.031.893A8.349 8.349 0 0 1 8.344 16C3.734 16 0 12.286 0 7.71 0 4.266 2.114 1.312 5.124.06A.752.752 0 0 1 6 .278z"/></svg>
+      <svg id="theme-icon-light" width="16" height="16" viewBox="0 0 16 16" fill="currentColor" hidden><path d="M8 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM8 0a.5.5 0 0 1 .5.5v2a.5.5 0 0 1-1 0v-2A.5.5 0 0 1 8 0zm0 13a.5.5 0 0 1 .5.5v2a.5.5 0 0 1-1 0v-2A.5.5 0 0 1 8 13zm8-5a.5.5 0 0 1-.5.5h-2a.5.5 0 0 1 0-1h2a.5.5 0 0 1 .5.5zM3 8a.5.5 0 0 1-.5.5h-2a.5.5 0 0 1 0-1h2a.5.5 0 0 1 3 8zm10.657-5.657a.5.5 0 0 1 0 .707l-1.414 1.415a.5.5 0 1 1-.707-.708l1.414-1.414a.5.5 0 0 1 .707 0zm-9.193 9.193a.5.5 0 0 1 0 .707L3.05 13.657a.5.5 0 0 1-.707-.707l1.414-1.414a.5.5 0 0 1 .707 0zm9.193 2.121a.5.5 0 0 1-.707 0l-1.414-1.414a.5.5 0 0 1 .707-.707l1.414 1.414a.5.5 0 0 1 0 .707zM4.464 4.465a.5.5 0 0 1-.707 0L2.343 3.05a.5.5 0 1 1 .707-.707l1.414 1.414a.5.5 0 0 1 0 .708z"/></svg>
+    </button>
+    <button id="shortcuts-btn" class="icon-btn" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M14 5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h12zM2 4a2 2 0 0 0-2 2v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2H2z"/><path d="M13 10.25a.25.25 0 0 1 .25-.25h.5a.25.25 0 0 1 .25.25v.5a.25.25 0 0 1-.25.25h-.5a.25.25 0 0 1-.25-.25v-.5zm0-2a.25.25 0 0 1 .25-.25h.5a.25.25 0 0 1 .25.25v.5a.25.25 0 0 1-.25.25h-.5a.25.25 0 0 1-.25-.25v-.5zm-5 0A.25.25 0 0 1 8.25 8h.5a.25.25 0 0 1 .25.25v.5a.25.25 0 0 1-.25.25h-.5A.25.25 0 0 1 8 8.75v-.5zm2 0a.25.25 0 0 1 .25-.25h.5a.25.25 0 0 1 .25.25v.5a.25.25 0 0 1-.25.25h-.5a.25.25 0 0 1-.25-.25v-.5zm-5 0A.25.25 0 0 1 5.25 8h.5a.25.25 0 0 1 .25.25v.5a.25.25 0 0 1-.25.25h-.5A.25.25 0 0 1 5 8.75v-.5zm-2 0A.25.25 0 0 1 3.25 8h.5a.25.25 0 0 1 .25.25v.5a.25.25 0 0 1-.25.25h-.5A.25.25 0 0 1 3 8.75v-.5zm-1 2a.25.25 0 0 1 .25-.25h.5a.25.25 0 0 1 .25.25v.5a.25.25 0 0 1-.25.25h-.5a.25.25 0 0 1-.25-.25v-.5zm11-4a.25.25 0 0 1 .25-.25h.5a.25.25 0 0 1 .25.25v.5a.25.25 0 0 1-.25.25h-.5a.25.25 0 0 1-.25-.25v-.5zm-2 0a.25.25 0 0 1 .25-.25h.5a.25.25 0 0 1 .25.25v.5a.25.25 0 0 1-.25.25h-.5a.25.25 0 0 1-.25-.25v-.5zm-2 0A.25.25 0 0 1 6.25 6h.5a.25.25 0 0 1 .25.25v.5a.25.25 0 0 1-.25.25h-.5A.25.25 0 0 1 6 6.75v-.5zm-2 0A.25.25 0 0 1 4.25 6h.5a.25.25 0 0 1 .25.25v.5a.25.25 0 0 1-.25.25h-.5A.25.25 0 0 1 4 6.75v-.5zm-2 0A.25.25 0 0 1 2.25 6h.5a.25.25 0 0 1 .25.25v.5a.25.25 0 0 1-.25.25h-.5A.25.25 0 0 1 2 6.75v-.5zm1 2a.25.25 0 0 1 .25-.25h5.5a.25.25 0 0 1 .25.25v.5a.25.25 0 0 1-.25.25h-5.5a.25.25 0 0 1-.25-.25v-.5z"/></svg>
+    </button>
+  </div>
+  <div class="target">target: <code id="target-path">loading&hellip;</code></div>
+</header>
+
+<main>
+  <section id="findings" class="panel active">
+    <div id="severity-stats" class="severity-stats" hidden></div>
+    <div class="controls">
+      <input id="findings-search" type="search" placeholder="filter by file or description&hellip;" aria-label="Filter findings">
+      <select id="findings-severity" aria-label="Filter by severity">
+        <option value="">all severities</option>
+        <option>CRITICAL</option>
+        <option>HIGH</option>
+        <option>MEDIUM</option>
+        <option>LOW</option>
+      </select>
+      <span id="live-indicator" class="live idle" title="click to toggle live updates" role="button" tabindex="0">
+        <span class="live-dot"></span>
+        <span class="live-label">IDLE</span>
+      </span>
+      <span id="live-updated" class="live-updated"></span>
+      <button id="export-csv" class="btn-secondary" title="Export findings to CSV (E)">Export CSV</button>
+      <span id="findings-count" class="count"></span>
+    </div>
+    <table id="findings-table">
+      <thead><tr>
+        <th class="sortable" data-sort="timestamp">When <span class="sort-arrow"></span></th>
+        <th class="sortable" data-sort="file_path">File <span class="sort-arrow"></span></th>
+        <th class="sortable" data-sort="severity">Severity <span class="sort-arrow"></span></th>
+        <th class="sortable" data-sort="status">Status <span class="sort-arrow"></span></th>
+        <th>Description</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+    <p id="findings-empty" class="empty" hidden>No findings yet. Run the advisor on this target first.</p>
+  </section>
+
+  <section id="plan" class="panel">
+    <div class="controls">
+      <button id="plan-refresh">Refresh plan</button>
+      <span id="plan-count" class="count"></span>
+    </div>
+    <table id="plan-table">
+      <thead><tr><th>#</th><th>Priority</th><th>File</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <p id="plan-empty" class="empty" hidden>No files matched the current min-priority filter.</p>
+  </section>
+
+  <section id="config" class="panel">
+    <p class="hint">These fields shape the CLI command preview below — the
+      running dashboard stays bound to the directory you launched
+      <code>advisor ui</code> with. Restart with a different argument to
+      change scope.</p>
+    <form id="config-form">
+      <label>Target directory
+        <input name="target" type="text" value="." readonly aria-readonly="true">
+      </label>
+      <label>File types
+        <input name="file_types" type="text" value="*.py">
+      </label>
+      <label>Max runners
+        <input name="max_runners" type="number" value="5" min="1">
+      </label>
+      <label>Min priority
+        <input name="min_priority" type="number" value="3" min="1" max="5">
+      </label>
+      <label>Advisor model
+        <input name="advisor_model" type="text" value="opus">
+      </label>
+      <label>Runner model
+        <input name="runner_model" type="text" value="sonnet">
+      </label>
+    </form>
+    <div class="cli-preview">
+      <h3>CLI command</h3>
+      <pre id="cli-command"></pre>
+      <button id="copy-cli">Copy to clipboard</button>
+      <span id="copy-feedback" class="feedback"></span>
+      <p class="hint" style="margin-top:0.8rem"><code>advisor plan</code> ranks files locally (what this dashboard shows). To run the full review-and-fix pipeline with live agents, type <code>/advisor &lt;path&gt;</code> in Claude Code instead.</p>
+    </div>
+  </section>
+
+  <section id="cost" class="panel">
+    <div class="controls">
+      <button id="cost-refresh">Estimate cost</button>
+    </div>
+    <p class="hint">Min = explore pass only; Max = full fix wave per runner. Actual cost lands in this range based on how many findings Opus confirms and whether the user asks for fixes.</p>
+    <div id="cost-summary"></div>
+    <p id="cost-empty" class="empty">Click <strong>Estimate cost</strong> to project token usage and dollar cost for the files in scope. The estimate loads automatically on first visit.</p>
+  </section>
+
+  <section id="live" class="panel">
+    <div class="controls">
+      <span id="live-stream-indicator" class="live idle" title="click to toggle polling" role="button" tabindex="0">
+        <span class="live-dot"></span>
+        <span class="live-label">IDLE</span>
+      </span>
+      <button id="live-clear" type="button">Clear feed</button>
+      <span id="live-count" class="count"></span>
+    </div>
+    <ul id="live-feed" class="feed"></ul>
+    <p id="live-empty" class="empty">No live events yet. Start a review run with <code>/advisor .</code> in Claude Code &mdash; events appear here in real time as the advisor and runners work. If this tab stays quiet after a run, refresh your skill with <code>advisor install</code>.</p>
+  </section>
+</main>
+
+<div id="shortcuts-modal" class="modal" hidden>
+  <div class="modal-backdrop"></div>
+  <div class="modal-content">
+    <h2>Keyboard shortcuts</h2>
+    <div class="shortcuts-grid">
+      <div class="shortcut-group">
+        <h3>Navigation</h3>
+        <dl>
+          <dt><kbd>1</kbd>–<kbd>5</kbd></dt><dd>Switch tabs</dd>
+          <dt><kbd>/</kbd></dt><dd>Focus search</dd>
+          <dt><kbd>Esc</kbd></dt><dd>Close modal / blur search</dd>
+        </dl>
+      </div>
+      <div class="shortcut-group">
+        <h3>Actions</h3>
+        <dl>
+          <dt><kbd>E</kbd></dt><dd>Export findings to CSV</dd>
+          <dt><kbd>T</kbd></dt><dd>Toggle theme</dd>
+          <dt><kbd>R</kbd></dt><dd>Refresh current tab</dd>
+          <dt><kbd>?</kbd></dt><dd>Toggle this help</dd>
+        </dl>
+      </div>
+    </div>
+    <button class="modal-close" aria-label="Close">&times;</button>
+  </div>
+</div>
+
+<div id="toast-container" class="toast-container"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
