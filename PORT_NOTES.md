@@ -36,6 +36,7 @@ parity assertions.
 | `src/fence.rs` | `orchestrate/_fence.py` | `sanitize_inline`, `fence` (+ linebreak/invisible strip) | Unit tests vs Python outputs |
 | `src/style.rs` | `_style.py` | `strip_ansi` (CSI+OSC regex) | Unit tests |
 | `src/fs.rs` | `_fs.py` | `normalize_path`, `validate_file_types`, `CONTENT_SCAN_LIMIT`, POSIX `normpath` | Reference table vs Python (10 cases) |
+| `src/suppressions.rs` | `suppressions.py` | `Suppression` + `matches`, `severity_from_rule_id`, `**`-aware glob match (shared with rank) + fnmatch fallback, `until` date validation/expiry (UTC), `load_suppressions` (structural validation → errors), `apply_suppressions` | **Golden JSON** vs Python (severity ranks, matches, apply, load valid + 4 error shapes) |
 | `src/baseline.rs` | `baseline.py` | `BaselineEntry`/`BaselineDiff`, `findings_to_entries`, `description_hash`, `normalize_identity_path`, `write_baseline`/`read_baseline` (JSONL), `filter_against_baseline`, `diff_against_baseline` (incl. abs/rel suffix aliasing) | **Golden JSON** vs Python (entries, written bytes, hashes, normalize, filter, diff) |
 | `src/fs.rs` (+helpers) | `_fs.py` | `normalize_path`, `validate_file_types`, **`read_text_capped`**, **`atomic_write_text`**, `posix_normpath` | reference table + used by baseline round-trip |
 | `src/config.rs` | `orchestrate/config.py` | `is_known_model` + model regex/constants, **`TeamConfig`**, **`default_team_config`** (env fallbacks, range clamping + stderr warnings, preset merge) | Matrix + **golden JSON** (7 scenarios: minimal, presets, clamps, explicit) |
@@ -78,8 +79,8 @@ Everything else. The Python package is fully intact and authoritative. Largest
 remaining work, roughly in dependency order (see `RUST_PORT_PLAN.md` §6):
 
 - **Core logic**: `runner_budget.py`, `git_scope.py` (subprocess),
-  `history.py`, `baseline.py`, `checkpoint.py`, `suppressions.py`,
-  `audit.py`, full `cost.py` estimator, full `_fs.py` atomic write/locking.
+  `history.py`, `checkpoint.py`, `audit.py`, full `cost.py` estimator,
+  remaining `_fs.py` (symlink-reject/locking nuances).
 - **Orchestration prompts**: `advisor_prompt.py`, `runner_prompts.py`,
   `verify_dispatch.py`, `pipeline.py`, `_schema.py`, the embedded
   `_prompts/advisor.txt`, and the 20+ golden snapshot fixtures (parity linchpin).
@@ -119,10 +120,11 @@ remaining work, roughly in dependency order (see `RUST_PORT_PLAN.md` §6):
 
 `rank.py`, `focus.py`, `config.py`, `verify.py`, `sarif.py`, and the
 **`advisor plan` CLI** are now ported and parity-verified. Next:
-1. Port **`baseline.py`** / **`suppressions.py`**, then wire **`advisor audit`**
-   (transcript → `parse_findings_with_drift` → sarif/pr-comment/json + `--fail-on`)
-   and **`advisor baseline`** into the CLI. With `verify`, `sarif`, and
-   `pr_comment` all ported, `audit`'s rendering paths are ready.
+1. Port **`audit.py`** (`AuditReport`, transcript regex analysis) then wire
+   **`advisor audit`** (transcript → `parse_findings_with_drift` →
+   sarif/pr-comment/json + `--fail-on` + `--baseline`) and **`advisor baseline`
+   create/diff** into the CLI — all the rendering/lifecycle primitives
+   (verify, sarif, pr_comment, baseline, suppressions) are now ported.
 2. Remaining `plan` flags not yet wired (documented gaps): `--since/--staged/--branch`
    (needs `git_scope.py`), `--estimate`/`--pricing` (needs full `cost.py`),
    `--checkpoint`/`--resume` (needs `checkpoint.py`), `--sarif`, `--exclude`,

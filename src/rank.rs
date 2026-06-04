@@ -1035,6 +1035,13 @@ fn fnmatch_translate(pattern: &str) -> String {
     res
 }
 
+/// Compile a `**`-aware glob to a whole-path regex (mirrors
+/// `_double_star_to_regex`), or `None` if the quantifier cap trips or the
+/// translated regex fails to compile. Shared with the suppressions matcher.
+pub fn try_double_star_regex(pattern: &str) -> Option<regex::Regex> {
+    double_star_to_regex(pattern).and_then(|s| regex::Regex::new(&s).ok())
+}
+
 /// Match a filename against a single fnmatch glob (Python `fnmatch.fnmatch`
 /// semantics, used by `--file-types` discovery and git-scope filtering).
 pub fn fnmatch_match(name: &str, pattern: &str) -> bool {

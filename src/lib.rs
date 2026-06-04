@@ -21,6 +21,7 @@ pub mod presets;
 pub mod rank;
 pub mod sarif;
 pub mod style;
+pub mod suppressions;
 pub mod verify;
 pub mod version;
 
@@ -48,6 +49,7 @@ pub use sarif::{
     findings_to_sarif, level_for, synthesize_rule_id, SARIF_SCHEMA_URI, SARIF_VERSION,
 };
 pub use style::strip_ansi;
+pub use suppressions::{apply_suppressions, load_suppressions, Suppression};
 pub use verify::{
     build_verify_prompt, format_findings_block, parse_findings_from_text, parse_findings_with_drift,
 };
