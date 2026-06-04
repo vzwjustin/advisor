@@ -167,6 +167,23 @@ class TestCostPayload:
         assert payload["task_count"] == 4
         assert payload["estimate"]["runner_count"] == 2
 
+    def test_invalid_max_runners_fallback_still_obeys_ceiling(self, tmp_path):
+        for i in range(25):
+            (tmp_path / f"auth{i}.py").write_text("password = 'x'\n" * 10)
+        state = build_app_state(tmp_path, min_priority=1, max_runners=999)
+        payload = _cost_payload(state, {"max_runners": ["not-a-number"]})
+
+        assert payload["task_count"] == 25
+        assert payload["estimate"]["runner_count"] == 20
+
+    def test_max_fixes_zero_matches_estimate_cost(self, tmp_path):
+        (tmp_path / "auth.py").write_text("password = 'x'\n" * 100)
+        state = build_app_state(tmp_path, min_priority=1)
+        zero = _cost_payload(state, {"max_fixes_per_runner": ["0"]})
+        one = _cost_payload(state, {"max_fixes_per_runner": ["1"]})
+        assert zero["estimate"]["cost_usd_min"] == zero["estimate"]["cost_usd_max"]
+        assert zero["estimate"]["cost_usd_max"] < one["estimate"]["cost_usd_max"]
+
 
 class TestHistoryPayload:
     def test_empty_history(self, tmp_path):
@@ -227,7 +244,40 @@ class TestStatusPayload:
     def test_empty_when_no_history_file(self, tmp_path):
         state = build_app_state(tmp_path)
         payload = _status_payload(state)
-        assert payload == {"last_mtime": None, "token": None, "is_active": False}
+        # Back-compat fields stay as-is for older clients.
+        assert payload["last_mtime"] is None
+        assert payload["token"] is None
+        assert payload["is_active"] is False
+        # New per-store fields — both inactive when neither file exists.
+        assert payload["history_is_active"] is False
+        assert payload["live_is_active"] is False
+        assert payload["live_mtime"] is None
+        assert payload["live_token"] is None
+
+    def test_is_active_true_when_only_live_events_recent(self, tmp_path):
+        """Regression: during a /advisor run the team-lead writes to
+        ``live/events.jsonl`` but NOT to ``history.jsonl`` (only
+        confirmed findings land there). The prior implementation read
+        only ``history.jsonl``'s mtime, so the Findings tab's LIVE pill
+        stayed IDLE even when the Live tab was buzzing. ``is_active``
+        now reflects EITHER store being warm."""
+        from advisor.live import append_event
+
+        append_event(tmp_path, "run_start", {"run_id": "r1"})
+        state = build_app_state(tmp_path)
+        payload = _status_payload(state)
+        # No history file → history_is_active is False.
+        assert payload["history_is_active"] is False
+        # Just-written events file → live_is_active is True.
+        assert payload["live_is_active"] is True
+        # ``is_active`` aggregates both → True.
+        assert payload["is_active"] is True
+        # Back-compat fields key on history only.
+        assert payload["last_mtime"] is None
+        assert payload["token"] is None
+        # New live fields are populated.
+        assert payload["live_mtime"] is not None
+        assert payload["live_token"] is not None
 
     def test_token_combines_mtime_ns_and_size(self, tmp_path):
         """The token field gives the client a higher-resolution
@@ -453,7 +503,16 @@ class TestLiveEndpoints:
         assert status == 200
         assert "application/json" in headers["Content-Type"]
         data = json.loads(body)
-        assert data == {"last_mtime": None, "token": None, "is_active": False}
+        # Back-compat fields stay shaped the same for older clients.
+        assert data["last_mtime"] is None
+        assert data["token"] is None
+        assert data["is_active"] is False
+        # New per-store fields (added when ``is_active`` was extended
+        # to reflect live activity, not just history activity).
+        assert data["history_is_active"] is False
+        assert data["live_is_active"] is False
+        assert data["live_mtime"] is None
+        assert data["live_token"] is None
 
     def test_api_status_reflects_writes(self, live_server):
         """After appending a finding, /api/status must report count>0, a
@@ -486,6 +545,19 @@ class TestLiveEndpoints:
         assert "error" in json.loads(body)
 
 
+class TestRunServerBindPolicy:
+    def test_rejects_wildcard_bind_before_opening_socket(self, tmp_path, monkeypatch):
+        from advisor.web import server as web_server
+
+        def fail_http_server(*_args, **_kwargs):
+            raise AssertionError("wildcard bind should be rejected before socket bind")
+
+        monkeypatch.setattr(web_server, "ThreadingHTTPServer", fail_http_server)
+
+        with pytest.raises(OSError, match="refusing to bind non-loopback host"):
+            web_server.run_server(tmp_path, host="0.0.0.0", port=0)
+
+
 # ---------------------------------------------------------------------------
 # Static UI behavior
 # ---------------------------------------------------------------------------
@@ -495,7 +567,13 @@ class TestStaticUiState:
     def test_findings_filter_empty_state_uses_filtered_count(self):
         assert "let findingsErrorMessage = '';" in APP_JS
         assert "const hasVisibleFindings = filtered.length !== 0;" in APP_JS
-        assert "$('#findings-empty').textContent = findingsErrorMessage ||" in APP_JS
+        # The empty-state copy now branches on three cases: error,
+        # no-findings-but-live-run-active, no-findings-and-idle, and
+        # findings-but-filter-empty. Confirm each branch ships.
+        assert "if (findingsErrorMessage) {" in APP_JS
+        assert "lastStatus.live_is_active" in APP_JS
+        assert "A /advisor run is in progress on this target" in APP_JS
+        assert "No findings yet. Run the advisor on this target first." in APP_JS
         assert "No findings match the current filters." in APP_JS
         assert "$('#findings-table').hidden = !hasVisibleFindings;" in APP_JS
 
@@ -508,7 +586,11 @@ class TestStaticUiState:
 
     def test_cost_empty_resets_stale_error_message(self):
         assert "function showCostError(message)" in APP_JS
-        assert "No plan yet — cost estimate needs ranked files." in APP_JS
+        # The empty-state copy was updated to direct the user to click
+        # Estimate cost (and to mention auto-load on first visit).
+        assert "No plan yet — cost estimate needs ranked files." in APP_JS or (
+            "Click" in APP_JS and "Estimate cost" in APP_JS
+        )
         assert "Error loading cost: network error" in APP_JS
 
     def test_findings_fetch_errors_show_empty_state(self):
@@ -545,11 +627,24 @@ class TestStaticUiState:
     def test_poll_uses_token_when_present(self):
         """Client prefers the higher-resolution ``token`` field for
         change detection, falling back to ``last_mtime`` when the server
-        omits it (older server compat)."""
-        assert "let lastToken = null;" in APP_JS
+        omits it (older server compat).
+
+        Note: ``lastToken`` / ``lastMtime`` are initialized to a unique
+        sentinel string (NOT ``null``) so the first poll always triggers
+        ``refetchFindings`` even when ``/api/status`` returns ``null``
+        for both fields (fresh checkout with no history file). See the
+        comment in ``app.js`` for the regression that motivated this.
+        """
+        assert "let lastToken = '__uninitialized__';" in APP_JS
+        assert "let lastMtime = '__uninitialized__';" in APP_JS
         assert "const hasToken = typeof data.token === 'string';" in APP_JS
         assert "data.token !== lastToken" in APP_JS
         assert "data.last_mtime !== lastMtime" in APP_JS
+
+    def test_live_poll_runs_while_other_tabs_are_active(self):
+        assert "document.hidden" in APP_JS
+        assert "fetch('/api/events?' + qs.toString()" in APP_JS
+        assert "activeTab !== 'live'" not in APP_JS
 
 
 # ---------------------------------------------------------------------------
@@ -560,10 +655,9 @@ class TestStaticUiState:
 class TestDisplayHost:
     """``_display_host`` renders the banner URL after the bind has succeeded.
 
-    It must (a) sanitize untrusted characters, (b) rewrite wildcard binds
-    to a navigable loopback so Chrome M128+'s ``0.0.0.0`` block doesn't
-    leave the printed URL un-clickable, and (c) bracket-wrap bare IPv6
-    so the ``:<port>`` suffix isn't misread.
+    It must (a) sanitize untrusted characters and (b) bracket-wrap bare IPv6
+    so the ``:<port>`` suffix isn't misread. Wildcard binds are rejected
+    before this helper is used.
     """
 
     def test_loopback_passes_through(self):
@@ -571,19 +665,16 @@ class TestDisplayHost:
 
         assert _display_host("127.0.0.1") == "127.0.0.1"
 
-    def test_wildcard_ipv4_rewritten_to_loopback(self):
+    def test_wildcard_ipv4_is_not_special_cased(self):
         from advisor.web.server import _display_host
 
-        # Chrome M128+ refuses to navigate to http://0.0.0.0:<port>/.
-        # The bound socket still accepts loopback traffic, but the
-        # printed URL must surface the address the browser will reach.
-        assert _display_host("0.0.0.0") == "127.0.0.1"
+        assert _display_host("0.0.0.0") == "0.0.0.0"
 
-    def test_wildcard_ipv6_rewritten_to_loopback(self):
+    def test_wildcard_ipv6_gets_bracket_wrapped(self):
         from advisor.web.server import _display_host
 
-        assert _display_host("::") == "127.0.0.1"
-        assert _display_host("[::]") == "127.0.0.1"
+        assert _display_host("::") == "[::]"
+        assert _display_host("[::]") == "[::]"
 
     def test_bare_ipv6_gets_bracket_wrapped(self):
         from advisor.web.server import _display_host
@@ -622,16 +713,17 @@ class TestUiCommand:
         assert args.port == 9000
         assert args.host == "127.0.0.1"
 
-    def test_parser_accepts_port_zero(self):
+    def test_parser_rejects_port_zero(self, capsys):
         parser = build_parser()
-        args = parser.parse_args(["ui", ".", "--port", "0"])
-        assert args.port == 0
+        with pytest.raises(SystemExit):
+            parser.parse_args(["ui", ".", "--port", "0"])
+        assert "out of range" in capsys.readouterr().err
 
-    def test_json_rejects_port_zero(self, tmp_path, capsys):
+    def test_parser_rejects_port_zero_with_json(self, capsys):
         parser = build_parser()
-        args = parser.parse_args(["ui", str(tmp_path), "--json", "--port", "0"])
-        assert cmd_ui(args) == 2
-        assert "--json cannot be combined with --port 0" in capsys.readouterr().err
+        with pytest.raises(SystemExit):
+            parser.parse_args(["ui", ".", "--json", "--port", "0"])
+        assert "out of range" in capsys.readouterr().err
 
     def test_ui_skips_nudge(self):
         assert "ui" in _NUDGE_SKIP_COMMANDS

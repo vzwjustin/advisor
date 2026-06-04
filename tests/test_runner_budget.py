@@ -20,39 +20,39 @@ from advisor.runner_budget import (
 
 class TestParseScopeAnchor:
     def test_middle_dot_separator(self) -> None:
-        anchor = parse_scope_anchor("SCOPE: src/auth.py · reading\n...body...")
-        assert anchor is not None
-        assert anchor.file_path == "src/auth.py"
-        assert anchor.stage == "reading"
+        anchors = parse_scope_anchor("SCOPE: src/auth.py · reading\n...body...")
+        assert len(anchors) == 1
+        assert anchors[0].file_path == "src/auth.py"
+        assert anchors[0].stage == "reading"
 
     def test_pipe_separator(self) -> None:
-        anchor = parse_scope_anchor("SCOPE: src/x.py | confirming")
-        assert anchor is not None
-        assert anchor.stage == "confirming"
+        anchors = parse_scope_anchor("SCOPE: src/x.py | confirming")
+        assert len(anchors) == 1
+        assert anchors[0].stage == "confirming"
 
     def test_dash_separator(self) -> None:
-        anchor = parse_scope_anchor("SCOPE: src/x.py - fixing")
-        assert anchor is not None
-        assert anchor.stage == "fixing"
+        anchors = parse_scope_anchor("SCOPE: src/x.py - fixing")
+        assert len(anchors) == 1
+        assert anchors[0].stage == "fixing"
 
-    def test_missing_anchor_returns_none(self) -> None:
-        assert parse_scope_anchor("no anchor here") is None
+    def test_missing_anchor_returns_empty_list(self) -> None:
+        assert parse_scope_anchor("no anchor here") == []
 
     def test_anchor_not_first_line_still_found(self) -> None:
         # Multiline search — anchor anywhere at line start is acceptable
         # so a runner that prepends a greeting still parses.
-        anchor = parse_scope_anchor("hello\nSCOPE: a.py · reading\n")
-        assert anchor is not None
-        assert anchor.file_path == "a.py"
+        anchors = parse_scope_anchor("hello\nSCOPE: a.py · reading\n")
+        assert len(anchors) == 1
+        assert anchors[0].file_path == "a.py"
 
     def test_case_insensitive_keyword(self) -> None:
-        anchor = parse_scope_anchor("scope: a.py · reading")
-        assert anchor is not None
+        anchors = parse_scope_anchor("scope: a.py · reading")
+        assert len(anchors) == 1
 
     def test_strips_backticks_from_path(self) -> None:
-        anchor = parse_scope_anchor("SCOPE: `src/x.py` · reading")
-        assert anchor is not None
-        assert anchor.file_path == "src/x.py"
+        anchors = parse_scope_anchor("SCOPE: `src/x.py` · reading")
+        assert len(anchors) == 1
+        assert anchors[0].file_path == "src/x.py"
 
     # ── Regression: PR#9 / Gemini-HIGH / Codex-P1 ──────────────────
     # Hyphens inside the file path used to be consumed by the separator
@@ -61,37 +61,37 @@ class TestParseScopeAnchor:
     # around the separator so hyphenated filenames survive.
 
     def test_hyphen_in_filename_middle_dot(self) -> None:
-        anchor = parse_scope_anchor("SCOPE: src/my-file.py · reading")
-        assert anchor is not None
-        assert anchor.file_path == "src/my-file.py"
-        assert anchor.stage == "reading"
+        anchors = parse_scope_anchor("SCOPE: src/my-file.py · reading")
+        assert len(anchors) == 1
+        assert anchors[0].file_path == "src/my-file.py"
+        assert anchors[0].stage == "reading"
 
     def test_hyphen_in_filename_pipe(self) -> None:
-        anchor = parse_scope_anchor("SCOPE: src/multi-word-name.py | fixing")
-        assert anchor is not None
-        assert anchor.file_path == "src/multi-word-name.py"
-        assert anchor.stage == "fixing"
+        anchors = parse_scope_anchor("SCOPE: src/multi-word-name.py | fixing")
+        assert len(anchors) == 1
+        assert anchors[0].file_path == "src/multi-word-name.py"
+        assert anchors[0].stage == "fixing"
 
     def test_hyphen_in_directory_and_filename(self) -> None:
-        anchor = parse_scope_anchor("SCOPE: my-pkg/sub-dir/my-mod.py · confirming")
-        assert anchor is not None
-        assert anchor.file_path == "my-pkg/sub-dir/my-mod.py"
+        anchors = parse_scope_anchor("SCOPE: my-pkg/sub-dir/my-mod.py · confirming")
+        assert len(anchors) == 1
+        assert anchors[0].file_path == "my-pkg/sub-dir/my-mod.py"
 
     def test_hyphen_separator_still_works_without_path_hyphen(self) -> None:
         # Dash separator still parses when the filename is plain.
-        anchor = parse_scope_anchor("SCOPE: auth.py - reading")
-        assert anchor is not None
-        assert anchor.file_path == "auth.py"
-        assert anchor.stage == "reading"
+        anchors = parse_scope_anchor("SCOPE: auth.py - reading")
+        assert len(anchors) == 1
+        assert anchors[0].file_path == "auth.py"
+        assert anchors[0].stage == "reading"
 
     def test_hyphen_separator_with_hyphen_in_path(self) -> None:
         # Ambiguous case: hyphen in path AND hyphen as separator. The
         # regex is greedy up to the last ``\s+-\s+`` so the split lands
         # at the real separator.
-        anchor = parse_scope_anchor("SCOPE: my-file.py - reading")
-        assert anchor is not None
-        assert anchor.file_path == "my-file.py"
-        assert anchor.stage == "reading"
+        anchors = parse_scope_anchor("SCOPE: my-file.py - reading")
+        assert len(anchors) == 1
+        assert anchors[0].file_path == "my-file.py"
+        assert anchors[0].stage == "reading"
 
     def test_separator_inside_path_anchors_to_last(self) -> None:
         """A path that legitimately contains the separator pattern must
@@ -99,16 +99,27 @@ class TestParseScopeAnchor:
         separator, not the first. Pre-fix the non-greedy regex picked
         the first ``·`` and silently parsed stage as ``bar`` instead
         of ``reading``."""
-        anchor = parse_scope_anchor("SCOPE: src/foo · bar.py · reading")
-        assert anchor is not None
-        assert anchor.file_path == "src/foo · bar.py"
-        assert anchor.stage == "reading"
+        anchors = parse_scope_anchor("SCOPE: src/foo · bar.py · reading")
+        assert len(anchors) == 1
+        assert anchors[0].file_path == "src/foo · bar.py"
+        assert anchors[0].stage == "reading"
 
     def test_three_separators_lands_on_last(self) -> None:
-        anchor = parse_scope_anchor("SCOPE: a · b · c · done")
-        assert anchor is not None
-        assert anchor.file_path == "a · b · c"
-        assert anchor.stage == "done"
+        anchors = parse_scope_anchor("SCOPE: a · b · c · done")
+        assert len(anchors) == 1
+        assert anchors[0].file_path == "a · b · c"
+        assert anchors[0].stage == "done"
+
+    def test_parse_scope_anchor_returns_all_anchors(self) -> None:
+        """A reply with two SCOPE: lines (runner switched files mid-reply)
+        returns both anchors in document order."""
+        text = "SCOPE: src/auth.py · reading\n...some work...\nSCOPE: src/crypto.py · fixing"
+        anchors = parse_scope_anchor(text)
+        assert len(anchors) == 2
+        assert anchors[0].file_path == "src/auth.py"
+        assert anchors[0].stage == "reading"
+        assert anchors[1].file_path == "src/crypto.py"
+        assert anchors[1].stage == "fixing"
 
 
 class TestUpdateBudget:
@@ -211,32 +222,88 @@ class TestStageRegressed:
 
 class TestOutOfBatch:
     def test_in_batch_returns_false(self) -> None:
-        anchor = parse_scope_anchor("SCOPE: src/auth.py · reading")
+        anchors = parse_scope_anchor("SCOPE: src/auth.py · reading")
+        anchor = anchors[0] if anchors else None
         assert out_of_batch(anchor, {"src/auth.py", "src/session.py"}) is False
 
     def test_out_of_batch_returns_true(self) -> None:
-        anchor = parse_scope_anchor("SCOPE: src/crypto.py · reading")
+        anchors = parse_scope_anchor("SCOPE: src/crypto.py · reading")
+        anchor = anchors[0] if anchors else None
         assert out_of_batch(anchor, {"src/auth.py"}) is True
 
     def test_none_anchor_returns_false(self) -> None:
         assert out_of_batch(None, {"src/auth.py"}) is False
 
     def test_leading_dot_slash_normalized(self) -> None:
-        anchor = parse_scope_anchor("SCOPE: ./src/auth.py · reading")
+        anchors = parse_scope_anchor("SCOPE: ./src/auth.py · reading")
+        anchor = anchors[0] if anchors else None
         assert out_of_batch(anchor, {"src/auth.py"}) is False
 
     def test_frozenset_fast_path(self) -> None:
         # frozenset input is assumed pre-normalized — output must be
         # identical to the plain-set path.
-        anchor = parse_scope_anchor("SCOPE: ./src/auth.py · reading")
+        anchors = parse_scope_anchor("SCOPE: ./src/auth.py · reading")
+        anchor = anchors[0] if anchors else None
         normalized = normalize_batch_files({"src/auth.py"})
         assert isinstance(normalized, frozenset)
         assert out_of_batch(anchor, normalized) is False
 
     def test_frozenset_detects_drift(self) -> None:
-        anchor = parse_scope_anchor("SCOPE: src/crypto.py · reading")
+        anchors = parse_scope_anchor("SCOPE: src/crypto.py · reading")
+        anchor = anchors[0] if anchors else None
         normalized = normalize_batch_files({"src/auth.py"})
         assert out_of_batch(anchor, normalized) is True
+
+    def test_empty_batch_returns_false(self) -> None:
+        """Regression: an empty ``batch_files`` collection previously
+        flagged every anchored reply as drift, which would gate the
+        entire session if a runner ever received an empty batch
+        (misconfiguration, or a public-API caller bypassing the
+        dispatch-layer non-empty check). Empty batch = no scope to
+        drift from, so out_of_batch returns False."""
+        anchors = parse_scope_anchor("SCOPE: src/anything.py · reading")
+        anchor = anchors[0] if anchors else None
+        # Plain set path.
+        assert out_of_batch(anchor, set()) is False
+        # Plain list path.
+        assert out_of_batch(anchor, []) is False
+        # Frozenset fast-path.
+        assert out_of_batch(anchor, frozenset()) is False
+
+    def test_empty_string_only_batch_returns_false(self) -> None:
+        """Regression: ``[""]`` / ``{""}`` is a degenerate "non-empty"
+        collection that previously bypassed the empty-guard (truthy
+        list) and then mis-flagged every anchor as drift (empty string
+        normalizes to ``""`` which won't match any real anchor). Now
+        treated equivalently to an empty collection — no scope, no
+        drift."""
+        anchors = parse_scope_anchor("SCOPE: src/anything.py · reading")
+        anchor = anchors[0] if anchors else None
+        assert out_of_batch(anchor, [""]) is False
+        assert out_of_batch(anchor, {""}) is False
+        assert out_of_batch(anchor, frozenset({""})) is False
+        # Mixed: ``[""]`` + valid path → behaves as if the empty
+        # string weren't there (valid path is the only one that gates).
+        assert out_of_batch(anchor, ["", "src/anything.py"]) is False
+        other_anchors = parse_scope_anchor("SCOPE: src/other.py · reading")
+        other_anchor = other_anchors[0] if other_anchors else None
+        assert out_of_batch(other_anchor, ["", "src/anything.py"]) is True
+
+    def test_out_of_batch_detects_drift_on_second_anchor(self) -> None:
+        """A reply where the first SCOPE: is in-batch but the second is not
+        must be reported as drift when callers iterate all anchors.
+
+        Previously, only the first anchor was returned, so the second
+        (out-of-batch) anchor was silently ignored."""
+        batch = {"src/auth.py", "src/session.py"}
+        text = "SCOPE: src/auth.py · reading\n...work...\nSCOPE: src/crypto.py · fixing"
+        anchors = parse_scope_anchor(text)
+        # First anchor is in-batch — no drift.
+        assert out_of_batch(anchors[0], batch) is False
+        # Second anchor is NOT in-batch — drift detected.
+        assert out_of_batch(anchors[1], batch) is True
+        # Caller iterating all anchors flags drift correctly.
+        assert any(out_of_batch(a, batch) for a in anchors) is True
 
 
 class TestNormalizeBatchFiles:

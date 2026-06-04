@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from advisor.__main__ import build_parser
 from advisor.history import (
     HISTORY_SCHEMA_VERSION,
@@ -44,6 +46,57 @@ class TestAppendAndLoad:
         append_entries(tmp_path, [])
         assert not history_path(tmp_path).exists()
 
+    def test_append_flushes_before_unlocking(self, tmp_path: Path, monkeypatch) -> None:
+        """The advisory lock must cover the buffered write itself.
+
+        On Windows ``_unlock_exclusive`` runs before close. Without an
+        explicit flush before unlock, another process could acquire the lock
+        while this process still had the JSONL payload in Python's text
+        buffer, defeating the lock's ordering guarantee.
+        """
+        events: list[str] = []
+
+        class TrackingFile:
+            def __init__(self, wrapped):
+                self._wrapped = wrapped
+
+            def __enter__(self):
+                self._wrapped.__enter__()
+                return self
+
+            def __exit__(self, *args):
+                return self._wrapped.__exit__(*args)
+
+            def write(self, payload: str) -> int:
+                events.append("write")
+                return self._wrapped.write(payload)
+
+            def flush(self) -> None:
+                events.append("flush")
+                self._wrapped.flush()
+
+            def fileno(self) -> int:
+                return self._wrapped.fileno()
+
+        real_open = Path.open
+
+        def tracking_open(self: Path, *args, **kwargs):
+            opened = real_open(self, *args, **kwargs)
+            if self == history_path(tmp_path) and args and args[0] == "a":
+                return TrackingFile(opened)
+            return opened
+
+        def fake_unlock(_fh) -> None:
+            events.append("unlock")
+
+        monkeypatch.setattr(Path, "open", tracking_open)
+        monkeypatch.setattr("advisor.history._unlock_exclusive", fake_unlock)
+        monkeypatch.setattr("advisor.history._lock_exclusive", lambda _fh: events.append("lock"))
+
+        append_entries(tmp_path, [_entry(file_path="a.py")])
+
+        assert events[:4] == ["lock", "write", "flush", "unlock"]
+
     def test_malformed_line_skipped(self, tmp_path: Path) -> None:
         import warnings
 
@@ -61,6 +114,20 @@ class TestAppendAndLoad:
         assert len(entries) == 1
         assert entries[0].file_path == "a"
 
+    def test_non_dict_jsonl_line_warns_and_skips(self, tmp_path: Path) -> None:
+        path = history_path(tmp_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "null\n"
+            '{"timestamp":"t","file_path":"a","severity":"HIGH","description":"d",'
+            '"status":"CONFIRMED","run_id":"r"}\n',
+            encoding="utf-8",
+        )
+        with pytest.warns(UserWarning, match="non-dict history entry"):
+            entries = load_recent(tmp_path)
+        assert len(entries) == 1
+        assert entries[0].file_path == "a"
+
     def test_limit_returns_most_recent(self, tmp_path: Path) -> None:
         append_entries(
             tmp_path,
@@ -72,6 +139,38 @@ class TestAppendAndLoad:
         # last, so it leads, followed by f3.
         assert entries[0].file_path == "f4.py"
         assert entries[1].file_path == "f3.py"
+
+    def test_load_recent_findings_recovers_from_malformed_block(self, tmp_path: Path) -> None:
+        """load_recent_findings extends its read window when malformed lines
+        outnumber the initial overshoot budget (buffer_size = limit + 16).
+
+        Write 50 valid entries followed by 20 malformed lines. With the old
+        fixed buffer of ``limit + 16 = 36``, a request for limit=20 would read
+        only the last 36 lines (20 malformed + 16 valid), parse just 16 valid
+        entries, and return 16 — short of the requested 20. The loop-extend
+        fix doubles the window until it collects >= 20 valid entries.
+        """
+        import warnings
+
+        path = history_path(tmp_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        valid_line = (
+            '{"timestamp":"t","file_path":"v.py","severity":"HIGH",'
+            '"description":"d","status":"CONFIRMED","run_id":"r"}\n'
+        )
+        malformed_line = "not-valid-json\n"
+
+        # 50 valid entries, then 20 malformed lines at the end
+        content = valid_line * 50 + malformed_line * 20
+        path.write_text(content, encoding="utf-8")
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            entries = load_recent(tmp_path, limit=20)
+
+        assert len(entries) == 20
+        assert all(e.file_path == "v.py" for e in entries)
 
 
 class TestFormatHistoryBlock:
@@ -207,3 +306,38 @@ class TestHistoryStatsCLI:
     def test_stats_empty_history_friendly_message(self, tmp_path: Path, capsys) -> None:
         out = self._run(capsys, ["history", str(tmp_path), "--stats"])
         assert "no history yet" in out
+
+
+class TestLoadRecentFindingsBomHandling:
+    """L4 regression: reader uses strict utf-8; BOM-prefixed files must not
+    be silently accepted (utf-8-sig was previously used, masking write-side
+    bugs that produced BOM-prefixed output)."""
+
+    def test_load_recent_findings_rejects_bom_or_handles_cleanly(self, tmp_path: Path) -> None:
+        """Write a BOM-prefixed JSONL by hand and assert the reader either
+        raises clearly (via the UnicodeDecodeError → UserWarning path) or
+        returns an empty list — never silently accepts and parses it."""
+        import warnings
+
+        hp = history_path(tmp_path)
+        hp.parent.mkdir(parents=True, exist_ok=True)
+        entry = _entry(file_path="bom.py")
+        # Write a valid JSONL line prefixed with a UTF-8 BOM (\xef\xbb\xbf).
+        bom_line = b"\xef\xbb\xbf" + (entry.to_json_line() + "\n").encode("utf-8")
+        hp.write_bytes(bom_line)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = load_recent(tmp_path, limit=10)
+
+        # The reader must NOT silently parse the BOM-corrupted entry.
+        # Acceptable outcomes: empty list (decode error caught and warned) or
+        # empty list (JSON parse failed and warned). The BOM-prefixed first
+        # token is not valid JSON, so either path is fine — what matters is
+        # that the entry is NOT returned as if the file were clean.
+        assert result == [] or all(e.file_path != "bom.py" for e in result), (
+            "BOM-prefixed JSONL must not be silently parsed as valid utf-8"
+        )
+        # If the list is empty, a warning should have been emitted explaining why.
+        if not result:
+            assert len(caught) > 0, "reader must warn when it cannot decode/parse"

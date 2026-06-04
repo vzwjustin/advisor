@@ -61,6 +61,32 @@ class TestCmdPromptVerifyEmptyStdin:
 
 
 class TestLoadFindingsFromInput:
+    def test_json_findings_must_be_array(self, tmp_path, capsys):
+        import json
+
+        from advisor.__main__ import _load_findings_from_input
+
+        p = tmp_path / "findings-dict.json"
+        p.write_text(
+            json.dumps(
+                {
+                    "findings": {
+                        "a.py": {
+                            "file_path": "a.py",
+                            "severity": "HIGH",
+                            "description": "d",
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        findings, rc = _load_findings_from_input(p)
+        assert rc is None
+        assert findings == []
+        err = capsys.readouterr().err
+        assert "must be an array" in err
+
     def test_json_rule_id_must_be_string(self, tmp_path):
         import json
 
@@ -180,13 +206,62 @@ class TestLoadFindingsFromInput:
         # The error from the helper is on stderr, not the tuple.
         assert "MiB cap" in capsys.readouterr().err
 
+    def test_json_path_filters_incomplete_sentinel(self, tmp_path: Path) -> None:
+        """Regression: a finding with ``file_path: "<incomplete>"`` in a
+        JSON input file (e.g. piped from a prior ``advisor audit --json``
+        whose transcript had partial-drop blocks) must NOT flow through
+        to baseline / SARIF / PR-comment sinks. The sentinel filter at
+        ``_audit_scope_drift`` catches it on the transcript path, the
+        markdown parser catches it on its kept list, and now the JSON
+        path filters it too — closing the third entry point."""
+        import json as _json
+
+        from advisor import __main__ as cli
+        from advisor.verify import INCOMPLETE_FILE_PATH, Finding
+
+        # Synthesize a JSON file containing one real finding + one
+        # sentinel-shaped finding (as ``audit --json`` could have
+        # emitted prior to the round-1 sentinel filter being added).
+        src = tmp_path / "findings.json"
+        src.write_text(
+            _json.dumps(
+                {
+                    "findings": [
+                        {
+                            "file_path": "src/auth.py:42",
+                            "severity": "HIGH",
+                            "description": "real finding",
+                            "evidence": "line 42",
+                            "fix": "patch",
+                        },
+                        {
+                            "file_path": INCOMPLETE_FILE_PATH,
+                            "severity": "HIGH",
+                            "description": "partial — should be dropped",
+                            "evidence": "",
+                            "fix": "",
+                        },
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        findings, rc = cli._load_findings_from_input(src)
+        assert rc is None
+        # Only the real finding survives; sentinel is filtered.
+        assert len(findings) == 1
+        assert isinstance(findings[0], Finding)
+        assert findings[0].file_path == "src/auth.py:42"
+        # Defensive: no Finding in the returned list carries the sentinel.
+        assert all(getattr(f, "file_path", None) != INCOMPLETE_FILE_PATH for f in findings)
+
 
 class TestNudgeSkipCommands:
     """Only commands that explicitly manage the nudge should skip ensure_nudge.
 
     The first-run auto-install behavior (documented in the README) relies on
-    every OTHER subcommand triggering ``ensure_nudge()`` — including dry-run
-    / preview commands like ``plan`` and ``status``. ``ensure_nudge`` is
+    every OTHER subcommand triggering ``ensure_nudge()`` — including preview
+    commands like ``plan`` and ``status``. ``ensure_nudge`` is
     idempotent, so firing it on each command is harmless after the first.
     """
 
@@ -320,6 +395,116 @@ class TestConfigFromArgs:
         assert cfg.runner_file_read_ceiling == 20
 
 
+class TestCmdPlanUserFacingTips:
+    """High-ROI UX: error / empty-state paths must surface an actionable
+    next step rather than just complaining. These are the lines a new
+    user sees first when they fumble the invocation."""
+
+    def test_target_not_found_suggests_path_spelling_and_cwd_fallback(
+        self, tmp_path: Path, capsys
+    ) -> None:
+        """A missing path is almost always a typo. Surface the cwd
+        fallback so the user gets unstuck in one keystroke."""
+        from advisor.__main__ import cmd_plan
+
+        parser = build_parser()
+        args = parser.parse_args(["plan", str(tmp_path / "nope")])
+        assert cmd_plan(args) == 2
+        err = capsys.readouterr().err
+        assert "target not found" in err
+        assert "check the path spelling" in err
+        assert "advisor plan ." in err
+
+    def test_target_is_file_suggests_parent_dir(self, tmp_path: Path, capsys) -> None:
+        """``advisor plan ./some_file.py`` is a common misconception
+        (advisor scans dirs, not single files). Suggest the parent."""
+        from advisor.__main__ import cmd_plan
+
+        f = tmp_path / "single.py"
+        f.write_text("x = 1\n")
+        parser = build_parser()
+        args = parser.parse_args(["plan", str(f)])
+        assert cmd_plan(args) == 2
+        err = capsys.readouterr().err
+        assert "must be a directory" in err
+        assert f"advisor plan {f.parent}" in err
+
+    def test_empty_plan_surfaces_p1_p5_scale(self, tmp_path: Path, capsys) -> None:
+        """Without the ladder explanation, "try --min-priority 1" is a
+        blind suggestion. Surface what each tier means."""
+        from advisor.__main__ import cmd_plan
+
+        # Empty tmp_path → nothing to rank → empty plan path.
+        parser = build_parser()
+        args = parser.parse_args(["plan", str(tmp_path), "--min-priority", "5"])
+        assert cmd_plan(args) == 0
+        out = capsys.readouterr().out
+        assert "P5=auth/secrets" in out
+        assert "P1=utils/tests" in out
+
+
+class TestCmdAuditUserFacingTips:
+    """The audit subcommand's no-checkpoint error must point at the
+    list command so the user can find a valid run_id."""
+
+    def test_missing_run_id_suggests_checkpoints_list(self, tmp_path: Path, capsys) -> None:
+        from advisor.__main__ import cmd_audit
+
+        parser = build_parser()
+        args = parser.parse_args(["audit", "20990101T000000Z-deadbeef", str(tmp_path)])
+        # The checkpoint doesn't exist, so cmd_audit returns 2 with the tip.
+        assert cmd_audit(args) == 2
+        err = capsys.readouterr().err
+        assert "no checkpoint" in err
+        assert f"advisor checkpoints {tmp_path}" in err
+
+
+class TestCmdHistoryUserFacingTips:
+    """The history --stats empty-state must explain the confirm
+    workflow + the value-prop, not just point at the file."""
+
+    def test_history_stats_empty_explains_workflow(self, tmp_path: Path, capsys) -> None:
+        from advisor.__main__ import cmd_history
+
+        parser = build_parser()
+        args = parser.parse_args(["history", str(tmp_path), "--stats"])
+        assert cmd_history(args) == 0
+        out = capsys.readouterr().out
+        assert "no history yet" in out
+        # Workflow hint + value-prop both present.
+        assert "/advisor" in out
+        assert "boost repeat-offender" in out
+
+
+class TestComponentStatusLabels:
+    """The status output shows what each component IS so a new user
+    can tell at a glance whether the rows mean ready-to-use, without
+    having to read the README to decode "nudge" / "skill"."""
+
+    def test_component_line_renders_human_label(self) -> None:
+        from advisor.__main__ import _component_line
+        from advisor.install import ComponentStatus
+
+        nudge = ComponentStatus(name="nudge", path=Path("/x/CLAUDE.md"), present=True, current=True)
+        line = _component_line(nudge)
+        # Strip ANSI so the assertion isn't fragile to color codes.
+        from advisor._style import strip_ansi
+
+        plain = strip_ansi(line)
+        assert "CLAUDE.md nudge" in plain
+        assert "installed" in plain
+
+    def test_component_line_skill_label(self) -> None:
+        from advisor.__main__ import _component_line
+        from advisor.install import ComponentStatus
+
+        skill = ComponentStatus(name="skill", path=Path("/x/SKILL.md"), present=True, current=True)
+        line = _component_line(skill)
+        from advisor._style import strip_ansi
+
+        assert "/advisor command" in strip_ansi(line)
+
+
 class TestCmdPlanJson:
     """``advisor plan --json`` emits parseable JSON with the expected shape."""
 
@@ -367,6 +552,53 @@ class TestCmdPlanJson:
         data = json.loads(capsys.readouterr().out)
         names = sorted(Path(t["file_path"]).name for t in data["tasks"])
         assert names == ["auth.py"]
+
+    def test_plan_preset_file_types_drive_discovery(self, tmp_path, capsys):
+        from advisor.__main__ import cmd_plan
+
+        (tmp_path / "server.js").write_text("function login(req, res) { return res.end('ok'); }\n")
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "plan",
+                str(tmp_path),
+                "--preset",
+                "node-api",
+                "--json",
+                "--quiet",
+                "--no-history",
+            ]
+        )
+
+        assert cmd_plan(args) == 0
+        import json
+
+        data = json.loads(capsys.readouterr().out)
+        names = sorted(Path(t["file_path"]).name for t in data["tasks"])
+        assert names == ["server.js"]
+
+    def test_plan_env_min_priority_drives_task_filtering(self, tmp_path, capsys, monkeypatch):
+        from advisor.__main__ import cmd_plan
+
+        monkeypatch.setenv("ADVISOR_MIN_PRIORITY", "1")
+        (tmp_path / "util.py").write_text("x = 1\n")
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "plan",
+                str(tmp_path),
+                "--json",
+                "--quiet",
+                "--no-history",
+            ]
+        )
+
+        assert cmd_plan(args) == 0
+        import json
+
+        data = json.loads(capsys.readouterr().out)
+        names = sorted(Path(t["file_path"]).name for t in data["tasks"])
+        assert names == ["util.py"]
 
 
 class TestCmdStatusStrict:
@@ -417,6 +649,34 @@ class TestCmdStatusStrict:
 
         assert cli.main(["status", "--strict"]) == 3
 
+    def test_status_auto_install_respects_custom_paths(self, tmp_path, monkeypatch, capsys):
+        from advisor import __main__ as cli
+
+        from .conftest import isolate_home
+
+        isolate_home(monkeypatch, tmp_path / "home")
+        nudge = tmp_path / "custom" / "CLAUDE.md"
+        skill = tmp_path / "custom" / "skills" / "advisor" / "SKILL.md"
+        update_skill = tmp_path / "custom" / "skills" / "advisor-update" / "SKILL.md"
+
+        rc = cli.main(
+            [
+                "status",
+                "--path",
+                str(nudge),
+                "--skill-path",
+                str(skill),
+                "--quiet",
+            ]
+        )
+
+        assert rc == 0
+        assert nudge.exists()
+        assert skill.exists()
+        assert update_skill.exists()
+        assert not (tmp_path / "home" / ".claude" / "skills" / "advisor" / "SKILL.md").exists()
+        capsys.readouterr()
+
 
 class TestCmdInstallUninstall:
     """End-to-end install/uninstall with overridden paths (safe tmp_path)."""
@@ -427,6 +687,7 @@ class TestCmdInstallUninstall:
         parser = build_parser()
         claude_md = tmp_path / "CLAUDE.md"
         skill_md = tmp_path / "skills" / "advisor" / "SKILL.md"
+        update_skill_md = tmp_path / "skills" / "advisor-update" / "SKILL.md"
 
         install_args = parser.parse_args(
             [
@@ -441,6 +702,7 @@ class TestCmdInstallUninstall:
         assert cmd_install(install_args) == 0
         assert claude_md.exists()
         assert skill_md.exists()
+        assert update_skill_md.exists()
 
         uninstall_args = parser.parse_args(
             [
@@ -455,6 +717,7 @@ class TestCmdInstallUninstall:
         assert cmd_uninstall(uninstall_args) == 0
         # The CLAUDE.md file remains (stripped of the nudge), but the skill is removed.
         assert not skill_md.exists()
+        assert not update_skill_md.exists()
 
     def test_install_strict_exits_3_on_noop(self, tmp_path):
         from advisor.__main__ import cmd_install
@@ -1015,6 +1278,15 @@ class TestCmdPromptHappyPaths:
         out = capsys.readouterr().out
         assert "/advisor" in out
 
+    def test_protocol_starts_with_team_delete(self, capsys):
+        from advisor import __main__ as cli
+
+        rc = cli.main(["protocol", "--quiet"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "TeamDelete()" in out
+        assert out.index("TeamDelete()") < out.index('TeamCreate(name="review")')
+
 
 class TestCompletionHintPackageName:
     """`--print-completion` error must reference the real PyPI distribution."""
@@ -1235,6 +1507,64 @@ class TestCmdCheckpoints:
         rc = cli.main(["checkpoints", str(tmp_path), "--clear", "--quiet"])
         assert rc == 0
         assert list_checkpoints(tmp_path) == []
+
+    def test_clear_with_json_emits_summary(self, tmp_path, capsys):
+        """Regression: ``--clear --json`` previously fell into the quiet
+        branch and emitted no JSON, so scripted callers couldn't tell
+        success from a silent no-op."""
+        import json as _json
+
+        from advisor import __main__ as cli
+        from advisor.checkpoint import list_checkpoints
+
+        self._write_stub_checkpoint(tmp_path, "20260101T000000Z-a")
+        self._write_stub_checkpoint(tmp_path, "20260101T000001Z-b")
+        rc = cli.main(["checkpoints", str(tmp_path), "--clear", "--json"])
+        assert rc == 0
+        payload = _json.loads(capsys.readouterr().out)
+        assert payload["removed"] == 2
+        assert payload["failed"] == 0
+        assert list_checkpoints(tmp_path) == []
+
+    def test_clear_with_json_on_empty_dir(self, tmp_path, capsys):
+        """JSON payload reports zero on an empty target instead of
+        printing the pretty 'no checkpoints to remove' line."""
+        import json as _json
+
+        from advisor import __main__ as cli
+
+        rc = cli.main(["checkpoints", str(tmp_path), "--clear", "--json"])
+        assert rc == 0
+        payload = _json.loads(capsys.readouterr().out)
+        assert payload["removed"] == 0
+        assert payload["failed"] == 0
+
+    def test_clear_with_json_reports_failed_count(self, tmp_path, capsys, monkeypatch):
+        """When a checkpoint can't be unlinked, the JSON payload reflects
+        the failed count and the command exits 1 — letting scripts
+        distinguish "removed N" from "tried N, failed M". Uses a
+        Path.unlink monkeypatch instead of chmod because the test suite
+        may run as root (where directory-write bits don't block unlink)."""
+        import json as _json
+
+        from advisor import __main__ as cli
+
+        self._write_stub_checkpoint(tmp_path, "20260101T000000Z-x")
+        self._write_stub_checkpoint(tmp_path, "20260101T000001Z-y")
+
+        original_unlink = Path.unlink
+
+        def failing_unlink(self, *args, **kwargs):
+            if self.name.startswith("run-"):
+                raise OSError("simulated EACCES")
+            return original_unlink(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", failing_unlink)
+        rc = cli.main(["checkpoints", str(tmp_path), "--clear", "--json"])
+        payload = _json.loads(capsys.readouterr().out)
+        assert rc == 1
+        assert payload["failed"] == 2
+        assert payload["removed"] == 0
 
     def test_rm_and_clear_are_mutually_exclusive(self, tmp_path, capsys):
         from advisor import __main__ as cli
@@ -1803,7 +2133,6 @@ class TestCmdUpdate:
         monkeypatch.setattr(cli.subprocess, "run", _fake_run)
         monkeypatch.setattr(cli, "invalidate_update_check_cache", lambda: None)
         monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
-        monkeypatch.setattr(cli.shutil, "which", lambda _name: None)
 
         rc = cli.cmd_update(self._make_args(quiet=True, yes=True))
         assert rc == 0
@@ -1850,7 +2179,6 @@ class TestCmdUpdate:
         monkeypatch.setattr(cli, "fetch_pypi_latest_version", lambda: "0.7.2")
         monkeypatch.setattr(cli, "fetch_remote_changelog", lambda: None)
         monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
-        monkeypatch.setattr(cli.shutil, "which", lambda _name: None)
 
         class _C:
             returncode = 0
@@ -1918,7 +2246,6 @@ class TestCmdUpdate:
         )
         monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
         monkeypatch.setattr(cli, "invalidate_update_check_cache", lambda: None)
-        monkeypatch.setattr(cli.shutil, "which", lambda _name: None)
 
         def _boom(prompt: str) -> str:
             raise AssertionError(f"unexpected prompt: {prompt!r}")
@@ -1940,3 +2267,346 @@ class TestCmdUpdate:
         rc = cli.cmd_update(self._make_args(quiet=True, yes=False))
         assert rc == 0
         assert any(c == ["true"] for c in ran), ran
+
+
+class TestCmdLiveRecordJsonLimit:
+    """M1 regression: --data JSON payloads exceeding 256 KiB must be rejected."""
+
+    def _make_args(self, tmp_path: Path, data: str | None = None) -> object:
+        import argparse
+
+        return argparse.Namespace(
+            live_sub="record",
+            target=str(tmp_path),
+            kind="test_event",
+            data=data,
+            json=False,
+        )
+
+    def test_cmd_live_record_rejects_oversized_json(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Payload whose re-serialized length exceeds 256 KiB returns exit code 2."""
+        import argparse
+
+        from advisor import __main__ as cli
+
+        # Build a dict that serializes to just over 256 KiB.
+        big_value = "x" * (256 * 1024 + 1)
+        import json
+
+        payload = json.dumps({"k": big_value})
+
+        args = argparse.Namespace(
+            live_sub="record",
+            target=str(tmp_path),
+            kind="test_event",
+            data=payload,
+            json=False,
+        )
+        rc = cli.cmd_live(args)
+        assert rc == 2
+        _, err = capsys.readouterr()
+        assert "256" in err or "limit" in err.lower()
+
+        # No events file should have been written.
+        events_file = tmp_path / ".advisor" / "live" / "events.jsonl"
+        assert not events_file.exists()
+
+    def test_cmd_live_record_accepts_normal_json(self, tmp_path: Path) -> None:
+        """Small payloads are not rejected by the size guard."""
+        import argparse
+        import json
+
+        from advisor import __main__ as cli
+
+        payload = json.dumps({"k": "v"})
+        args = argparse.Namespace(
+            live_sub="record",
+            target=str(tmp_path),
+            kind="test_event",
+            data=payload,
+            json=False,
+        )
+        rc = cli.cmd_live(args)
+        assert rc == 0
+
+        events_file = tmp_path / ".advisor" / "live" / "events.jsonl"
+        assert events_file.exists()
+
+
+class TestCmdUpdateReexecUsesSysExecutable:
+    """M3 regression: post-upgrade re-exec must use sys.executable, not PATH lookup."""
+
+    def _make_args(self, **overrides: object) -> object:
+        import argparse
+
+        ns = argparse.Namespace(quiet=True, yes=True, no_preview=False)
+        for k, v in overrides.items():
+            setattr(ns, k, v)
+        return ns
+
+    def test_cmd_update_reexec_uses_sys_executable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """install re-exec argv must start with [sys.executable, '-m', 'advisor', 'install']."""
+        from advisor import __main__ as cli
+
+        monkeypatch.setattr(cli, "_detect_install_method", lambda: ("uv tool", ["true"]))
+        monkeypatch.setattr(cli, "_get_version", lambda: "0.1.0")
+        monkeypatch.setattr(cli, "fetch_pypi_latest_version", lambda: "0.99.0")
+        monkeypatch.setattr(cli, "fetch_remote_changelog", lambda: None)
+        monkeypatch.setattr(cli, "invalidate_update_check_cache", lambda: None)
+        monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
+
+        install_calls: list[list[str]] = []
+
+        class _Done:
+            returncode = 0
+
+        def _fake_run(cmd: list[str], check: bool = False, **_kw: object) -> _Done:
+            install_calls.append(list(cmd))
+            return _Done()
+
+        monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+
+        rc = cli.cmd_update(self._make_args())
+        assert rc == 0
+
+        # At least one subprocess.run call must be the install re-exec.
+        import sys
+
+        install_argv = [sys.executable, "-m", "advisor", "install"]
+        assert any(cmd[: len(install_argv)] == install_argv for cmd in install_calls), (
+            f"expected install re-exec with sys.executable; got: {install_calls}"
+        )
+
+
+class TestCountLinesSandbox:
+    """M2 regression: _count_lines must reject paths that escape the target."""
+
+    def test_count_lines_rejects_path_outside_target(self, tmp_path: Path) -> None:
+        """A tampered file_path pointing outside target must return 0."""
+        from advisor.__main__ import _count_lines
+
+        # Create a real file outside of tmp_path/target so the guard is the
+        # only thing standing between us and a successful read.
+        outside = tmp_path / "outside.txt"
+        outside.write_text("line1\nline2\nline3\n")
+
+        target = tmp_path / "target"
+        target.mkdir()
+
+        # file_path is an absolute path escaping the target directory.
+        result = _count_lines(target, str(outside))
+        assert result == 0
+
+    def test_count_lines_allows_path_inside_target(self, tmp_path: Path) -> None:
+        """A legitimate file inside target must be counted normally."""
+        from advisor.__main__ import _count_lines
+
+        target = tmp_path / "target"
+        target.mkdir()
+        real_file = target / "real.py"
+        real_file.write_text("a\nb\nc\n")
+
+        result = _count_lines(target, str(real_file))
+        assert result == 3
+
+
+class TestCmdUpdateSubprocessTimeout:
+    """A-4: subprocess.run calls in cmd_update must have timeout=300."""
+
+    def _make_args(self, **overrides: object) -> object:
+        import argparse
+
+        ns = argparse.Namespace(quiet=True, yes=True, no_preview=False)
+        for k, v in overrides.items():
+            setattr(ns, k, v)
+        return ns
+
+    def test_upgrade_timeout_exits_nonzero(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """When the upgrade subprocess times out, cmd_update exits with code 1."""
+        from advisor import __main__ as cli
+
+        monkeypatch.setattr(cli, "_detect_install_method", lambda: ("uv tool", ["true"]))
+        monkeypatch.setattr(cli, "_get_version", lambda: "0.1.0")
+        monkeypatch.setattr(cli, "fetch_pypi_latest_version", lambda: "0.99.0")
+        monkeypatch.setattr(cli, "fetch_remote_changelog", lambda: None)
+        monkeypatch.setattr(cli, "invalidate_update_check_cache", lambda: None)
+        monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
+
+        def _fake_run(cmd: list[str], check: bool = False, **_kw: object) -> object:
+            raise cli.subprocess.TimeoutExpired(cmd, 300)
+
+        monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+
+        rc = cli.cmd_update(self._make_args())
+        assert rc == 1
+        captured = capsys.readouterr()
+        assert "timed out" in captured.err.lower()
+
+    def test_install_reexec_timeout_exits_nonzero(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """When the post-upgrade install re-exec times out, cmd_update exits with code 1."""
+        from advisor import __main__ as cli
+
+        monkeypatch.setattr(cli, "_detect_install_method", lambda: ("uv tool", ["true"]))
+        monkeypatch.setattr(cli, "_get_version", lambda: "0.1.0")
+        monkeypatch.setattr(cli, "fetch_pypi_latest_version", lambda: "0.99.0")
+        monkeypatch.setattr(cli, "fetch_remote_changelog", lambda: None)
+        monkeypatch.setattr(cli, "invalidate_update_check_cache", lambda: None)
+        monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
+
+        call_count = 0
+
+        class _Done:
+            returncode = 0
+
+        def _fake_run(cmd: list[str], check: bool = False, **_kw: object) -> _Done:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return _Done()  # upgrade succeeds
+            raise cli.subprocess.TimeoutExpired(cmd, 300)  # install re-exec times out
+
+        monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+
+        rc = cli.cmd_update(self._make_args())
+        assert rc == 1
+        captured = capsys.readouterr()
+        assert "timed out" in captured.err.lower()
+
+
+class TestCmdUiHostValidator:
+    """A-5/F-1: _valid_host validator rejects non-loopback hosts at argparse level."""
+
+    def test_accepts_127_0_0_1(self) -> None:
+        from advisor.__main__ import _valid_host
+
+        assert _valid_host("127.0.0.1") == "127.0.0.1"
+
+    def test_accepts_localhost(self) -> None:
+        from advisor.__main__ import _valid_host
+
+        assert _valid_host("localhost") == "localhost"
+
+    def test_accepts_ipv6_loopback(self) -> None:
+        from advisor.__main__ import _valid_host
+
+        assert _valid_host("::1") == "::1"
+
+    def test_rejects_0_0_0_0(self) -> None:
+        import argparse
+
+        from advisor.__main__ import _valid_host
+
+        with pytest.raises(argparse.ArgumentTypeError, match="loopback"):
+            _valid_host("0.0.0.0")
+
+    def test_rejects_public_ip(self) -> None:
+        import argparse
+
+        from advisor.__main__ import _valid_host
+
+        with pytest.raises(argparse.ArgumentTypeError, match="loopback"):
+            _valid_host("192.168.1.1")
+
+    def test_rejects_garbage(self) -> None:
+        import argparse
+
+        from advisor.__main__ import _valid_host
+
+        with pytest.raises(argparse.ArgumentTypeError):
+            _valid_host("not-an-ip")
+
+    def test_argparse_rejects_non_loopback_host(self) -> None:
+        """argparse raises SystemExit when --host 0.0.0.0 is passed."""
+        from advisor.__main__ import build_parser
+
+        parser = build_parser()
+        with pytest.raises(SystemExit) as exc_info:
+            parser.parse_args(["ui", "--host", "0.0.0.0"])
+        assert exc_info.value.code != 0
+
+
+class TestLoadFindingsFromInputRejectsDirectory:
+    """A-7: _load_findings_from_input rejects directories before open()."""
+
+    def test_rejects_directory(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        from advisor.__main__ import _load_findings_from_input
+
+        findings, code = _load_findings_from_input(tmp_path)
+        assert code == 2
+        assert findings == []
+        captured = capsys.readouterr()
+        assert "not a regular file" in captured.err
+
+    def test_accepts_regular_file(self, tmp_path: Path) -> None:
+        from advisor.__main__ import _load_findings_from_input
+
+        findings_file = tmp_path / "findings.json"
+        findings_file.write_text("[]")
+        _findings, code = _load_findings_from_input(findings_file)
+        # No file-type error — code may be 0 or None (empty findings list is valid)
+        assert code != 2
+
+
+class TestDetectInstallMethodMetadata:
+    """A-6: _detect_install_method prefers importlib.metadata INSTALLER file."""
+
+    def test_prefers_uv_from_metadata(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import importlib.metadata as _meta
+
+        from advisor.__main__ import _detect_install_method
+
+        class _FakeDist:
+            def read_text(self, fname: str) -> str | None:
+                return "uv\n" if fname == "INSTALLER" else None
+
+        monkeypatch.setattr(_meta, "distribution", lambda name: _FakeDist())
+        result = _detect_install_method()
+        assert result is not None
+        label, cmd = result
+        assert "uv" in label.lower()
+        assert "uv" in cmd[0]
+
+    def test_prefers_pipx_from_metadata(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import importlib.metadata as _meta
+
+        from advisor.__main__ import _detect_install_method
+
+        class _FakeDist:
+            def read_text(self, fname: str) -> str | None:
+                return "pipx\n" if fname == "INSTALLER" else None
+
+        monkeypatch.setattr(_meta, "distribution", lambda name: _FakeDist())
+        result = _detect_install_method()
+        assert result is not None
+        label, _ = result
+        assert "pipx" in label.lower()
+
+    def test_falls_back_to_path_heuristic_when_metadata_missing(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        import importlib.metadata as _meta
+
+        from advisor import __main__ as cli
+
+        # Simulate package not installed (metadata lookup raises)
+        def _not_found(name: str) -> object:
+            raise Exception("not found")
+
+        monkeypatch.setattr(_meta, "distribution", _not_found)
+
+        # Fake a uv-tools-style exe path
+        fake_exe = tmp_path / "uv" / "tools" / "advisor"
+        fake_exe.parent.mkdir(parents=True)
+        fake_exe.touch()
+        monkeypatch.setattr(cli.sys, "argv", [str(fake_exe)])
+
+        result = cli._detect_install_method()
+        assert result is not None
+        label, _ = result
+        assert "uv" in label.lower()

@@ -38,6 +38,47 @@ def _write_jsonl(path: Path, lines: list[dict[str, object]]) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+class TestMatchesGlob:
+    def test_value_error_falls_back_to_fnmatch(self) -> None:
+        from advisor.suppressions import _matches_glob
+
+        with pytest.warns(UserWarning, match="malformed glob pattern"):
+            assert _matches_glob("src/a.py", "*" * 50) is True
+
+    def test_matches_glob_preserves_colon_digit_suffix(self) -> None:
+        """_normalize_glob_pattern must NOT strip trailing :digits from the glob.
+
+        normalize_path is designed for finding-path keys and strips :line/:line:col
+        suffixes. A glob like ``src/*:42`` must keep its ``:42`` so it only
+        suppresses findings whose path key ends with ``:42`` — not all of ``src/*``.
+        """
+        from advisor.suppressions import _normalize_glob_pattern
+
+        # The glob-specific normalizer preserves :digits suffixes
+        assert _normalize_glob_pattern("src/*:42") == "src/*:42"
+        assert _normalize_glob_pattern("src/*:42:7") == "src/*:42:7"
+        # Backslash → forward-slash normalisation still applies
+        assert _normalize_glob_pattern("src\\*.py") == "src/*.py"
+        # BOM is stripped
+        assert _normalize_glob_pattern("\ufeffsrc/*.py") == "src/*.py"
+
+    def test_matches_glob_colon_digit_suffix_not_widened(self) -> None:
+        """_matches_glob with a 'src/*:42' pattern must match 'src/foo:42'
+        and must NOT match 'src/foo' — the colon-suffix is preserved in the
+        glob so the match is not silently widened to all of 'src/*'.
+
+        This tests _matches_glob directly (before normalize_path is applied
+        to the finding path) to verify that the glob pattern itself keeps
+        its colon-suffix after _normalize_glob_pattern.
+        """
+        from advisor.suppressions import _matches_glob, _normalize_glob_pattern
+
+        pattern = _normalize_glob_pattern("src/*:42")
+        assert pattern == "src/*:42"  # colon-suffix preserved
+        assert _matches_glob("src/foo:42", pattern) is True
+        assert _matches_glob("src/foo", pattern) is False
+
+
 class TestLoader:
     def test_missing_file_returns_empty(self, tmp_path: Path) -> None:
         assert load_suppressions(tmp_path / "absent.jsonl") == ()
@@ -182,6 +223,22 @@ class TestLoader:
             ],
         )
         with pytest.raises(ValueError, match="invalid file_glob"):
+            load_suppressions(p)
+
+    def test_numeric_until_raises_value_error(self, tmp_path: Path) -> None:
+        p = tmp_path / "s.jsonl"
+        _write_jsonl(
+            p,
+            [
+                {
+                    "rule_id": "advisor/medium/abc",
+                    "file": "x.py",
+                    "until": 20260901,
+                    "reason": "r",
+                },
+            ],
+        )
+        with pytest.raises(ValueError, match="until must be a string"):
             load_suppressions(p)
 
     def test_non_dict_jsonl_line_warns_and_skips(self, tmp_path: Path) -> None:
@@ -334,3 +391,31 @@ class TestApply:
         kept_nested, dropped_nested = apply_suppressions([f_nested], supp)
         assert kept_nested == [f_nested]
         assert dropped_nested == []
+
+
+# ---------------------------------------------------------------------------
+# Regression test for Wave 3 — H2
+# ---------------------------------------------------------------------------
+
+
+def test_suppressions_rule_id_handles_lone_surrogates() -> None:
+    """H2 (suppressions site): apply_suppressions must not raise
+    UnicodeEncodeError when a Finding description contains lone surrogates.
+
+    synthesize_rule_id (called when f.rule_id is None) hashes the description
+    via .encode('utf-8'), which raises on lone surrogates without
+    errors='surrogatepass'.
+    """
+    from advisor.sarif import synthesize_rule_id
+    from advisor.suppressions import apply_suppressions
+
+    description = "issue with surrogate \ud800"
+    # Pre-compute the synthesized rule_id — this must not raise.
+    rid = synthesize_rule_id("HIGH", description)
+
+    supp = Suppression(rule_id=rid, reason="noise")
+    finding = _f(description=description, rule_id=None)
+    # apply_suppressions synthesizes the rule_id internally; must not raise.
+    kept, dropped = apply_suppressions([finding], [supp])
+    assert kept == []
+    assert len(dropped) == 1

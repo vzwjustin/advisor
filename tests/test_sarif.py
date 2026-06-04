@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,7 @@ from hypothesis import strategies as st
 from advisor.sarif import (
     SARIF_SCHEMA_URI,
     SARIF_VERSION,
+    _strip_controls,
     findings_to_sarif,
     synthesize_rule_id,
 )
@@ -134,6 +136,26 @@ class TestPathHandling:
         other = tmp_path.parent / "outside_target.py"
         findings = [_make_finding(file_path=str(other))]
         with pytest.raises(ValueError, match="outside target_dir"):
+            findings_to_sarif(findings, tool_version="0.5.0", target_dir=tmp_path)
+
+    def test_windows_absolute_path_rejected(self, tmp_path: Path) -> None:
+        findings = [_make_finding(file_path=r"C:\Users\alice\secret.py:42")]
+        expected_error = (
+            "outside target_dir" if sys.platform == "win32" else "Windows absolute/rooted path"
+        )
+        with pytest.raises(ValueError, match=expected_error):
+            findings_to_sarif(findings, tool_version="0.5.0", target_dir=tmp_path)
+
+    def test_windows_relative_path_normalized(self, tmp_path: Path) -> None:
+        findings = [_make_finding(file_path=r"src\auth.py:42")]
+        doc = findings_to_sarif(findings, tool_version="0.5.0", target_dir=tmp_path)
+        loc = doc["runs"][0]["results"][0]["locations"][0]["physicalLocation"]
+        assert loc["artifactLocation"]["uri"] == "src/auth.py"
+        assert loc["region"]["startLine"] == 42
+
+    def test_windows_relative_dotdot_rejected(self, tmp_path: Path) -> None:
+        findings = [_make_finding(file_path=r"..\secret.py:42")]
+        with pytest.raises(ValueError, match="escapes target_dir"):
             findings_to_sarif(findings, tool_version="0.5.0", target_dir=tmp_path)
 
     def test_path_without_line_number(self, tmp_path: Path) -> None:
@@ -584,3 +606,73 @@ def test_fuzz_synthesize_rule_id_is_stable(severity: str, description: str) -> N
     b = synthesize_rule_id(severity, description)
     assert a == b
     assert a.startswith(f"advisor/{severity.lower()}/")
+
+
+def test_strip_controls_strips_bidi_on_both_paths():
+    # Bidi formatting / override / isolate / mark code points must be
+    # dropped on BOTH the inline path (``keep_block_whitespace=False``,
+    # used for ``shortDescription`` / ``message.text``) and the block
+    # path (``keep_block_whitespace=True``, used by ``pr_comment._sanitize``
+    # to preserve newlines inside Evidence / Fix). Without the block-path
+    # branch a Finding description renders into a GitHub PR comment that
+    # visually misrepresents the named file or severity to a human
+    # reviewer — the "trojan source" attack class.
+    assert _strip_controls("text‮evil", keep_block_whitespace=False) == "textevil"
+    assert _strip_controls("text‮evil", keep_block_whitespace=True) == "textevil"
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for Wave 3 — H1, H2, H3
+# ---------------------------------------------------------------------------
+
+
+def test_parse_file_path_rejects_double_minus(tmp_path: Path) -> None:
+    """H1: _parse_file_path must not raise ValueError on 'path:--5'.
+
+    Previously _is_int_token stripped ALL leading '-' via lstrip('-'), so
+    '--5'.lstrip('-') == '5' (isdigit True), '--5' was accepted as a numeric
+    token, and int('--5') raised ValueError aborting SARIF emission.
+    """
+    from advisor.sarif import _parse_file_path
+
+    # Must not raise; double-minus token is not a valid int token and
+    # should be left in the path component.
+    path, line, _col, _end = _parse_file_path("src/foo.py:--5")
+    # '--5' is not a valid int-token after the fix, so no line is extracted
+    # and the token stays embedded in the path.
+    assert line is None
+    assert "--5" in path or path == "src/foo.py"
+
+
+def test_synthesize_rule_id_handles_lone_surrogates() -> None:
+    """H2 (sarif site): synthesize_rule_id must not raise on lone surrogates."""
+    result = synthesize_rule_id("HIGH", "description with surrogate \ud800")
+    assert result.startswith("advisor/high/")
+
+
+def test_resolve_relative_handles_oserror(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """H3: _resolve_relative must re-raise OSError from Path.resolve() as ValueError.
+
+    Path.resolve() can raise OSError on symlink loops (ELOOP) or permission
+    errors (EACCES). Previously only ValueError was caught, so OSError
+    propagated uncaught and aborted SARIF emission.
+    """
+    import pathlib
+
+    from advisor.sarif import _resolve_relative
+
+    target_resolved = tmp_path.resolve()  # resolve before patch
+
+    def raise_oserror(self: pathlib.Path, *args: object, **kwargs: object) -> pathlib.Path:
+        raise OSError("simulated ELOOP")
+
+    monkeypatch.setattr(pathlib.Path, "resolve", raise_oserror)
+
+    # Build an absolute path that is_absolute() on both POSIX and Windows.
+    # `/abs/...` is not absolute on Windows (no drive), which would skip the
+    # resolve() branch entirely and fail to exercise the OSError handler.
+    abs_path = str(Path(tmp_path.anchor) / "abs" / "src" / "auth.py")
+
+    # Should raise ValueError (not OSError) because the fix catches both.
+    with pytest.raises(ValueError):
+        _resolve_relative(abs_path, tmp_path, target_resolved=target_resolved)

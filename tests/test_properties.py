@@ -310,8 +310,17 @@ def test_compile_ignore_patterns_never_raises(patterns: list[str]) -> None:
     ``filterwarnings = ["error::FutureWarning"]`` in ``pyproject.toml``,
     so a future Python release that elevates those warnings to syntax
     errors will fail this test rather than silently break the path.
+
+    ``UserWarning`` from the compiler is *expected* on malformed inputs
+    (that is the documented "warn + fall back" path); suppress it here
+    so the fuzz test does not spam pytest's warning capture on every
+    pathological pattern hypothesis generates.
     """
-    matchers = _compile_ignore_patterns(patterns)
+    import warnings as _w
+
+    with _w.catch_warnings():
+        _w.simplefilter("ignore", UserWarning)
+        matchers = _compile_ignore_patterns(patterns)
     assert len(matchers) == len(patterns)
     for matcher, pattern in zip(matchers, patterns, strict=True):
         # Either the glob translated successfully (recursive_re is a

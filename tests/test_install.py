@@ -22,8 +22,9 @@ from advisor.install import (
     status,
     uninstall,
     uninstall_skill,
+    update_skill_path_for,
 )
-from advisor.skill_asset import SKILL_MD
+from advisor.skill_asset import SKILL_MD, SKILL_MD_UPDATE
 
 
 class TestApplyNudge:
@@ -175,31 +176,113 @@ class TestEnsureNudge:
     def test_installs_on_fresh_file(self, tmp_path: Path):
         target = tmp_path / "CLAUDE.md"
         skill = tmp_path / "skills" / "advisor" / "SKILL.md"
+        update_skill = tmp_path / "skills" / "advisor-update" / "SKILL.md"
         stream = io.StringIO()
         result = ensure_nudge(path=target, env={}, stream=stream, skill_path=skill)
         assert result.action == "installed"
         assert START_MARKER in target.read_text()
         assert skill.exists()
         assert skill.read_text(encoding="utf-8") == SKILL_MD
+        assert update_skill.exists()
+        assert update_skill.read_text(encoding="utf-8") == SKILL_MD_UPDATE
         notice = stream.getvalue()
         assert "advisor first-run setup" in notice
         assert "nudge" in notice
         assert "skill" in notice
+        assert "update" in notice
         assert "Setup complete!" in notice
 
     def test_unchanged_when_already_installed(self, tmp_path: Path):
         target = tmp_path / "CLAUDE.md"
         skill = tmp_path / "skills" / "advisor" / "SKILL.md"
+        update_skill = tmp_path / "skills" / "advisor-update" / "SKILL.md"
         install(path=target)
         install_skill(path=skill)
+        from advisor.install import install_update_skill
+
+        install_update_skill(path=update_skill)
         stream = io.StringIO()
         result = ensure_nudge(path=target, env={}, stream=stream, skill_path=skill)
         assert result.action == "unchanged"
         assert stream.getvalue() == ""
 
+    def test_refresh_banner_on_upgrade(self, tmp_path: Path):
+        """Regression: on a post-upgrade run where the bundled SKILL_MD
+        or NUDGE_BODY content has changed (everything UPDATED rather
+        than INSTALLED), the banner used to read "advisor first-run
+        setup" + the full quick-start block — misleading for a returning
+        user. The branch now reads "advisor refreshed" and skips the
+        quick-start clutter.
+
+        To simulate "post-upgrade with stale bundled content", seed the
+        files with the CURRENT markers but DIFFERENT body — that way
+        ensure_nudge sees ``has_block=True`` AND
+        ``expected_block not in current``, which triggers UPDATED
+        rather than INSTALLED."""
+        from advisor.install import (
+            END_MARKER,
+            START_MARKER,
+        )
+
+        target = tmp_path / "CLAUDE.md"
+        skill = tmp_path / "skills" / "advisor" / "SKILL.md"
+        update_skill = tmp_path / "skills" / "advisor-update" / "SKILL.md"
+
+        # Seed CLAUDE.md with the sentinel markers but a STALE body —
+        # this is exactly what a post-upgrade user has on disk before
+        # the next ensure_nudge call refreshes the block.
+        stale_nudge_block = f"{START_MARKER}\n## stale advisor nudge from v0.0.1\n{END_MARKER}\n"
+        target.write_text(stale_nudge_block, encoding="utf-8")
+        # Seed SKILL.md with stale content (different from bundled
+        # SKILL_MD body but file exists, triggering UPDATED).
+        skill.parent.mkdir(parents=True, exist_ok=True)
+        skill.write_text("# stale skill body from a prior version\n", encoding="utf-8")
+        update_skill.parent.mkdir(parents=True, exist_ok=True)
+        update_skill.write_text("# stale update-skill from a prior version\n", encoding="utf-8")
+
+        stream = io.StringIO()
+        ensure_nudge(
+            path=target,
+            env={},
+            stream=stream,
+            skill_path=skill,
+            update_skill_path=update_skill,
+        )
+        notice = stream.getvalue()
+        # Refresh-style banner, not first-run.
+        assert "advisor refreshed" in notice, f"refresh banner missing; got:\n{notice}"
+        assert "advisor first-run setup" not in notice
+        assert "Refreshed bundled assets" in notice
+        # Quick-start block is suppressed on the refresh path so a
+        # returning user doesn't get the new-user clutter.
+        assert "Quick start" not in notice
+        assert "Start a code review" not in notice
+
+    @pytest.mark.skipif(
+        not hasattr(os, "symlink"),
+        reason="creating symlinks requires OS support",
+    )
+    def test_symlink_default_path_does_not_raise(self, tmp_path: Path, monkeypatch) -> None:
+        """A symlinked default CLAUDE.md must not abort unrelated CLI runs."""
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        real = tmp_path / "real.md"
+        real.write_text("# notes\n", encoding="utf-8")
+        link = claude_dir / "CLAUDE.md"
+        link.symlink_to(real)
+        import importlib
+
+        install_mod = importlib.import_module("advisor.install")
+        monkeypatch.setattr(install_mod, "default_claude_md", lambda: link)
+        stream = io.StringIO()
+        result = ensure_nudge(path=None, env={}, stream=stream)
+        assert result.action == "unchanged"
+        assert "refusing to install nudge through symlink" in stream.getvalue()
+
     def test_opt_out_skips(self, tmp_path: Path):
         target = tmp_path / "CLAUDE.md"
         skill = tmp_path / "skills" / "advisor" / "SKILL.md"
+        update_skill = tmp_path / "skills" / "advisor-update" / "SKILL.md"
         stream = io.StringIO()
         result = ensure_nudge(
             path=target,
@@ -210,7 +293,29 @@ class TestEnsureNudge:
         assert result.action == "unchanged"
         assert not target.exists()
         assert not skill.exists()
+        assert not update_skill.exists()
         assert stream.getvalue() == ""
+
+    @pytest.mark.skipif(
+        not hasattr(os, "symlink"),
+        reason="creating symlinks requires OS support",
+    )
+    def test_opt_out_skips_before_default_path_symlink_validation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """ADVISOR_NO_NUDGE is a true skip, even for hostile default paths."""
+        from .conftest import isolate_home
+
+        isolate_home(monkeypatch, tmp_path)
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        (tmp_path / "real.md").write_text("existing", encoding="utf-8")
+        (claude_dir / "CLAUDE.md").symlink_to(tmp_path / "real.md")
+
+        result = ensure_nudge(env={OPT_OUT_ENV: "1"}, stream=io.StringIO())
+
+        assert result.action == "unchanged"
+        assert (tmp_path / "real.md").read_text(encoding="utf-8") == "existing"
 
     def test_survives_unwritable_parent(self, tmp_path: Path):
         # Make a file where a directory would need to be, so mkdir raises.
@@ -247,6 +352,11 @@ class TestEnsureNudge:
 
 
 class TestInstallSkill:
+    def test_update_skill_path_for_custom_file_stays_below_same_parent(self, tmp_path: Path):
+        skill = tmp_path / "custom-skill.md"
+
+        assert update_skill_path_for(skill) == tmp_path / "advisor-update" / "SKILL.md"
+
     def test_fresh_install_writes_skill_file(self, tmp_path: Path):
         target = tmp_path / "skills" / "advisor" / "SKILL.md"
         result = install_skill(path=target)
@@ -347,6 +457,21 @@ class TestStatus:
         s = status(nudge_path=nudge, skill_path=tmp_path / "missing", env={})
         assert s.nudge.present is True
         assert s.nudge.current is False
+
+    def test_custom_skill_path_uses_sibling_update_skill_path(self, tmp_path: Path):
+        skill = tmp_path / "skills" / "advisor" / "SKILL.md"
+        update_skill = update_skill_path_for(skill)
+        install_skill(path=skill)
+        from advisor.install import install_update_skill
+
+        install_update_skill(path=update_skill)
+
+        s = status(nudge_path=tmp_path / "CLAUDE.md", skill_path=skill, env={})
+
+        assert s.update_skill is not None
+        assert s.update_skill.path == update_skill
+        assert s.update_skill.present is True
+        assert s.update_skill.current is True
 
     def test_opt_out_reflected(self, tmp_path: Path):
         s = status(
@@ -483,6 +608,12 @@ class TestVersionBadge:
         assert VERSION_BADGE in SKILL_MD
         assert parse_badge(SKILL_MD) is not None
 
+    def test_bundled_skill_shows_teamdelete_before_teamcreate(self):
+        from advisor.skill_asset import SKILL_MD
+
+        assert "[TeamDelete]" in SKILL_MD
+        assert SKILL_MD.index("TeamDelete") < SKILL_MD.index("TeamCreate")
+
     def test_parse_badge_returns_none_for_unbadged_text(self):
         from advisor.install import parse_badge
 
@@ -505,3 +636,37 @@ class TestVersionBadge:
         from advisor.install import get_installed_skill_version
 
         assert get_installed_skill_version(path=tmp_path / "nope.md") is None
+
+
+class TestInstallHandlesMissingTarget:
+    def test_install_handles_missing_target(self, tmp_path: Path, monkeypatch):
+        """B2: if the file is unlinked between exists() and read(), treat as empty."""
+        import importlib
+
+        install_mod = importlib.import_module("advisor.install")
+
+        target = tmp_path / "CLAUDE.md"
+        target.write_text("", encoding="utf-8")
+
+        def boom(path, *a, **kw):
+            raise FileNotFoundError(f"gone: {path}")
+
+        monkeypatch.setattr(install_mod, "_read_text_capped_lf", boom)
+        result = install(path=target)
+        assert result.action == "installed"
+
+
+class TestEnsureNudgeSwallowsRuntimeError:
+    def test_ensure_nudge_swallows_runtime_error(self, tmp_path: Path, monkeypatch):
+        """B3: Path.home() raising RuntimeError must not propagate out of ensure_nudge."""
+        import importlib
+
+        install_mod = importlib.import_module("advisor.install")
+
+        def bad_home() -> Path:
+            raise RuntimeError("no home directory")
+
+        monkeypatch.setattr(install_mod.Path, "home", staticmethod(bad_home))
+        stream = importlib.import_module("io").StringIO()
+        # Should not raise
+        ensure_nudge(path=None, env={}, stream=stream)

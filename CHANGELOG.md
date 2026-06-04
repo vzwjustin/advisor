@@ -7,6 +7,389 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-05-27
+
+Fixes the long-standing empty-Findings-tab bug. The dashboard read from
+`<target>/.advisor/history.jsonl`, but nothing in the pipeline ever wrote
+to it — `append_entries` was a public API with zero internal callers, so
+every `/advisor` run emitted CONFIRMED findings in chat that vanished on
+session end.
+
+### Added
+
+- **`advisor history-append [TARGET]`** — new top-level subcommand that
+  reads newline-delimited JSON (or a JSON array) from stdin and appends
+  each finding to `<target>/.advisor/history.jsonl`. Schema-validated at
+  the boundary (file_path/severity/description required, severity and
+  status normalized to uppercase and allowlisted). Auto-fills `run_id`
+  (one per invocation, override with `--run-id`) and `timestamp` (now
+  UTC). `--dedup` skips entries whose
+  `(run_id, file_path, severity, description)` tuple already exists in
+  the last 500 entries, making it safe to call multiple times in one
+  run (per-CONFIRM incremental writes + end-of-run reconciliation).
+- **Advisor prompt teaches the agent to persist findings.** Step 6 of
+  the advisor agent prompt now mandates writing CONFIRMED findings via
+  `advisor history-append --dedup` before sending the final report. The
+  minimum acceptable pattern is a single end-of-run batch; belt-and-
+  suspenders (per-CONFIRM incremental + end-of-run reconcile) is
+  documented as an option.
+
+### Fixed
+
+- **Dashboard Findings tab populates after every run.** Was empty since
+  the history-aware ranker was wired up to *read* `history.jsonl` —
+  nothing wrote it.
+
+## [0.8.2] - 2026-05-27
+
+Second full sub-agent self-audit cycle on top of v0.8.1. Four rounds
+× 2–3 parallel runners each → 15 fixes spanning real bugs, UX polish,
+and one documentation correction in the bundled SKILL.md that was
+misleading Claude Code. 1091 → 1105 tests; ruff + mypy clean.
+
+### Fixed
+
+- **`_load_findings_from_input` JSON path filters ``<incomplete>``
+  sentinel.** A user piping ``advisor audit --json`` into
+  ``advisor baseline create --from x.json`` (or any JSON re-ingestion)
+  no longer flows ``"file_path": "<incomplete>"`` into SARIF /
+  baseline / PR-comment sinks where consumers would mistake the
+  sentinel for a real path. Closes the third entry point (the
+  transcript and markdown paths were filtered in v0.8.1).
+- **`build_fix_assignment_message` rejects whitespace-only payload.**
+  Whitespace-only ``problem`` / ``change`` / ``acceptance`` used to
+  produce a valid-but-empty fenced block, leaving the runner with
+  nothing to act on. Now raises ``ValueError`` at construction.
+- **`_fix_count_trigger(cap=0)` interpolates the actual cap.** Was
+  hardcoded to "Cap of 1" — a caller passing ``cap=0`` (explore-only
+  mode) saw a spawn prompt that disagreed with assignment-time
+  enforcement. Now shows the real value.
+- **`_safe_str` (pipeline renderer) escapes 5 additional line
+  terminators.** U+2028 / U+2029 / U+0085 / VT / FF now escape to
+  Python literal forms. Was escaping only ``\n`` / ``\r`` — a
+  hostile or autocorrected ``team_name`` containing U+2028 visually
+  shattered the rendered ``TeamCreate(name="...")`` line.
+- **`out_of_batch` empty-batch guard.** An empty or empty-string-only
+  ``batch_files`` used to flag every anchored reply as drift — a
+  misconfigured runner with no assigned files would gate the entire
+  session. Now correctly returns False.
+- **`get_preset` strips whitespace.** ``--preset "python-web "``
+  (trailing space from copy-paste) used to raise the confusing
+  ``"unknown preset 'python-web '"`` where the quoted name looked
+  correct. Now strips.
+- **`atomic_write_text` symlink walk is OSError-safe.** Both
+  ``Path.is_symlink()`` AND ``os.readlink()`` can raise on stale NFS
+  handles / restricted filesystems. The prior walk propagated the
+  OSError as an opaque install failure. Wrapped both in helpers
+  (``_safe_is_symlink`` / ``_safe_readlink``) so the guard fails
+  gracefully.
+- **`_run_git` stdout cap (50 MiB).** ``proc.communicate()`` buffered
+  all stdout in memory with no cap; a pathological monorepo with
+  50k+ changed files could deliver tens of MB. Now raises
+  ``GitScopeError`` with a clear "narrow the scope" hint.
+- **`error_box` defaults to ``sys.stderr``, not ``sys.stdout``.**
+  Errors written via the default-stream helper used to mix into
+  piped stdout output (``advisor ... --json > out.json`` could land
+  an error box at the head of the JSON file). The other box helpers
+  continue to default to stdout.
+
+### UX
+
+- **PR comment sorts findings by severity before truncation.**
+  Reviewers see CRITICAL / HIGH first. Without the sort, a
+  long-evidence LOW finding could push CRITICAL items off the
+  bottom when the body hit the 60k-byte cap. Stable sort preserves
+  caller's within-severity ordering.
+- **Banner distinguishes first-install from post-upgrade refresh.**
+  Returning users on upgrade see "advisor refreshed" instead of
+  "advisor first-run setup" + the quick-start clutter. Brand-new
+  installs still get the full quick-start block.
+- **CLI help text refresh**: ``--min-priority`` explains "higher =
+  fewer but riskier files" (was a bare "1=utilities, 5=auth/secrets"
+  which left readers unsure which direction is more inclusive).
+  ``advisor update --quiet`` help now mentions the confirmation
+  prompt still appears (add ``-y`` to skip).
+
+### Docs / SKILL.md
+
+- **Bundled SKILL.md ``default_team_config`` signature fixed.**
+  Example showed ``max_runners: int = 5``; actual signature is
+  ``int | None = None`` (``None`` reads ``ADVISOR_MAX_RUNNERS`` or
+  defaults to 5 internally). Three commonly-needed kwargs
+  (``preset``, ``test_command``, ``max_fixes_per_runner``) added
+  with inline comments so Claude Code sees the full call shape.
+- **`baseline.py`** module docstring now carries a ``.. warning::``
+  block documenting the 120-char description-hash collision
+  boundary plus the two mitigations (explicit ``rule_id`` or more
+  specific first-sentence descriptions).
+- **`_normalize_history_key`** docstring honestly describes the
+  lru_cache (8192) eviction behavior for large monorepos.
+
+### Tests
+
+15 new regression tests across ``test_verify``, ``test_main``,
+``test_pr_comment``, ``test_orchestrate``, ``test_runner_budget``,
+``test_presets``, ``test_install``, ``test_style``.
+
+## [0.8.1] - 2026-05-27
+
+A rolling, 6-round self-audit using the advisor's own sub-agent pattern.
+Each round either ran the live tool against the repo or emulated the
+TeamCreate/Agent pattern via parallel sub-agents to surface bugs the
+prior round missed. Combined output: 19 fixes (3 CRITICAL + 4 HIGH +
+12 MEDIUM/LOW) plus 4 user-facing UX wins, all under 1083 → 1090 tests
+green. Highlights:
+
+### Fixed
+
+- **`/api/status` `is_active` now reflects EITHER ``history.jsonl`` OR
+  ``live/events.jsonl`` mtime.** Previously the Findings tab's LIVE
+  pill stayed IDLE during an active ``/advisor`` run (which writes
+  only live events, not confirmed findings yet), so users saw the Live
+  tab buzzing while Findings looked broken. Pill now shows ``RUNNING``
+  when only live activity is firing, ``LIVE`` when findings are being
+  confirmed, ``IDLE`` otherwise. Per-store flags
+  (``history_is_active`` / ``live_is_active``) added to the payload so
+  the client can render a "run in progress" hint on the empty
+  Findings state.
+- **``Expected → Actual`` Finding field is parseable.** The schema
+  shipped in every advisor / runner prompt (``FINDING_SCHEMA``) asked
+  runners to emit this line for MEDIUM+ findings, but
+  ``verify._KEY_PREFIXES`` had no entry for it. The line was silently
+  appended as continuation text into the prior Evidence body and the
+  divergence signal was lost. Added the field to ``Finding``
+  (default ``""`` — backward-compatible), threaded through
+  ``format_findings_block``, ``audit_to_dict``, ``pr_comment``, SARIF
+  result properties, and the JSON-import path. Parser accepts BOTH
+  the Unicode arrow (``→``, U+2192) and the ASCII fallback (``->``)
+  that LLMs and humans routinely autocorrect to.
+- **``cost.estimate_cost`` clamps ``runner_count`` against
+  ``max_runners`` even when ``batches`` is provided.** Previously
+  ``len(batches)`` was used unconditionally; a plan with 20 batches
+  but ``max_runners=5`` inflated the cost estimate 4×. The live
+  dispatch path bounds the pool at ``max_runners``, so the estimate
+  now agrees.
+- **Workflow ``fail-on`` is enforced via a SARIF-parsing gate.**
+  Extracted into ``scripts/sarif_gate.py`` so it's unit-testable
+  (38 cases). Reads ``properties.severity`` (advisor's writer always
+  emits this) so ``fail-on=critical`` correctly distinguishes CRITICAL
+  from HIGH — both map to SARIF ``error`` and the prior heredoc
+  couldn't tell them apart. Defensive type-guards against hostile
+  SARIF (non-dict ``properties``, non-string ``severity``, ``runs``
+  as a dict, etc.) — every malformed entry skips cleanly instead of
+  crashing the workflow with an AttributeError.
+- **``advisor live record --data -`` reads JSON from stdin.** Mirrors
+  the ``--context -`` / ``--from -`` convention elsewhere; lets the
+  team-lead pipe in multi-line ``report_relay.summary`` bodies that
+  don't fit comfortably as a CLI flag. Empty stdin pipe now errors
+  loudly (exit 2 + ``--data -: stdin was empty``) instead of silently
+  recording an event with empty data.
+- **``advisor checkpoints --clear --json`` emits a payload.** Was
+  silently falling into the quiet branch — scripted callers had no
+  way to tell success from no-op.
+- **Audit ``<incomplete>`` sentinel no longer leaks downstream.** The
+  ``_dict_to_finding`` partial-drop sentinel was reaching
+  ``audit_to_dict`` / SARIF / PR-comment / baseline sinks where
+  consumers mistook ``<incomplete>`` for a real file path. Now
+  filtered at ``_audit_scope_drift`` AND defensively at
+  ``_replace_findings``.
+- **``cmd_live tail`` dead code removed.** After ``--since`` switched
+  to ``type=_nonneg_int``, the runtime ``int(since_arg)`` conversion
+  and ``except (TypeError, ValueError)`` branch were unreachable.
+
+### Performance
+
+- **``rank.CONTENT_SCAN_LIMIT`` reduced from 2000 → 1024.** Profiling
+  showed the per-file regex (75-group alternation) was dominating
+  ``rank_files`` on large repos: 5000 files × 2000 chars ≈ 25 s.
+  1024 chars still captures the import block + first major
+  declaration in any realistic file. Measured ≈4× speedup.
+- **``_normalize_history_key`` is now cached (``lru_cache(8192)``).**
+  ``rank_files`` called it O(N×M) times — at 5000 files × 1000
+  history entries the unconditional re-normalization was ~4 seconds.
+  Pure function so caching is safe.
+
+### Changed
+
+- **CLI clarity**: ``advisor status`` now shows component identity
+  ("CLAUDE.md nudge", "/advisor command", "/advisor-update") instead
+  of opaque internal labels. ``advisor install --strict`` exits 3
+  with a one-line stderr note instead of silently. ``install --check``
+  shows the same ``/advisor <path>`` CTA when healthy that ``status``
+  shows.
+- **Better error tips**: ``plan ./nonexistent`` suggests path
+  spelling + cwd fallback; ``plan /etc/hosts`` suggests scanning the
+  parent dir; ``plan --min-priority 5`` empty result surfaces the
+  P1–P5 ladder; ``audit FAKE_RUN_ID`` suggests
+  ``advisor checkpoints``; ``history --stats`` empty explains the
+  confirm-during-run workflow plus the value-prop (history boosts
+  repeat-offender ranking).
+- **``advisor doctor`` codex noise reduction**: ``codex-cli`` warning
+  softened ("Codex variant unavailable — Claude Code /advisor is
+  unaffected") and ``codex-home`` / ``codex-skill-install`` checks
+  gated on ``codex_cli_available()``. Claude-only users see one
+  softened warning instead of two alarming ones.
+- **Dashboard**: Findings tab first-load fetch fixed (``lastToken``
+  initialized to a sentinel so the null/null first ``/api/status``
+  response triggers ``refetchFindings`` instead of being seen as
+  unchanged). Cost and Plan tabs auto-load on first visit (the
+  Refresh / Estimate buttons stay for explicit re-fetch). Cost tab
+  hint explains the min/max range. Live tab empty-state rewritten
+  from jargon ("SKILL.md wired to ``advisor live record``") to
+  actionable ("Start a review run with /advisor . in Claude Code").
+  Run config tab gains a hint distinguishing ``advisor plan``
+  (offline ranking) from ``/advisor`` (live pipeline).
+- **Plan budget warning rewritten action-first.** "batch 2 has 5
+  files but only 3 fixes are allowed per runner ... To avoid the
+  rotation: rerun with --batch-size 3." replaces the stack-trace-
+  style prior wording.
+- **``advisor ui --quiet``** suppresses the startup banner for
+  scripted dashboard launches.
+
+### Added
+
+- ``scripts/sarif_gate.py`` — standalone, unit-testable SARIF gate
+  (38 test cases). Works for advisor's own SARIF (uses
+  ``properties.severity``) and third-party SARIF (falls back to the
+  SARIF level mapping).
+- ``Finding.expected_vs_actual: str = ""`` field on the parser, in
+  ``format_findings_block``, in SARIF result properties, in
+  ``audit_to_dict``, and in ``pr_comment``.
+- 39 regression tests across ``test_verify``, ``test_cost``,
+  ``test_main``, ``test_live``, ``test_audit``, ``test_sarif_gate``,
+  ``test_properties``.
+
+## [0.8.0] - 2026-05-26
+
+Real-time dashboard feed. The web dashboard previously surfaced only
+historical findings (`history.jsonl`) and prospective cost estimates,
+so a `/advisor` run in progress wasn't visible from the browser. This
+release adds a **Live** tab that polls a new ephemeral event stream
+the team-lead Claude session emits at three checkpoints
+(`run_start`, every `report_relay`, `run_end`, plus optional
+`runner_spawn` / `fix_dispatch`). Strictly additive: no existing
+endpoint, tab, or schema changed.
+
+### Added
+
+- `advisor live record / tail / clear` — new CLI subcommands that
+  append / inspect / remove events in
+  `<target>/.advisor/live/events.jsonl`. The `record` form is what the
+  `/advisor` skill invokes via `Bash` at each pipeline checkpoint;
+  `tail` is for ad-hoc terminal inspection. JSON output via `--json`.
+- New module `advisor.live` exposes `append_event`,
+  `load_recent_events`, and `latest_seq` for in-process callers. File
+  format is JSONL, one `{schema_version, ts, seq, kind, data}` record
+  per line, with a cursor-based polling protocol (`?since=<seq>`) the
+  dashboard's Live tab uses to advance without losing events under
+  burst load.
+- `GET /api/events` — new dashboard endpoint reading the same file.
+  Returns `{schema_version, target, count, events, next_token}`.
+  Idle polls still advance `next_token` so the client cursor never
+  resets to zero when activity resumes after a quiet gap.
+- **Live** tab in the optional web dashboard (`advisor ui`). Live-pill
+  with idle / active / paused / error states (same component as the
+  Findings tab's poller). Per-event row renders core kinds
+  (`run_start`, `runner_spawn`, `report_relay`, `fix_dispatch`,
+  `run_end`) with a short summary; unknown kinds fall through to a raw
+  JSON payload line. FIFO-trimmed at 500 rows so a long session
+  stays bounded. Newly-arrived rows briefly flash, respecting
+  `prefers-reduced-motion`.
+- SKILL.md now documents the three live-event checkpoints with the
+  exact `advisor live record ... || true` invocations the team-lead
+  should fire. Always best-effort: a failed write must NOT halt the
+  pipeline. Users who haven't started `advisor ui` see no behavior
+  change — the events file just accumulates in `.advisor/live/` and
+  is harmless.
+- `tests/test_live.py` — 36 new tests covering append round-trip,
+  cursor semantics, oversize-line rejection, malformed-line skip,
+  CLI argparse wiring, and `/api/events` payload shape.
+
+### Why a minor bump
+
+`history.jsonl` and `live/events.jsonl` are deliberately separate
+stores with different semantics (CONFIRMED findings vs. ephemeral
+event stream). History is the authoritative source for analytics,
+ranker boosts, and SARIF emission; live events are advisory and never
+consulted by the orchestrator. Keeping them in separate files means
+the next CLI-based run that writes real findings can't accidentally
+land in the live feed and vice versa.
+
+## [0.7.4] - 2026-05-26
+
+Two combined fix waves. The first (six advisor self-review findings,
+two MEDIUM + four LOW) closes defensive-engineering gaps surfaced by a
+`/advisor` run against this repo. The second (six loader-guard fixes)
+hardens JSON import paths against non-dict input and tightens an
+`ensure_nudge` symlink-handling regression. All 949 existing tests pass
+plus two new bidi regression assertions.
+
+### Fixed
+
+- `orchestrate/_fence.py` + `sarif.py`: bidi formatting / override /
+  isolate / mark code points (U+202A–202E, U+2066–2069, U+200E/F,
+  U+2060) now stripped on both `sanitize_inline()` and on
+  `sarif._strip_controls()` — including the `keep_block_whitespace=True`
+  branch used by `pr_comment._sanitize`. Closes the "trojan source"
+  class where a Finding description visually misrepresents the named
+  file or severity to a human reviewer in a rendered GitHub PR comment.
+- `rank.py:_compile_ignore_patterns`: the `filename_re` branch now
+  calls `_check_quantifier_count` before `fnmatch.translate`, matching
+  the three other regex-compilation branches. Closes a ReDoS hole
+  where a hostile `.advisorignore` pattern like
+  `*a*a*a*a*a*a*a*a*a*X` (9 wildcards, above the guard threshold)
+  triggered catastrophic backtracking on Python 3.10/3.11.
+  (Python 3.12+ uses atomic groups in `fnmatch.translate` and is
+  already safe.)
+- `verify.py:_parse_blocks`: continuation lines now accumulate into
+  a `parts: dict[str, list[str]]` and join at flush time, replacing
+  the prior `current[key] = current[key] + " " + stripped` pattern.
+  Eliminates O(n²) string-copy cost on multi-megabyte LLM output that
+  lacks `### Finding` headers — a plausible degraded-output mode that
+  `_STDIN_LIMIT` does not bound for `cmd_baseline` /
+  `_load_findings_from_input` file-source callers.
+- `install.py`: ten `Path.read_text(encoding="utf-8")` call sites
+  (CLAUDE.md install / uninstall / status / ensure_nudge, bundled
+  CHANGELOG, SKILL.md install / install_update_skill / status / badge
+  parse) now route through `_read_text_capped` with explicit byte caps
+  (1 MB for CLAUDE.md and the changelog, 256 KB for SKILL.md). Mirrors
+  the precedent at `check_for_update_cached` (4 KB cap on the update
+  cache). Robustness fix: a pathological-but-self-inflicted CLAUDE.md
+  no longer OOMs the install command.
+- `doctor.py:_check_codex_home`: dead-symlink case now emits
+  `"is a broken symlink (target: ...)"` mirroring `_check_claude_home`,
+  instead of the misleading
+  `"does not exist (will be created on first advisor install)"` —
+  install would actually fail on the dead link, not silently create
+  the dir.
+- `doctor.py:_collect_env_overrides`: `ADVISOR_TEST_COMMAND` value
+  now redacted to the literal placeholder `"<set>"` in both the human
+  `format_report` and the `--json` payload. Closes a credential-leak
+  surface where a user who embedded a secret in
+  `ADVISOR_TEST_COMMAND="pytest --token=secret"` could leak it by
+  pasting `advisor doctor` output into an issue tracker. Presence of
+  the variable is still surfaced; only the value is hidden.
+- `history.load_recent_findings`: skip non-dict JSONL lines instead of
+  raising `AttributeError` on `null` / scalar entries.
+- `checkpoint.load_checkpoint`: reject non-object JSON; skip non-dict
+  batch elements with a warning.
+- `_load_findings_from_input`: warn when `findings` / `findings_in_batch`
+  is not an array (e.g. a path-keyed object).
+- `suppressions._parse_until`: reject non-string `until` values with
+  `ValueError`; `_matches_glob` catches `ValueError` at apply time.
+- `ensure_nudge`: symlink / outside-`$HOME` guards now run inside the
+  swallow-errors path so unrelated CLI commands do not abort.
+- Web dashboard `max_fixes_per_runner` query accepts `0` (no fix waves),
+  matching `estimate_cost`.
+
+### Added
+
+- `tests/test_fence.py::test_sanitize_inline_strips_bidi_controls`
+  and `tests/test_sarif.py::test_strip_controls_strips_bidi_on_both_paths` —
+  regression assertions pinning the bidi-strip behavior on both the
+  inline and block-whitespace paths so a future cleanup cannot silently
+  remove the trojan-source defense.
+
 ## [0.7.3] - 2026-05-23
 
 ### Fixed

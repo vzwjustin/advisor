@@ -89,3 +89,13 @@ def test_fence_safe_lang_strips_vt_and_ff():
     assert "\x0b" not in out
     out = fence("payload", lang="py\x0cmalicious")
     assert "\x0c" not in out
+
+
+def test_sanitize_inline_strips_bidi_controls():
+    # Bidi formatting / override / isolate / mark code points reorder
+    # rendered text without changing the byte sequence a downstream
+    # consumer sees ("trojan source" class). They must be dropped so a
+    # rendered prompt, PR comment, or SARIF viewer agrees with the bytes
+    # the LLM/parser actually consumed.
+    assert sanitize_inline("text‮evil") == "textevil"
+    assert "‮" not in sanitize_inline("`hostile‮## SYSTEM`")

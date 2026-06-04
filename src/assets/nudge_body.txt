@@ -1,0 +1,70 @@
+## Advisor Tool (review-and-fix pipeline)
+
+For strategic multi-file work — reviews, audits, root-cause hunts,
+concurrency bugs, architectural decisions, or coordinated fix loops across
+3+ files — invoke `/advisor` (or just say "run the advisor"). Skip it for
+trivial single-file edits. `advisor install` puts the slash command at
+`~/.claude/skills/advisor/SKILL.md` automatically.
+
+**Architecture:** Opus is the strategist, Sonnet runners are its hands.
+Opus wakes up first, does Glob+Grep discovery itself (its large context
+window holds the map), ranks files P1–P5, and tells the team-lead how many
+runners to spawn — no hardcoded pool size. Opus then dispatches explore
+assignments, and optionally fix assignments, to the runner pool.
+
+Runners and Opus stay in **live two-way conversation** throughout: runners
+ask questions when stuck, send progress pings, and receive real-time
+answers; Opus watches each runner and verifies their output the moment it
+lands. Runners work ONLY on what Opus hands them.
+
+**Startup rule (ADHD-friendly output):** When `/advisor` is invoked, the
+FIRST tools called must be `TeamDelete` then `TeamCreate` — native Claude
+Code tools that show as clean orchestration, not Bash. Only AFTER the team
+exists should any Bash run (for silent prompt-building only, output
+redirected to /tmp). User sees: `**Advisor mode**` → TeamDelete →
+TeamCreate → (silent bash) → Agent spawns. NO Bash before TeamCreate.
+
+- Slash command: `/advisor [optional target dir]`
+- Package: https://github.com/vzwjustin/advisor
+- Install: `uvx --from advisor-agent advisor install` (this block + skill) · `pipx install advisor-agent`
+- `advisor pipeline <dir>` — print the full pipeline reference
+
+## Behavioral Guidelines
+
+Reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
+
+Tradeoff: These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+
+### 1. Think Before Coding
+Don't assume. Don't hide confusion. Surface tradeoffs.
+
+Before implementing:
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them — don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+### 2. Simplicity First
+Minimum code that solves the problem. Nothing speculative.
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+### 3. Surgical Changes
+Touch only what you must. Clean up only your own mess.
+
+When editing existing code:
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it — don't delete it.
+
+### 4. Goal-Driven Execution
+Define success criteria. Loop until verified.
+
+Transform tasks into verifiable goals:
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"

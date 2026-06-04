@@ -247,6 +247,80 @@ class TestParseFindingsFromText:
         assert findings[0].file_path == "src/plain.py:12"
         assert findings[0].fix == "Read it from configuration"
 
+    def test_parses_expected_vs_actual_field(self):
+        """The FINDING_SCHEMA documents an "Expected → Actual" field for
+        MEDIUM+ findings. The parser must capture it rather than letting
+        it bleed into the prior Evidence field as continuation text —
+        the divergence is the actual signal."""
+        text = """### Finding 1
+- **File**: src/auth.py:42
+- **Severity**: HIGH
+- **Description**: race in token refresh
+- **Evidence**: line 42
+- **Expected → Actual**: expected a single-flight refresh · found two concurrent threads racing
+- **Fix**: add a lock around refresh
+"""
+        findings = parse_findings_from_text(text)
+        assert len(findings) == 1
+        f = findings[0]
+        assert f.evidence == "line 42"
+        assert (
+            f.expected_vs_actual
+            == "expected a single-flight refresh · found two concurrent threads racing"
+        )
+        assert f.fix == "add a lock around refresh"
+
+    def test_expected_vs_actual_default_empty_when_omitted(self):
+        """The field is optional — omitting it leaves the default empty
+        string so existing transcripts (and the audit JSON round-trip)
+        keep working without a schema bump."""
+        text = """### Finding 1
+- **File**: src/foo.py:1
+- **Severity**: LOW
+- **Description**: minor
+- **Evidence**: line 1
+- **Fix**: patch
+"""
+        findings = parse_findings_from_text(text)
+        assert len(findings) == 1
+        assert findings[0].expected_vs_actual == ""
+
+    def test_parses_expected_vs_actual_ascii_arrow_variant(self):
+        """Regression: LLM runners (and users hand-editing) routinely
+        autocorrect ``→`` (U+2192) to ASCII ``->``. The parser must
+        accept both so the divergence signal isn't lost to a cosmetic
+        glyph substitution that no human would notice in review."""
+        text = """### Finding 1
+- **File**: src/auth.py:42
+- **Severity**: HIGH
+- **Description**: race in token refresh
+- **Evidence**: line 42
+- **Expected -> Actual**: expected single-flight · found two threads racing
+- **Fix**: add a lock
+"""
+        findings = parse_findings_from_text(text)
+        assert len(findings) == 1
+        f = findings[0]
+        assert f.evidence == "line 42"
+        assert f.expected_vs_actual == ("expected single-flight · found two threads racing")
+        assert f.fix == "add a lock"
+
+    def test_parses_expected_vs_actual_asterisk_ascii_arrow(self):
+        """Asterisk bullet + ASCII arrow — the combinatoric variant a
+        runner using ``*`` bullets and autocorrected punctuation would
+        emit."""
+        text = """### Finding 1
+* **File**: src/db.py:5
+* **Severity**: HIGH
+* **Description**: SQL injection
+* **Evidence**: line 5
+* **Expected -> Actual**: parameterized · raw string concat
+* **Fix**: use cursor.execute params
+"""
+        findings = parse_findings_from_text(text)
+        assert len(findings) == 1
+        assert findings[0].expected_vs_actual == "parameterized · raw string concat"
+
 
 class TestSeverityAllowlist:
     """The parser must canonicalize severity to the four allowed values
@@ -459,3 +533,32 @@ def test_mismatched_fence_markers_recover():
     findings = list(parse_findings_from_text(text))
     assert len(findings) == 1
     assert findings[0].fix == "use parameterized queries"
+
+
+class TestSafeInline:
+    """Regression: _safe_inline must strip all C0 controls, not just NUL/CR/LF."""
+
+    def test_safe_inline_strips_all_c0_controls(self) -> None:
+        from advisor.verify import _safe_inline
+
+        # Chars that the old replace-chain missed
+        assert _safe_inline("a\x07b") == "ab", "BEL (U+0007) not stripped"
+        assert _safe_inline("a\x0bb") == "ab", "VT (U+000B) not stripped"
+        assert _safe_inline("a\x0cb") == "ab", "FF (U+000C) not stripped"
+        assert _safe_inline("a\x7fb") == "ab", "DEL (U+007F) not stripped"
+        # Chars that the old chain handled (regression guard)
+        assert _safe_inline("a\x00b") == "ab", "NUL (U+0000) not stripped"
+        assert _safe_inline("a\nb") == "ab", "LF not stripped"
+        assert _safe_inline("a\rb") == "ab", "CR not stripped"
+        # Unicode line separators
+        assert _safe_inline("a\u2028b") == "ab", "U+2028 not stripped"
+        assert _safe_inline("a\u2029b") == "ab", "U+2029 not stripped"
+        assert _safe_inline("a\x85b") == "ab", "NEL (U+0085) not stripped"
+        # Zero-width and invisible chars
+        assert _safe_inline("a\u200bb") == "ab", "U+200B not stripped"
+        assert _safe_inline("a\u200cb") == "ab", "U+200C not stripped"
+        assert _safe_inline("a\u200db") == "ab", "U+200D not stripped"
+        assert _safe_inline("a\ufeffb") == "ab", "U+FEFF not stripped"
+        assert _safe_inline("a\u00adb") == "ab", "U+00AD not stripped"
+        # Normal text must survive intact
+        assert _safe_inline("hello world") == "hello world"

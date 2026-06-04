@@ -1,0 +1,21 @@
+{
+  "version_badge_prefix": true,
+  "version_badge_suffix": true,
+  "codex_badge_eq_skill_badge": true,
+  "skill_md_has_badge": true,
+  "skill_md_update_has_badge": true,
+  "skill_md_no_placeholder": true,
+  "skill_md_update_no_placeholder": true,
+  "codex_rendered_has_badge": true,
+  "codex_rendered_no_placeholder": true,
+  "codex_rendered_eq_render_fn": true,
+  "runner_schema_type": "object",
+  "runner_schema_required": [
+    "runner_id",
+    "findings"
+  ],
+  "codex_prompt_has_runner_id": true,
+  "codex_prompt_has_files": true,
+  "codex_prompt_no_edit": true,
+  "codex_prompt_empty_files": true
+}

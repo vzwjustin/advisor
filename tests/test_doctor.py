@@ -85,3 +85,47 @@ class TestRunDoctor:
         update_checks = [c for c in r.checks if c.name == "install-update-skill"]
         assert len(update_checks) == 1
         assert update_checks[0].level == "warn"
+
+    def test_format_report_redacts_unknown_env_var(self, tmp_path: Path, monkeypatch) -> None:
+        """A-12: A new env var added to _KNOWN_ENV_VARS but not to
+        _KNOWN_SAFE_ENV_VARS must be redacted in the doctor report."""
+        import advisor.doctor as doctor_mod
+
+        hypothetical = "ADVISOR_FUTURE_API_TOKEN"
+        secret_value = "s3cr3t-token"
+
+        # Temporarily extend _KNOWN_ENV_VARS to include the hypothetical var.
+        extended = (*doctor_mod._KNOWN_ENV_VARS, hypothetical)
+        monkeypatch.setattr(doctor_mod, "_KNOWN_ENV_VARS", extended)
+        monkeypatch.setenv(hypothetical, secret_value)
+
+        nudge = tmp_path / "CLAUDE.md"
+        skill = tmp_path / "skills" / "advisor" / "SKILL.md"
+        r = run_doctor(nudge_path=nudge, skill_path=skill)
+
+        # The key must appear (presence preserved) but the value must be redacted.
+        assert hypothetical in r.env_overrides
+        assert r.env_overrides[hypothetical] != secret_value
+        assert r.env_overrides[hypothetical] == doctor_mod._REDACTED_VALUE
+
+        # The raw secret must not appear in the formatted report either.
+        rendered = format_report(r)
+        assert secret_value not in rendered
+
+    def test_check_home_no_duplicate_is_symlink(self, tmp_path: Path) -> None:
+        """A-13: _check_codex_home and _check_claude_home delegate to the
+        shared _check_home_dir helper; both return correct results for a
+        normal (non-symlink) directory."""
+        from advisor.doctor import _check_home_dir
+
+        existing_dir = tmp_path / "mydir"
+        existing_dir.mkdir()
+
+        result = _check_home_dir("test-home", existing_dir)
+        assert result.level == "ok"
+        assert "regular directory" in result.message
+
+        missing = tmp_path / "missing"
+        result_missing = _check_home_dir("test-home", missing)
+        assert result_missing.level == "warn"
+        assert "does not exist" in result_missing.message

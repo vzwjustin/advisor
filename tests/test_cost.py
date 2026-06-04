@@ -152,6 +152,50 @@ class TestEstimateCost:
 
         assert e.runner_count == 2
 
+    def test_batches_clamped_to_max_runners(self, tmp_path: Path) -> None:
+        """Regression: ``runner_count = len(batches)`` was unclamped,
+        inflating the estimate when a plan has more batches than the
+        pool can hold. The dispatch path clamps the live pool to
+        ``max_runners`` (and POOL_SIZE_CEILING above it), so the cost
+        estimate must agree."""
+        from advisor.focus import FocusBatch
+
+        tasks = [_task(str(tmp_path / f"f{i}.py")) for i in range(20)]
+        batches = [
+            FocusBatch(batch_id=i + 1, tasks=(tasks[i],), complexity="low") for i in range(20)
+        ]
+
+        e = estimate_cost(
+            tasks,
+            batches,
+            advisor_model="opus",
+            runner_model="sonnet",
+            max_fixes_per_runner=5,
+            max_runners=5,
+        )
+
+        assert e.runner_count == 5
+
+    def test_batches_with_zero_max_runners_yields_zero(self, tmp_path: Path) -> None:
+        """``max_runners=0`` is the Opus-only-pipeline configuration —
+        with batches passed in, the clamp must still drive runner_count
+        to zero instead of returning ``len(batches)``."""
+        from advisor.focus import FocusBatch
+
+        tasks = [_task(str(tmp_path / "f.py"))]
+        batches = [FocusBatch(batch_id=1, tasks=(tasks[0],), complexity="low")]
+
+        e = estimate_cost(
+            tasks,
+            batches,
+            advisor_model="opus",
+            runner_model="sonnet",
+            max_fixes_per_runner=5,
+            max_runners=0,
+        )
+
+        assert e.runner_count == 0
+
     def test_duplicate_tasks_only_stat_once_per_estimate(self, tmp_path: Path, monkeypatch) -> None:
         p = tmp_path / "dup.py"
         p.write_text("x" * 100)
@@ -182,6 +226,18 @@ class TestEstimateCost:
         p.write_text("x" * 3500)
 
         assert cost._tokens_for_file(str(p)) > first
+
+    def test_warn_unknown_family_is_bounded(self) -> None:
+        """A-10: ``_warn_unknown_family`` cache must not grow beyond maxsize=64."""
+        import warnings
+
+        cost._warn_unknown_family.cache_clear()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            for i in range(100):
+                cost._warn_unknown_family(f"unknown-model-{i}")
+
+        assert cost._warn_unknown_family.cache_info().currsize <= 64
 
 
 class TestLoadPricing:
@@ -457,3 +513,37 @@ class TestPricingValueShapeValidation:
                 max_fixes_per_runner=1,
                 pricing=bad,
             )
+
+
+class TestTokensForFileSandbox:
+    """M4 regression: _tokens_for_file must reject paths outside target."""
+
+    def test_tokens_for_file_rejects_path_outside_target(self, tmp_path: Path) -> None:
+        """A tampered file_path pointing outside target must return 0."""
+        outside = tmp_path / "outside.py"
+        outside.write_text("x" * 4000)
+
+        target = tmp_path / "target"
+        target.mkdir()
+
+        result = cost._tokens_for_file(str(outside), target)
+        assert result == 0
+
+    def test_tokens_for_file_allows_path_inside_target(self, tmp_path: Path) -> None:
+        """A legitimate file inside target must return a non-zero estimate."""
+        target = tmp_path / "target"
+        target.mkdir()
+        real_file = target / "real.py"
+        real_file.write_text("x" * 4000)
+
+        result = cost._tokens_for_file(str(real_file), target)
+        assert result > 0
+
+    def test_tokens_for_file_no_target_skips_guard(self, tmp_path: Path) -> None:
+        """Without a target, the guard is skipped (backward-compatible)."""
+        outside = tmp_path / "any.py"
+        outside.write_text("x" * 4000)
+
+        # No target — should stat the file normally
+        result = cost._tokens_for_file(str(outside))
+        assert result > 0

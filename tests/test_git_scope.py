@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from advisor import git_scope
 from advisor.__main__ import _resolve_plan_files
 from advisor.git_scope import GitScopeError, resolve_git_scope
 
@@ -86,6 +87,11 @@ class TestResolveGitScope:
         # resolution is exercised by ``test_since_returns_changed_files``.
         resolve_git_scope(git_repo, since="HEAD~1")
 
+    def test_stdout_cap_rejects_runaway_git_output(self, git_repo: Path, monkeypatch) -> None:
+        monkeypatch.setattr(git_scope, "_GIT_MAX_STDOUT_BYTES", 1)
+        with pytest.raises(GitScopeError, match="stdout"):
+            git_scope._run_git(git_repo, "rev-parse", "--show-toplevel")
+
 
 @pytest.fixture
 def multi_subdir_repo(tmp_path: Path) -> Path:
@@ -106,6 +112,13 @@ def multi_subdir_repo(tmp_path: Path) -> Path:
     _run(["git", "add", "."], tmp_path)
     _run(["git", "commit", "-q", "-m", "edit"], tmp_path)
     return tmp_path
+
+
+class TestRefAllowedRejectsTrailingNewline:
+    def test_ref_allowed_rejects_trailing_newline(self, git_repo: Path) -> None:
+        """B5: a ref value with a trailing newline must be rejected."""
+        with pytest.raises(GitScopeError):
+            resolve_git_scope(git_repo, since="main\n")
 
 
 class TestResolvePlanFilesTargetIntersection:

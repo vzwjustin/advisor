@@ -1,0 +1,89 @@
+{
+  "now_epoch": 1780574400,
+  "scores": {
+    "src/auth.py": 3.0,
+    "src/util.py": 4.0,
+    "old.py": 0.07041019239147114
+  },
+  "counts": {
+    "src/auth.py": 2,
+    "src/util.py": 1
+  },
+  "summarize": {
+    "total": 5,
+    "by_status": {
+      "CONFIRMED": 4,
+      "FIXED": 1
+    },
+    "by_severity": {
+      "HIGH": 2,
+      "LOW": 1,
+      "CRITICAL": 1,
+      "MEDIUM": 1
+    },
+    "confirm_rate": 0.8,
+    "run_count": 1,
+    "top_files": [
+      {
+        "file_path": "src/auth.py",
+        "count": 2
+      },
+      {
+        "file_path": "old.py",
+        "count": 1
+      },
+      {
+        "file_path": "src/util.py",
+        "count": 1
+      }
+    ]
+  },
+  "format_block": "## Recent findings from prior runs\n\n### File — 2 prior findings\n```\nsrc/auth.py\n```\n- [HIGH] (CONFIRMED):\n```\nd\n```\n- [LOW] (CONFIRMED):\n```\nd\n```\n\n### File\n```\nsrc/util.py\n```\n- [CRITICAL] (CONFIRMED):\n```\nd\n```\n",
+  "entries_json": [
+    {
+      "timestamp": "2026-06-04T12:00:00+00:00",
+      "file_path": "src/auth.py",
+      "severity": "HIGH",
+      "description": "d",
+      "status": "CONFIRMED",
+      "run_id": "r1",
+      "schema_version": "1.0"
+    },
+    {
+      "timestamp": "2026-05-05T12:00:00+00:00",
+      "file_path": "src/auth.py",
+      "severity": "LOW",
+      "description": "d",
+      "status": "CONFIRMED",
+      "run_id": "r1",
+      "schema_version": "1.0"
+    },
+    {
+      "timestamp": "2026-06-04T12:00:00+00:00",
+      "file_path": "src/util.py",
+      "severity": "CRITICAL",
+      "description": "d",
+      "status": "CONFIRMED",
+      "run_id": "r1",
+      "schema_version": "1.0"
+    },
+    {
+      "timestamp": "2026-06-04T12:00:00+00:00",
+      "file_path": "src/util.py",
+      "severity": "MEDIUM",
+      "description": "d",
+      "status": "FIXED",
+      "run_id": "r1",
+      "schema_version": "1.0"
+    },
+    {
+      "timestamp": "2026-01-01T00:00:00+00:00",
+      "file_path": "old.py",
+      "severity": "HIGH",
+      "description": "d",
+      "status": "CONFIRMED",
+      "run_id": "r1",
+      "schema_version": "1.0"
+    }
+  ]
+}

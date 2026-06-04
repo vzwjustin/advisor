@@ -304,6 +304,78 @@ class TestAuditTranscriptScopeDrift:
         assert [f.file_path for f in report.findings_in_batch] == ["only.py"]
         assert [f.file_path for f in report.findings_out_of_batch] == ["other.py"]
 
+    def test_non_dict_batch_entry_is_skipped(self):
+        """Corrupt batch elements must not crash scope collection."""
+        cp = _mk_checkpoint(batch_files=[["auth.py"]])
+        cp.batches.append(1)  # type: ignore[arg-type]
+        transcript = """### Finding 1
+- **File**: auth.py
+- **Severity**: HIGH
+- **Description**: d
+- **Evidence**: e
+- **Fix**: f
+"""
+        report = audit_transcript(transcript, cp)
+        assert [f.file_path for f in report.findings_in_batch] == ["auth.py"]
+
+    def test_incomplete_sentinel_does_not_leak_into_findings(self):
+        """Regression: a malformed finding block produces an
+        ``INCOMPLETE_FILE_PATH = "<incomplete>"`` sentinel from
+        ``_dict_to_finding`` so the drift tally counts parse misses.
+        That sentinel must not surface as an in/out-of-batch finding
+        because downstream sinks (SARIF emitter, PR comment, baseline
+        identity key) would mistake ``"<incomplete>"`` for a real path.
+        """
+        from advisor.verify import INCOMPLETE_FILE_PATH
+
+        # First block: complete and in-batch. Second block: partial —
+        # has File + Severity + Description but missing Evidence/Fix.
+        transcript = """### Finding 1
+- **File**: auth.py
+- **Severity**: HIGH
+- **Description**: real finding
+- **Evidence**: line 1
+- **Fix**: patch
+
+### Finding 2
+- **File**: bogus.py
+- **Severity**: HIGH
+- **Description**: partial — no evidence or fix
+"""
+        cp = _mk_checkpoint(batch_files=[["auth.py", "session.py"]])
+        report = audit_transcript(transcript, cp)
+        all_findings = [*report.findings_in_batch, *report.findings_out_of_batch]
+        assert all(f.file_path != INCOMPLETE_FILE_PATH for f in all_findings)
+        # The real finding still surfaces in-batch.
+        assert [f.file_path for f in report.findings_in_batch] == ["auth.py"]
+
+    def test_incomplete_sentinel_filtered_in_audit_to_dict(self):
+        """Belt-and-suspenders: even if a future change re-introduces
+        the sentinel upstream, ``audit_to_dict`` output must not carry
+        a finding with ``file_path == "<incomplete>"`` because that
+        round-trips through SARIF / baseline / PR-comment paths."""
+        from advisor.verify import INCOMPLETE_FILE_PATH
+
+        transcript = """### Finding 1
+- **File**: auth.py
+- **Severity**: HIGH
+- **Description**: real
+- **Evidence**: line 1
+- **Fix**: patch
+
+### Finding 2
+- **File**: x.py
+- **Severity**: HIGH
+- **Description**: partial
+"""
+        cp = _mk_checkpoint(batch_files=[["auth.py"]])
+        report = audit_transcript(transcript, cp)
+        payload = audit_to_dict(report)
+        for bucket in ("findings_in_batch", "findings_out_of_batch"):
+            assert all(f["file_path"] != INCOMPLETE_FILE_PATH for f in payload[bucket]), (
+                f"{bucket} leaked the incomplete sentinel"
+            )
+
 
 class TestAuditToDict:
     def test_round_trips_through_json(self):
@@ -405,7 +477,7 @@ class TestFormatAuditReport:
         """
         transcript = (
             "SendMessage(to='runner-1', message='## Fix assignment (fix 1 of 5)')\n"
-            + "garbage " * 200
+            + "garbage " * 300  # 2400 chars — exceeds the 2000-char attribution window
             + "\n## Fix assignment (fix 1 of 5)\n"  # unattributed
             + "SendMessage(to='runner-2', message='## Fix assignment (fix 1 of 5)')\n"
         )
@@ -530,6 +602,35 @@ class TestAuditCLI:
         assert rc == 2
 
 
+def test_runner_attribution_spans_large_dispatch_blob():
+    """Regression: a SendMessage envelope followed by a >500-char dispatch
+    blob before the ``## Fix assignment`` marker must still be attributed
+    to the correct runner.
+
+    The old 500-char window missed the ``to='runner-3'`` token when the
+    blob pushed it beyond the window boundary. The new 2 000-char window
+    covers the full envelope + blob.
+    """
+    # Build a transcript where SendMessage(to='runner-3', ...) is followed
+    # by a blob that is longer than the old 500-char window.
+    envelope = "SendMessage(to='runner-3', message='"
+    blob = "A" * 550  # 550 chars of filler — total distance > 500
+    close = "')"
+    marker = "\n## Fix assignment (fix 1 of 5)\n"
+    transcript = envelope + blob + close + marker
+
+    # Sanity: envelope-to-marker distance is >500 but well within 2000.
+    distance = len(envelope) + len(blob) + len(close)
+    assert distance > 500
+    assert distance < 2000
+
+    report = audit_transcript(transcript, _mk_checkpoint())
+    assert report.fix_counts.get("runner-3") == 1, (
+        "fix must be attributed to runner-3, not runner-?"
+    )
+    assert "runner-?" not in report.fix_counts
+
+
 def test_unclosed_fence_does_not_blind_protocol_violation():
     """Regression: an unclosed fenced block in the transcript previously
     blanked every line through end-of-text, silently suppressing any
@@ -550,4 +651,25 @@ def test_unclosed_fence_does_not_blind_protocol_violation():
     report = audit_transcript(transcript, cp)
     assert any("scope" in v for v in report.protocol_violations), (
         "PROTOCOL_VIOLATION after unclosed fence must still be detected"
+    )
+
+
+def test_strip_fenced_blocks_restores_open_marker_on_unclosed():
+    """L3 regression: unclosed-fence recovery must also restore the open-marker
+    line itself, not just the lines that follow it.
+
+    The open marker line (e.g. triple-backtick python) was previously left
+    blanked after recovery, which could silently drop a PROTOCOL_VIOLATION
+    that appeared *on* that same line (an unusual but possible edge case).
+    """
+    from advisor.audit import _strip_fenced_blocks
+
+    # Craft input where the open-marker line itself contains the sentinel.
+    # Real transcripts won't do this, but the invariant must hold defensively.
+    text = "normal line\n```PROTOCOL_VIOLATION: on marker\ncontent\nno close"
+    result = _strip_fenced_blocks(text)
+    result_lines = result.split("\n")
+    # The open-marker line must be restored verbatim (not blanked).
+    assert result_lines[1] == "```PROTOCOL_VIOLATION: on marker", (
+        "open-marker line must be restored on unclosed-fence recovery"
     )

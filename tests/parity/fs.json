@@ -1,0 +1,9 @@
+{
+  "CONTENT_SCAN_LIMIT": 1024,
+  "normalize_no_dot": "foo/bar.py",
+  "normalize_dotslash": "foo/bar.py",
+  "normalize_abs_passthrough": "/abs/path.py",
+  "validate_ok_noerr": true,
+  "validate_traversal_raises": true,
+  "validate_absolute_raises": true
+}

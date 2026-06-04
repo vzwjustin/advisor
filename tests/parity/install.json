@@ -1,0 +1,77 @@
+{
+  "OPT_OUT_ENV": "ADVISOR_NO_NUDGE",
+  "START_MARKER": "<!-- advisor:nudge:start -->",
+  "END_MARKER": "<!-- advisor:nudge:end -->",
+  "badge_present": "0.8.4",
+  "badge_absent": null,
+  "badge_spaced": null,
+  "semver_basic": [
+    0,
+    8,
+    4
+  ],
+  "semver_rc": [
+    0,
+    6,
+    0
+  ],
+  "semver_fused": [
+    0,
+    8,
+    0
+  ],
+  "semver_dev": [
+    0,
+    7,
+    2
+  ],
+  "semver_none": null,
+  "semver_gt_true": true,
+  "semver_gt_false": false,
+  "semver_gt_eq": false,
+  "newer_true": true,
+  "newer_false": false,
+  "valid_ver": true,
+  "invalid_ver_escape": false,
+  "invalid_ver_long": false,
+  "render_block_starts": true,
+  "render_block_ends": true,
+  "apply_empty_action": "installed",
+  "apply_empty_has_markers": true,
+  "apply_existing_action": "installed",
+  "apply_idempotent_action": "unchanged",
+  "remove_present_action": "removed",
+  "remove_present_no_markers": true,
+  "remove_absent_action": "absent",
+  "strip_doubled": true,
+  "auto_nudge_default": true,
+  "auto_nudge_opt_out": false,
+  "auto_nudge_empty_val": true,
+  "changelog_count": 3,
+  "changelog_versions": [
+    "0.9.0",
+    "0.8.4",
+    "0.8.0"
+  ],
+  "changelog_no_unreleased": true,
+  "changelog_since_versions": [
+    "0.9.0"
+  ],
+  "install_action": "installed",
+  "install_file_exists": true,
+  "install_has_markers": true,
+  "install_idempotent": "unchanged",
+  "uninstall_action": "removed",
+  "uninstall_no_markers": true,
+  "uninstall_absent": "absent",
+  "skill_install_action": "installed",
+  "skill_file_exists": true,
+  "skill_install_idempotent": "unchanged",
+  "skill_uninstall_action": "removed",
+  "skill_file_gone": true,
+  "status_nudge_present": true,
+  "status_nudge_current": true,
+  "status_skill_present": true,
+  "status_skill_current": true,
+  "status_opt_out_false": true
+}
