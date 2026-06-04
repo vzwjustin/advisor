@@ -77,6 +77,20 @@ enum Command {
         #[command(subcommand)]
         action: BaselineAction,
     },
+    /// List active (or expired) false-positive suppressions.
+    Suppressions {
+        #[arg(default_value = ".")]
+        target: String,
+        /// List all entries (default behavior).
+        #[arg(long)]
+        list: bool,
+        /// Show only expired entries.
+        #[arg(long)]
+        expired: bool,
+        /// Emit as JSON (byte-compatible with the Python CLI).
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -133,7 +147,90 @@ fn main() -> ExitCode {
             no_history,
         }),
         Command::Baseline { action } => cmd_baseline(action),
+        Command::Suppressions {
+            target,
+            list,
+            expired,
+            json,
+        } => {
+            let _ = list; // default-on flag, no behavior change
+            cmd_suppressions(&target, expired, json)
+        }
     }
+}
+
+/// `advisor suppressions` — list active/expired suppressions. Mirrors
+/// `cmd_suppressions`.
+fn cmd_suppressions(target: &str, expired_only: bool, json: bool) -> ExitCode {
+    let path = Path::new(target)
+        .join(".advisor")
+        .join("suppressions.jsonl");
+    if !path.exists() {
+        println!("no suppressions file at {}", path.display());
+        return ExitCode::SUCCESS;
+    }
+    let mut entries = match advisor::suppressions::load_suppressions(&path) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("✗ {e}");
+            return ExitCode::from(2);
+        }
+    };
+    if expired_only {
+        entries.retain(|e| e.expired);
+    }
+    if json {
+        let payload = serde_json::json!({
+            "schema_version": "1.0",
+            "count": entries.len(),
+            "entries": entries.iter().map(|e| serde_json::json!({
+                "rule_id": e.rule_id,
+                "file": e.file,
+                "file_glob": e.file_glob,
+                "reason": e.reason,
+                "until": e.until,
+                "expired": e.expired,
+            })).collect::<Vec<_>>(),
+        });
+        println!(
+            "{}",
+            ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
+        );
+        return ExitCode::SUCCESS;
+    }
+    if entries.is_empty() {
+        let label = if expired_only {
+            "expired suppressions"
+        } else {
+            "suppressions"
+        };
+        println!("no {label} in {}", path.display());
+        return ExitCode::SUCCESS;
+    }
+    let mut lines = vec![
+        format!("## Suppressions ({})", entries.len()),
+        String::new(),
+    ];
+    for e in &entries {
+        let scope = e
+            .file
+            .clone()
+            .unwrap_or_else(|| format!("glob:{}", e.file_glob.clone().unwrap_or_default()));
+        let stamp = e
+            .until
+            .as_ref()
+            .map(|u| format!(" until {u}"))
+            .unwrap_or_default();
+        let mark = if e.expired { " (expired)" } else { "" };
+        lines.push(format!("- `{}` → `{scope}`{stamp}{mark}", e.rule_id));
+        if !e.reason.is_empty() {
+            lines.push(format!("  - _{}_", e.reason));
+        }
+    }
+    // Python: print(colorize_markdown("\n".join(lines) + "\n")) → body + "\n\n".
+    let body = format!("{}\n\n", lines.join("\n"));
+    print!("{body}");
+    ExitCode::SUCCESS
 }
 
 /// `advisor presets [--json]` — mirrors the Python CLI handler.

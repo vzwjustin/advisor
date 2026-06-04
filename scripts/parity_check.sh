@@ -96,6 +96,27 @@ JSON
 }
 baseline_check
 
+# ── suppressions: list / --json / --expired ──
+suppressions_check() {
+  local tmp py rs
+  tmp="$(mktemp -d)"; mkdir -p "$tmp/.advisor"
+  cat > "$tmp/.advisor/suppressions.jsonl" <<'JSONL'
+{"__advisor_suppressions__": true, "schema_version": "1.0"}
+{"rule_id": "advisor/low/a", "file": "src/auth.py", "reason": "ok"}
+{"rule_id": "advisor/high/b", "file_glob": "legacy/**", "reason": "rewrite", "until": "2999-01-01"}
+{"rule_id": "advisor/critical/c", "file": "x.py", "reason": "old", "until": "2000-01-01"}
+JSONL
+  local name args
+  for spec in "suppressions --json::--json" "suppressions::" "suppressions --expired --json::--expired --json"; do
+    name="${spec%%::*}"; args="${spec##*::}"
+    py="$(cd "$tmp" && NO_COLOR=1 $PY suppressions . $args 2>/dev/null || true)"
+    rs="$(cd "$tmp" && NO_COLOR=1 "$RUST_BIN" suppressions . $args 2>/dev/null || true)"
+    if [[ "$py" == "$rs" ]]; then echo "PASS  $name"; else echo "FAIL  $name"; diff <(printf '%s' "$py") <(printf '%s' "$rs") | sed 's/^/    /'; fail=1; fi
+  done
+  rm -rf "$tmp"
+}
+suppressions_check
+
 if [[ "$fail" -ne 0 ]]; then
   echo "parity check FAILED" >&2
   exit 1
