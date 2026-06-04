@@ -8,6 +8,7 @@
 //! foundational, pure, parity-verified slices are ported so far; the rest remain
 //! in Python and ship alongside this binary until parity is proven.
 
+pub mod baseline;
 pub mod config;
 pub mod cost;
 pub mod fence;
@@ -25,6 +26,10 @@ pub mod version;
 
 // Re-export the most-used items at the crate root, mirroring the curated
 // surface of `advisor/__init__.py`.
+pub use baseline::{
+    diff_against_baseline, filter_against_baseline, findings_to_entries, read_baseline,
+    write_baseline, BaselineDiff, BaselineEntry,
+};
 pub use config::{
     default_team_config, is_known_model, TeamConfig, TeamConfigInput, DEFAULT_ADVISOR_MODEL,
     DEFAULT_RUNNER_MODEL, POOL_SIZE_CEILING,

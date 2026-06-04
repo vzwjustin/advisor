@@ -36,6 +36,8 @@ parity assertions.
 | `src/fence.rs` | `orchestrate/_fence.py` | `sanitize_inline`, `fence` (+ linebreak/invisible strip) | Unit tests vs Python outputs |
 | `src/style.rs` | `_style.py` | `strip_ansi` (CSI+OSC regex) | Unit tests |
 | `src/fs.rs` | `_fs.py` | `normalize_path`, `validate_file_types`, `CONTENT_SCAN_LIMIT`, POSIX `normpath` | Reference table vs Python (10 cases) |
+| `src/baseline.rs` | `baseline.py` | `BaselineEntry`/`BaselineDiff`, `findings_to_entries`, `description_hash`, `normalize_identity_path`, `write_baseline`/`read_baseline` (JSONL), `filter_against_baseline`, `diff_against_baseline` (incl. abs/rel suffix aliasing) | **Golden JSON** vs Python (entries, written bytes, hashes, normalize, filter, diff) |
+| `src/fs.rs` (+helpers) | `_fs.py` | `normalize_path`, `validate_file_types`, **`read_text_capped`**, **`atomic_write_text`**, `posix_normpath` | reference table + used by baseline round-trip |
 | `src/config.rs` | `orchestrate/config.py` | `is_known_model` + model regex/constants, **`TeamConfig`**, **`default_team_config`** (env fallbacks, range clamping + stderr warnings, preset merge) | Matrix + **golden JSON** (7 scenarios: minimal, presets, clamps, explicit) |
 | `src/sarif.rs` | `sarif.py` | **full `findings_to_sarif`** document builder (rule dedup/ordering, `path:line:col:col` parsing, region clamps, control stripping, `%SRCROOT%` URIs, percent-encoding, partial fingerprints), `synthesize_rule_id`, `level_for`, `short_text`, `strip_controls` | **Golden JSON** vs Python (full SARIF doc byte-for-byte + parse/short/strip cases) |
 | `src/cost.rs` | `cost.py` | pricing table, token-overhead constants, `family_of`, `PRICING_AS_OF` | Unit tests |

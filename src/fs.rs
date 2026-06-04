@@ -103,9 +103,88 @@ pub fn normalize_path(path: &str) -> String {
     p
 }
 
+/// Shared 10 MiB ceiling for the user-controlled `.advisor/` loaders
+/// (baseline / checkpoint / suppressions), matching the Python constants.
+pub const MAX_ADVISOR_FILE_BYTES: u64 = 10 * 1024 * 1024;
+
+/// Error from [`read_text_capped`] — mirrors the Python exceptions the callers
+/// distinguish (missing file, oversized, decode/IO failure).
+#[derive(Debug)]
+pub enum ReadCappedError {
+    NotFound,
+    TooLarge(u64),
+    Io(std::io::Error),
+    Utf8,
+}
+
+impl std::fmt::Display for ReadCappedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReadCappedError::NotFound => write!(f, "file not found"),
+            ReadCappedError::TooLarge(max) => {
+                write!(f, "file size exceeds {max} bytes — refusing to load")
+            }
+            ReadCappedError::Io(e) => write!(f, "{e}"),
+            ReadCappedError::Utf8 => write!(f, "invalid UTF-8"),
+        }
+    }
+}
+
+/// Read a text file with a hard byte cap (measured in bytes, not chars).
+/// Strips a leading UTF-8 BOM (`utf-8-sig`). Mirrors `_fs.read_text_capped`.
+pub fn read_text_capped(path: &std::path::Path, max_bytes: u64) -> Result<String, ReadCappedError> {
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(ReadCappedError::NotFound)
+        }
+        Err(e) => return Err(ReadCappedError::Io(e)),
+    };
+    if bytes.len() as u64 > max_bytes {
+        return Err(ReadCappedError::TooLarge(max_bytes));
+    }
+    let s = String::from_utf8(bytes).map_err(|_| ReadCappedError::Utf8)?;
+    Ok(s.strip_prefix('\u{FEFF}')
+        .map(|r| r.to_string())
+        .unwrap_or(s))
+}
+
+/// Atomically write `text` to `target` (temp file in the same directory, then
+/// rename). Mirrors `_fs.atomic_write_text` for the default (no symlink/mode)
+/// path; the fsync/symlink-rejection nuances are tracked in PORT_NOTES.
+pub fn atomic_write_text(target: &std::path::Path, text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let parent = target.parent().unwrap_or_else(|| std::path::Path::new("."));
+    std::fs::create_dir_all(parent)?;
+    let name = target
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let tmp = parent.join(format!(
+        ".{name}.{}.{}.tmp",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    {
+        let mut fh = std::fs::File::create(&tmp)?;
+        fh.write_all(text.as_bytes())?;
+        fh.sync_all()?;
+    }
+    match std::fs::rename(&tmp, target) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            Err(e)
+        }
+    }
+}
+
 /// Lexical POSIX path normalization, matching Python's `posixpath.normpath`
 /// for the inputs `normalize_path` produces (no NUL, already forward-slashed).
-fn posix_normpath(path: &str) -> String {
+pub(crate) fn posix_normpath(path: &str) -> String {
     if path.is_empty() {
         return ".".to_string();
     }
