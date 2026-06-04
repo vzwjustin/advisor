@@ -62,7 +62,7 @@ const BIDI_CONTROLS: [u32; 12] = [
 /// Remove C0 controls (and DEL) that survive JSON but break consumers. With
 /// `keep_block_whitespace`, tab/LF/CR are preserved; otherwise NEL/LS/PS are
 /// also stripped. Bidi controls are always stripped. Mirrors `_strip_controls`.
-fn strip_controls(text: &str, keep_block_whitespace: bool) -> String {
+pub(crate) fn strip_controls(text: &str, keep_block_whitespace: bool) -> String {
     if text.is_empty() {
         return String::new();
     }

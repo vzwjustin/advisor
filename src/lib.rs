@@ -15,6 +15,7 @@ pub mod focus;
 pub mod fs;
 pub mod jsonutil;
 pub mod models;
+pub mod pr_comment;
 pub mod presets;
 pub mod rank;
 pub mod sarif;
@@ -35,6 +36,7 @@ pub use focus::{
 };
 pub use fs::{normalize_path, validate_file_types, CONTENT_SCAN_LIMIT};
 pub use models::{Finding, RankedFile, Severity};
+pub use pr_comment::format_pr_comment;
 pub use presets::{get_preset, list_presets, RulePack};
 pub use rank::{language_for_path, load_advisorignore, rank_files, rank_to_prompt};
 pub use sarif::{

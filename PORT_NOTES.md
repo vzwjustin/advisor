@@ -44,6 +44,7 @@ parity assertions.
 | `src/verify.rs` | `verify.py` | `Finding` format/parse state machine: `format_findings_block`, `build_verify_prompt`, `parse_findings_from_text`/`_with_drift`, `safe_inline`, severity canonicalization, fenced-block auto-recovery, scope filtering | **Golden JSON** vs Python (round-trip, plain/list, ASCII arrow, fenced, invented severity, header-less, scope, safe_inline) |
 | `src/focus.rs` | `focus.py` | `FocusTask`/`FocusBatch`, `create_focus_tasks`, `create_focus_batches`, `format_dispatch_plan`, `format_batch_plan`, prompt templating | **Golden JSON** vs Python (tasks, batches, forced/auto complexity, plans, grammar) |
 | `src/rank.rs` | `rank.py` | `language_for_path`, shebang detection, keyword scoring (`finditer` simulation), test-path cap, history boost, `rank_files`, `rank_to_prompt`, `.advisorignore` glob engine, `load_advisorignore` | **Golden JSON** vs Python (language/shebang/score/test/rank/history/ignore — 60+ cases) |
+| `src/pr_comment.rs` | `pr_comment.py` | `format_pr_comment` (collapsible `<details>` blocks, severity table, HTML escaping `quote=True`, summary/inline-code escaping, evidence byte-cap + fence/`<details>` neutralization, severity sort, unknown→LOW clamp, body-byte truncation) | **Golden JSON** vs Python (empty, basic, unknown severity, hostile HTML) |
 | `src/jsonutil.rs` | (CPython `json.dumps`) | `ensure_ascii` escaping (incl. surrogate pairs) | Unit tests vs CPython |
 | `src/version.rs` | `_version.py` | `resolve_version` (crate version) | Unit test |
 | `src/main.rs` | `__main__.py` (subset) | `advisor presets [--json]`, `advisor plan [--file-types/--min-priority/--batch-size/--preset/--json/--no-history]`, `advisor --version` | Binary diff vs Python (byte-identical, incl. end-to-end `plan` on a fixture tree) |
@@ -76,8 +77,7 @@ remaining work, roughly in dependency order (see `RUST_PORT_PLAN.md` §6):
 
 - **Core logic**: `runner_budget.py`, `git_scope.py` (subprocess),
   `history.py`, `baseline.py`, `checkpoint.py`, `suppressions.py`,
-  `pr_comment.py`, `audit.py`, full `cost.py` estimator, full `_fs.py`
-  atomic write/locking.
+  `audit.py`, full `cost.py` estimator, full `_fs.py` atomic write/locking.
 - **Orchestration prompts**: `advisor_prompt.py`, `runner_prompts.py`,
   `verify_dispatch.py`, `pipeline.py`, `_schema.py`, the embedded
   `_prompts/advisor.txt`, and the 20+ golden snapshot fixtures (parity linchpin).
@@ -117,9 +117,10 @@ remaining work, roughly in dependency order (see `RUST_PORT_PLAN.md` §6):
 
 `rank.py`, `focus.py`, `config.py`, `verify.py`, `sarif.py`, and the
 **`advisor plan` CLI** are now ported and parity-verified. Next:
-1. Port **`pr_comment.py`** (GitHub PR body formatter) and **`baseline.py`** /
-   **`suppressions.py`**, then wire **`advisor audit`** (transcript → findings →
-   sarif/pr-comment/json + `--fail-on`) and **`advisor baseline`** into the CLI.
+1. Port **`baseline.py`** / **`suppressions.py`**, then wire **`advisor audit`**
+   (transcript → `parse_findings_with_drift` → sarif/pr-comment/json + `--fail-on`)
+   and **`advisor baseline`** into the CLI. With `verify`, `sarif`, and
+   `pr_comment` all ported, `audit`'s rendering paths are ready.
 2. Remaining `plan` flags not yet wired (documented gaps): `--since/--staged/--branch`
    (needs `git_scope.py`), `--estimate`/`--pricing` (needs full `cost.py`),
    `--checkpoint`/`--resume` (needs `checkpoint.py`), `--sarif`, `--exclude`,
