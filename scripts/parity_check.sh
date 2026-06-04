@@ -178,6 +178,27 @@ gitscope_check() {
 }
 gitscope_check
 
+# ── history: --json + --stats --json, and plan with history-boost ──
+history_check() {
+  local tmp now py rs; tmp="$(mktemp -d)"; mkdir -p "$tmp/.advisor" "$tmp/src"
+  printf 'def login(password, token): pass\n' > "$tmp/src/auth.py"
+  printf 'def helper(): pass\n' > "$tmp/src/util.py"
+  now="$(date -u +%Y-%m-%dT%H:%M:%S+00:00)"
+  cat > "$tmp/.advisor/history.jsonl" <<JSONL
+{"timestamp": "$now", "file_path": "src/util.py", "severity": "CRITICAL", "description": "recurring bug", "status": "CONFIRMED", "run_id": "r1", "schema_version": "1.0"}
+{"timestamp": "2026-01-01T00:00:00+00:00", "file_path": "old.py", "severity": "HIGH", "description": "old", "status": "FIXED", "run_id": "r0", "schema_version": "1.0"}
+JSONL
+  local name args
+  for spec in "history --json::history . --json" "history --stats --json::history . --stats --json" "plan (history boost)::plan . --json --min-priority 1"; do
+    name="${spec%%::*}"; args="${spec##*::}"
+    py="$(cd "$tmp" && NO_COLOR=1 $PY $args 2>/dev/null || true)"
+    rs="$(cd "$tmp" && NO_COLOR=1 "$RUST_BIN" $args 2>/dev/null || true)"
+    if [[ "$py" == "$rs" ]]; then echo "PASS  $name"; else echo "FAIL  $name"; diff <(printf '%s' "$py") <(printf '%s' "$rs") | sed 's/^/    /'; fail=1; fi
+  done
+  rm -rf "$tmp"
+}
+history_check
+
 if [[ "$fail" -ne 0 ]]; then
   echo "parity check FAILED" >&2
   exit 1

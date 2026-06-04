@@ -17,6 +17,7 @@ pub mod fence;
 pub mod focus;
 pub mod fs;
 pub mod git_scope;
+pub mod history;
 pub mod jsonutil;
 pub mod models;
 pub mod pr_comment;
@@ -50,6 +51,10 @@ pub use focus::{
 };
 pub use fs::{normalize_path, validate_file_types, CONTENT_SCAN_LIMIT};
 pub use git_scope::resolve_git_scope;
+pub use history::{
+    file_repeat_counts, file_repeat_scores, format_history_block, history_path, load_recent,
+    load_recent_findings, new_run_id, summarize, HistoryEntry,
+};
 pub use models::{Finding, RankedFile, Severity};
 pub use pr_comment::format_pr_comment;
 pub use presets::{get_preset, list_presets, RulePack};

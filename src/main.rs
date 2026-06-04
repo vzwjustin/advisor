@@ -70,7 +70,7 @@ enum Command {
         /// Emit the plan as JSON (byte-compatible with the Python CLI).
         #[arg(long)]
         json: bool,
-        /// Ignore `.advisor/history.jsonl` (currently always-on in the Rust port).
+        /// Ignore `.advisor/history.jsonl` (deterministic CI).
         #[arg(long)]
         no_history: bool,
         /// Include a token/cost estimate in the JSON output.
@@ -121,6 +121,20 @@ enum Command {
         /// Suppress findings matching this baseline JSONL.
         #[arg(long = "baseline")]
         baseline_path: Option<String>,
+    },
+    /// Show recent confirmed findings from `.advisor/history.jsonl`.
+    History {
+        #[arg(default_value = ".")]
+        target: String,
+        /// Max entries to show.
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        /// Show aggregate stats instead of the recent list.
+        #[arg(long)]
+        stats: bool,
+        /// Emit as JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// List active (or expired) false-positive suppressions.
     Suppressions {
@@ -223,6 +237,12 @@ fn main() -> ExitCode {
             format,
             baseline_path,
         }),
+        Command::History {
+            target,
+            limit,
+            stats,
+            json,
+        } => cmd_history(&target, limit, stats, json),
         Command::Suppressions {
             target,
             list,
@@ -233,6 +253,68 @@ fn main() -> ExitCode {
             cmd_suppressions(&target, expired, json)
         }
     }
+}
+
+/// `advisor history` — recent confirmed findings or aggregate stats. Mirrors
+/// `cmd_history` for the JSON paths (pretty/colorized output deferred).
+fn cmd_history(target_str: &str, limit: usize, stats: bool, json: bool) -> ExitCode {
+    let target = Path::new(target_str);
+    let target_abs = target
+        .canonicalize()
+        .unwrap_or_else(|_| target.to_path_buf());
+    if stats {
+        let all =
+            advisor::history::load_recent_findings(&advisor::history::history_path(target), 500);
+        let summary = advisor::history::summarize(&all, 10);
+        if json {
+            let payload = serde_json::json!({
+                "schema_version": "1.0",
+                "target": target_abs.to_string_lossy(),
+                "stats": summary,
+            });
+            println!(
+                "{}",
+                ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
+            );
+            return ExitCode::SUCCESS;
+        }
+        // Pretty stats output (colorized framing) is deferred; emit the JSON.
+        println!(
+            "{}",
+            ensure_ascii(&serde_json::to_string_pretty(&summary).unwrap_or_default())
+        );
+        return ExitCode::SUCCESS;
+    }
+    let entries = advisor::history::load_recent(target, limit);
+    if json {
+        let payload = serde_json::json!({
+            "schema_version": "1.0",
+            "target": target_abs.to_string_lossy(),
+            "count": entries.len(),
+            "entries": entries.iter().map(|e| serde_json::json!({
+                "timestamp": e.timestamp,
+                "file_path": e.file_path,
+                "severity": e.severity,
+                "description": e.description,
+                "status": e.status,
+                "run_id": e.run_id,
+            })).collect::<Vec<_>>(),
+        });
+        println!(
+            "{}",
+            ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
+        );
+        return ExitCode::SUCCESS;
+    }
+    if entries.is_empty() {
+        println!(
+            "no history yet at {}/.advisor/history.jsonl",
+            target.display()
+        );
+        return ExitCode::SUCCESS;
+    }
+    print!("{}", advisor::history::format_history_block(&entries));
+    ExitCode::SUCCESS
 }
 
 /// `advisor suppressions` — list active/expired suppressions. Mirrors
@@ -349,14 +431,9 @@ fn dump_pricing_template() -> String {
 }
 
 /// `advisor plan` — discovery → rank → focus → JSON/pretty. Mirrors `cmd_plan`
-/// for the core (non-git-scope, non-resume, non-checkpoint, non-estimate) path.
-///
-/// History-informed ranking is not yet wired (history.py is not ported), so the
-/// Rust port behaves as `--no-history`; on a target with no `.advisor/history.jsonl`
-/// this is identical to the Python default. See PORT_NOTES.md.
+/// for the core (non-resume, non-checkpoint) path. Git scope, history-informed
+/// ranking, preset overlay, and cost estimate are all wired.
 fn cmd_plan(args: PlanArgs) -> ExitCode {
-    let _ = args.no_history; // history not yet ported; plan is always no-history
-
     // `--dump-pricing-template` short-circuits all discovery.
     if args.dump_pricing_template {
         println!("{}", dump_pricing_template());
@@ -442,13 +519,31 @@ fn cmd_plan(args: PlanArgs) -> ExitCode {
 
     let ignore = load_advisorignore(&args.target);
     let read = |p: &str| read_head(p);
+
+    // History-informed ranking (E9): repeat offenders float up. `--no-history`
+    // disables it for deterministic CI. Mirrors cmd_plan's history block.
+    let (history_scores, history_counts) = if args.no_history {
+        (None, None)
+    } else {
+        let entries =
+            advisor::history::load_recent_findings(&advisor::history::history_path(target), 500);
+        if entries.is_empty() {
+            (None, None)
+        } else {
+            (
+                Some(advisor::history::file_repeat_scores(&entries, 30.0, None)),
+                Some(advisor::history::file_repeat_counts(&entries, 90.0, None)),
+            )
+        }
+    };
+
     let ranked = rank_files(
         &paths,
         Some(&read),
         &ignore,
         preset_extras.as_deref(),
-        None,
-        None,
+        history_scores.as_ref(),
+        history_counts.as_ref(),
         90,
     );
     let tasks = create_focus_tasks(&ranked, None, cfg.min_priority as u8, DEFAULT_TASK_PROMPT);
