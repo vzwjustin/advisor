@@ -68,13 +68,23 @@ fn strip_linebreaks(value: &str) -> String {
 /// Swaps backticks for a typographic single quote (U+2019), then routes through
 /// the canonical line-break / zero-width strip. Mirrors Python `sanitize_inline`.
 pub fn sanitize_inline(value: &str) -> String {
-    // Python: _strip_linebreaks(value.replace("`", "'"))
-    // where "'" is the typographic single quote U+2019.
-    let replaced: String = value
-        .chars()
-        .map(|c| if c == '`' { '\u{2019}' } else { c })
-        .collect();
-    strip_linebreaks(&replaced)
+    // Python: _strip_linebreaks(value.replace("`", "'")) where "'" is the
+    // typographic single quote U+2019. Folded into a single pass: the
+    // substituted quote is neither a linebreak nor an invisible, so the order
+    // of the two Python steps does not affect the result.
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if ch == '`' {
+            out.push('\u{2019}');
+        } else if INVISIBLE_TO_DROP.contains(&ch) {
+            continue;
+        } else if LINEBREAK_TO_SPACE.contains(&ch) {
+            out.push(' ');
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 /// Wrap `payload` in a code fence it provably cannot escape.

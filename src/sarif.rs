@@ -37,11 +37,11 @@ pub fn synthesize_rule_id(severity: &str, description: &str, prefix: &str) -> St
     let mut hasher = Sha1::new();
     hasher.update(description.as_bytes());
     let digest = hasher.finalize();
-    // Hex-encode, take first 16 chars (8 bytes).
-    let mut slug = String::with_capacity(16);
-    for byte in &digest[..8] {
-        slug.push_str(&format!("{byte:02x}"));
-    }
+    // First 16 hex chars (8 bytes). Convert the leading 8 bytes to a big-endian
+    // u64 and format in one shot — byte-for-byte identical to per-byte `{:02x}`.
+    let mut head = [0u8; 8];
+    head.copy_from_slice(&digest[..8]);
+    let slug = format!("{:016x}", u64::from_be_bytes(head));
     format!("{prefix}/{}/{slug}", severity.to_ascii_lowercase())
 }
 

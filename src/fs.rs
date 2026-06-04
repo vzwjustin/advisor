@@ -34,8 +34,8 @@ pub fn validate_file_types(pattern: &str) -> Result<(), FileTypesError> {
                 "file_types pattern contains NUL byte: {piece:?}"
             )));
         }
-        let has_dotdot_segment =
-            piece.split('/').any(|seg| seg == "..") || piece.split('\\').any(|seg| seg == "..");
+        // A `..` segment delimited by either separator (single pass over both).
+        let has_dotdot_segment = piece.split(['/', '\\']).any(|seg| seg == "..");
         let starts_absolute = piece.starts_with('/') || piece.starts_with('\\');
         // Leading Windows drive letter, e.g. `C:`.
         let drive_letter = {
@@ -60,10 +60,13 @@ pub fn validate_file_types(pattern: &str) -> Result<(), FileTypesError> {
 /// `normalize_path`.
 pub fn normalize_path(path: &str) -> String {
     // p = path.lstrip("﻿").strip().strip("`").strip().replace("\\", "/")
-    let mut p: String = path.trim_start_matches('\u{FEFF}').trim().to_string();
-    p = p.trim_matches('`').to_string();
-    p = p.trim().to_string();
-    p = p.replace('\\', "/");
+    // Chain the trims on the &str slice so only the final replace allocates.
+    let mut p = path
+        .trim_start_matches('\u{FEFF}')
+        .trim()
+        .trim_matches('`')
+        .trim()
+        .replace('\\', "/");
 
     // Strip all leading "./" segments.
     while let Some(rest) = p.strip_prefix("./") {

@@ -16,6 +16,7 @@
 /// raw non-ASCII scalars, so escaping those — and only those — yields identical
 /// bytes.
 pub fn ensure_ascii(s: &str) -> String {
+    use std::fmt::Write;
     // Fast path: pure ASCII input needs no rewriting.
     if s.is_ascii() {
         return s.to_owned();
@@ -27,14 +28,17 @@ pub fn ensure_ascii(s: &str) -> String {
             continue;
         }
         let cp = ch as u32;
+        // Write directly into `out` to avoid a temporary String per scalar.
+        // Writing to a String is infallible, so the Result is intentionally
+        // discarded (no unwrap).
         if cp <= 0xFFFF {
-            out.push_str(&format!("\\u{:04x}", cp));
+            let _ = write!(out, "\\u{cp:04x}");
         } else {
             // Encode as a UTF-16 surrogate pair, exactly like CPython.
             let v = cp - 0x10000;
             let high = 0xD800 + (v >> 10);
             let low = 0xDC00 + (v & 0x3FF);
-            out.push_str(&format!("\\u{:04x}\\u{:04x}", high, low));
+            let _ = write!(out, "\\u{high:04x}\\u{low:04x}");
         }
     }
     out
