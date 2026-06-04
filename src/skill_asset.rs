@@ -4,8 +4,8 @@ pub fn version_badge() -> String {
     format!("<!-- advisor:{} -->", resolve_version())
 }
 
-const SKILL_MD_TEMPLATE: &str = include_str!("../advisor/skill_asset_skill_md.txt");
-const SKILL_MD_UPDATE_TEMPLATE: &str = include_str!("../advisor/skill_asset_skill_md_update.txt");
+const SKILL_MD_TEMPLATE: &str = include_str!("assets/skill_asset_skill_md.txt");
+const SKILL_MD_UPDATE_TEMPLATE: &str = include_str!("assets/skill_asset_skill_md_update.txt");
 
 pub fn skill_md() -> String {
     SKILL_MD_TEMPLATE.replace("__VERSION_BADGE__", &version_badge())

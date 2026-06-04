@@ -6,7 +6,7 @@
 //! implementation and ships alongside this binary.
 
 use std::collections::HashSet;
-use std::io::{IsTerminal, Read};
+use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -18,15 +18,15 @@ use advisor::baseline::{
     write_baseline,
 };
 use advisor::codex_skill::build_codex_runner_prompt;
-use advisor::install::{
-    codex_cli_available, get_installed_skill_version, get_status, install, install_skill,
-    install_update_skill, load_changelog_sections, load_release_notes,
-    uninstall_nudge, uninstall_skill, uninstall_update_skill, InstallAction, NUDGE_BODY,
-};
 use advisor::config::{default_team_config, TeamConfigInput};
 use advisor::fence::sanitize_inline;
 use advisor::focus::{
     self, create_focus_batches, create_focus_tasks, FocusBatch, FocusTask, DEFAULT_TASK_PROMPT,
+};
+use advisor::install::{
+    codex_cli_available, get_installed_skill_version, get_status, install, install_skill,
+    install_update_skill, load_changelog_sections, load_release_notes, uninstall_nudge,
+    uninstall_skill, uninstall_update_skill, InstallAction, NUDGE_BODY,
 };
 use advisor::jsonutil::ensure_ascii;
 use advisor::live::{append_event, latest_seq, live_events_path, load_recent_events};
@@ -616,13 +616,20 @@ fn main() -> ExitCode {
             quiet,
             strict,
         } => cmd_doctor(path, skill_path, json, quiet, strict),
-        Command::Changelog { version, since, json, quiet } => {
-            cmd_changelog(version, since, json, quiet)
-        }
+        Command::Changelog {
+            version,
+            since,
+            json,
+            quiet,
+        } => cmd_changelog(version, since, json, quiet),
         Command::Update { yes, quiet, json } => cmd_update(yes, quiet, json),
-        Command::Ui { target, port, host, json, quiet } => {
-            cmd_ui(&target, port, &host, json, quiet)
-        }
+        Command::Ui {
+            target,
+            port,
+            host,
+            json,
+            quiet,
+        } => cmd_ui(&target, port, &host, json, quiet),
         Command::Pipeline {
             target,
             json,
@@ -1927,7 +1934,11 @@ fn cmd_changelog(
                 "{}",
                 ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
             );
-            return if notes.is_some() { ExitCode::SUCCESS } else { ExitCode::FAILURE };
+            return if notes.is_some() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            };
         }
         match notes {
             Some(body) => {
@@ -1945,9 +1956,7 @@ fn cmd_changelog(
         if json {
             let arr: Vec<serde_json::Value> = sections
                 .iter()
-                .map(|(v, h, b)| {
-                    serde_json::json!({ "version": v, "heading": h, "body": b })
-                })
+                .map(|(v, h, b)| serde_json::json!({ "version": v, "heading": h, "body": b }))
                 .collect();
             let payload = serde_json::json!({
                 "schema_version": "1.0",
@@ -1989,14 +1998,269 @@ fn cmd_changelog(
 
 // ── update ────────────────────────────────────────────────────────────────────
 
-fn cmd_update(_yes: bool, quiet: bool, json: bool) -> ExitCode {
+fn supports_color() -> bool {
+    if std::env::var("NO_COLOR").is_ok() {
+        return false;
+    }
+    if std::env::var("CLICOLOR_FORCE")
+        .map(|v| v != "0")
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    if std::env::var("CLICOLOR").map(|v| v == "0").unwrap_or(false) {
+        return false;
+    }
+    if let Ok(term) = std::env::var("TERM") {
+        if term == "dumb" {
+            return false;
+        }
+    }
+    std::io::stdout().is_terminal()
+}
+
+fn paint(text: &str, ansi_code: &str) -> String {
+    if supports_color() {
+        format!("\x1b[{}m{}\x1b[0m", ansi_code, text)
+    } else {
+        text.to_string()
+    }
+}
+
+fn glyph(char_str: &str, fallback: &str) -> String {
+    if supports_color() {
+        char_str.to_string()
+    } else {
+        fallback.to_string()
+    }
+}
+
+fn ok(text: &str) -> String {
+    paint(text, "32")
+}
+
+fn error_box(text: &str) -> String {
+    let text_clean = advisor::style::strip_ansi(text);
+    let mark = glyph("✗", "[x]");
+    if supports_color() {
+        format!("{} {}", paint(&mark, "31;1"), paint(&text_clean, "31"))
+    } else {
+        format!("{mark} {text_clean}")
+    }
+}
+
+fn cta(action: &str, description: &str) -> String {
+    let bullet = glyph("→", ">");
+    if supports_color() {
+        let lead = paint(&bullet, "36;1");
+        let act = paint(action, "1");
+        if description.is_empty() {
+            format!("  {lead} {act}")
+        } else {
+            let desc = paint(description, "2");
+            format!("  {lead} {act}  {desc}")
+        }
+    } else {
+        let sep = if description.is_empty() { "" } else { "  " };
+        format!("  {bullet} {action}{sep}{description}")
+    }
+}
+
+fn banner(text: &str, width: usize) -> String {
+    let text_clean = advisor::style::strip_ansi(text);
+    if !supports_color() {
+        return format!("== {text_clean} ==");
+    }
+    let text_w = text_clean.chars().count();
+    let effective_width = std::cmp::max(width, text_w + 4);
+    let line = "━".repeat(effective_width);
+    let inner = effective_width - 4;
+    let left = (inner - text_w) / 2;
+    let right = inner - text_w - left;
+    let centered = format!("{}{}{}", " ".repeat(left), text_clean, " ".repeat(right));
+
+    let center_padded = format!("  {}  ", paint(&centered, "1"));
+    format!(
+        "{}{}{}\n{}{}{}\n{}{}{}",
+        paint("┏", "36"),
+        paint(&line, "36"),
+        paint("┓", "36"),
+        paint("┃", "36"),
+        center_padded,
+        paint("┃", "36"),
+        paint("┗", "36"),
+        paint(&line, "36"),
+        paint("┛", "36")
+    )
+}
+
+fn detect_install_method() -> Option<(String, Vec<String>)> {
+    let exe = std::env::current_exe().ok()?;
+    let exe_dir = exe.parent()?;
+
+    let is_local_target = exe_dir.ends_with("debug") || exe_dir.ends_with("release");
+    let has_cargo_toml = std::path::Path::new("Cargo.toml").exists();
+
+    if is_local_target || has_cargo_toml {
+        return Some((
+            "cargo install --path .".to_string(),
+            vec![
+                "cargo".to_string(),
+                "install".to_string(),
+                "--path".to_string(),
+                ".".to_string(),
+            ],
+        ));
+    }
+
+    let exe_path_str = exe.to_string_lossy().to_string();
+    if exe_path_str.contains(".cargo") {
+        return Some((
+            "cargo install advisor-rs".to_string(),
+            vec![
+                "cargo".to_string(),
+                "install".to_string(),
+                "advisor-rs".to_string(),
+            ],
+        ));
+    }
+
+    Some((
+        "cargo install advisor-rs".to_string(),
+        vec![
+            "cargo".to_string(),
+            "install".to_string(),
+            "advisor-rs".to_string(),
+        ],
+    ))
+}
+
+fn cmd_update(yes: bool, quiet: bool, json: bool) -> ExitCode {
     let current = advisor::resolve_version();
+    let method = detect_install_method();
+    if method.is_none() {
+        eprintln!(
+            "{}",
+            error_box(
+                "Could not auto-detect install method. Upgrade manually:\n  cargo install advisor-rs"
+            )
+        );
+        return ExitCode::from(1);
+    }
+    let (label, cmd) = method.unwrap();
+
+    if !quiet && !json {
+        println!(
+            "  {}",
+            paint(
+                &format!("checking PyPI for advisor-agent (current: v{current})..."),
+                "2"
+            )
+        );
+    }
+
+    let latest = advisor::install::fetch_pypi_latest_version("advisor-agent", 5);
+    let remote_changelog = advisor::install::fetch_remote_changelog(
+        "https://raw.githubusercontent.com/vzwjustin/advisor/main/CHANGELOG.md",
+        5,
+    );
+
+    let new_sections = if let Some(ref text) = remote_changelog {
+        advisor::install::parse_changelog_sections(text, Some(current))
+    } else {
+        Vec::new()
+    };
+
+    let mut nothing_to_upgrade = false;
+    if latest.is_none() && remote_changelog.is_none() {
+        if !quiet && !json {
+            println!(
+                "  {}",
+                paint(
+                    "(offline — preview unavailable, will run upgrade anyway)",
+                    "2"
+                )
+            );
+        }
+    } else if new_sections.is_empty() {
+        if let Some(ref lat) = latest {
+            let lat_newer = advisor::install::is_semver_newer(lat, current);
+            let cur_newer = advisor::install::is_semver_newer(current, lat);
+            if lat_newer {
+                if !quiet && !json {
+                    println!();
+                    println!("  {}", paint(&format!("(changelog preview unavailable — PyPI shows v{lat} newer than v{current})"), "2"));
+                }
+            } else {
+                if !quiet && !json {
+                    let check = glyph("✓", "[OK]");
+                    let msg = if cur_newer {
+                        format!("  {} ahead of published v{lat} (current: v{current} — dev or unreleased)", ok(&check))
+                    } else {
+                        format!(
+                            "  {} already on the latest published version (v{lat})",
+                            ok(&check)
+                        )
+                    };
+                    println!();
+                    println!("{msg}");
+                }
+                nothing_to_upgrade = true;
+            }
+        } else {
+            if !quiet && !json {
+                let check = glyph("✓", "[OK]");
+                println!();
+                println!(
+                    "  {} already on the latest version (v{})",
+                    ok(&check),
+                    current
+                );
+            }
+            nothing_to_upgrade = true;
+        }
+    } else if !quiet && !json {
+        let target_ver = latest.clone().unwrap_or_else(|| new_sections[0].0.clone());
+        let arrow = glyph("→", "->");
+        let title = format!("v{current}  {arrow}  v{target_ver}");
+        println!();
+        println!("{}", banner(&title, 60));
+        let n = new_sections.len();
+        let summary = if n == 1 {
+            "1 release ahead — here's what's new:".to_string()
+        } else {
+            format!("{n} releases ahead — here's what's new:")
+        };
+        println!("  {}", paint(&summary, "2"));
+        for (version, _heading, body) in &new_sections {
+            println!();
+            println!("{}", banner(&format!("v{version}"), 50));
+            println!("{body}");
+        }
+    }
+
+    if nothing_to_upgrade {
+        if json {
+            let payload = serde_json::json!({
+                "schema_version": "1.0",
+                "current_version": current,
+                "latest_version": latest.unwrap_or(current.to_string()),
+                "upgraded": false,
+            });
+            println!(
+                "{}",
+                ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
+            );
+        }
+        return ExitCode::SUCCESS;
+    }
+
     if json {
         let payload = serde_json::json!({
             "schema_version": "1.0",
             "current_version": current,
-            "note": "advisor update is not supported in the Rust binary; \
-                     run: uv tool install --reinstall advisor-agent",
+            "latest_version": latest.clone().unwrap_or(current.to_string()),
+            "note": "advisor update with --json is not fully supported; run without --json to confirm interactive upgrade",
         });
         println!(
             "{}",
@@ -2004,16 +2268,75 @@ fn cmd_update(_yes: bool, quiet: bool, json: bool) -> ExitCode {
         );
         return ExitCode::FAILURE;
     }
-    if !quiet {
-        eprintln!(
-            "advisor update is not supported in the Rust binary.\n\
-             To upgrade, run one of:\n\
-             \n  uv tool install --reinstall advisor-agent\
-             \n  pipx upgrade advisor-agent\
-             \n  pip install --upgrade advisor-agent\n"
-        );
+
+    if !yes && std::io::stdin().is_terminal() {
+        print!("\n  Proceed with `{label}` upgrade? [Y/n] ");
+        let mut input = String::new();
+        let _ = std::io::stdout().flush();
+        if std::io::stdin().read_line(&mut input).is_err() {
+            println!("\n  aborted");
+            return ExitCode::from(130);
+        }
+        let ans = input.trim().to_lowercase();
+        if !ans.is_empty() && ans != "y" && ans != "yes" {
+            println!("  aborted");
+            return ExitCode::SUCCESS;
+        }
     }
-    ExitCode::FAILURE
+
+    if !quiet {
+        println!();
+        println!("{}", cta(&label, &cmd.join(" ")));
+    }
+
+    let mut upgrade_cmd = std::process::Command::new(&cmd[0]);
+    upgrade_cmd.args(&cmd[1..]);
+    match upgrade_cmd.status() {
+        Ok(status) => {
+            if !status.success() {
+                eprintln!("{}", error_box("upgrade failed"));
+                return ExitCode::from(status.code().unwrap_or(1) as u8);
+            }
+        }
+        Err(e) => {
+            eprintln!("{}", error_box(&format!("upgrade failed: {e}")));
+            return ExitCode::from(1);
+        }
+    }
+
+    advisor::install::invalidate_update_check_cache(None);
+
+    let mut final_latest = latest;
+    if final_latest.is_none() && !quiet {
+        final_latest = Some(advisor::resolve_version().to_string());
+    }
+
+    if !quiet {
+        if let Some(ref lat) = final_latest {
+            if lat != current {
+                println!();
+                println!("{}", banner(&format!("Updated: v{current} → v{lat}"), 60));
+            }
+        }
+    }
+
+    let mut install_cmd = std::process::Command::new(
+        std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("advisor")),
+    );
+    install_cmd.arg("install");
+    if quiet {
+        install_cmd.arg("--quiet");
+    }
+    match install_cmd.status() {
+        Ok(status) => ExitCode::from(status.code().unwrap_or(0) as u8),
+        Err(e) => {
+            eprintln!(
+                "{}",
+                error_box(&format!("post-upgrade install re-exec failed: {e}"))
+            );
+            ExitCode::from(1)
+        }
+    }
 }
 
 // ── ui ────────────────────────────────────────────────────────────────────────
@@ -2028,32 +2351,73 @@ fn cmd_ui(target: &str, port: u16, host: &str, json: bool, quiet: bool) -> ExitC
         eprintln!("target is not a directory: {target}");
         return ExitCode::from(2);
     }
+
     if json {
+        if port == 0 {
+            eprintln!("✗ --json cannot be combined with --port 0 because no server is bound");
+            return ExitCode::from(2);
+        }
         let display_host = if host.contains(':') {
             format!("[{host}]")
         } else {
             host.to_string()
         };
+        let url = format!("http://{display_host}:{port}");
         let payload = serde_json::json!({
             "schema_version": "1.0",
-            "url": format!("http://{}:{}", display_host, port),
-            "note": "advisor ui is not supported in the Rust binary; \
-                     run: advisor ui (Python CLI)",
+            "url": url,
             "server_running": false,
         });
         println!(
             "{}",
             ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
         );
-        return ExitCode::FAILURE;
+        return ExitCode::SUCCESS;
     }
-    if !quiet {
-        eprintln!(
-            "advisor ui is not supported in the Rust binary.\n\
-             Run the Python CLI: advisor ui {target}"
+
+    let target_canonical = match target_path.canonicalize() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("✗ filesystem error scanning {}: {e}", target_path.display());
+            return ExitCode::from(2);
+        }
+    };
+
+    let config = advisor::config::default_team_config(advisor::config::TeamConfigInput::new(
+        target_canonical.to_string_lossy().to_string(),
+    ));
+
+    let state = advisor::web::AppState {
+        target: target_canonical,
+        default_file_types: config.file_types,
+        default_min_priority: config.min_priority as u8,
+        default_max_runners: config.max_runners as usize,
+        default_advisor_model: config.advisor_model,
+        default_runner_model: config.runner_model,
+    };
+
+    match advisor::web::run_server(state, host, port, false, quiet) {
+        Ok(_) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("✗ {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn maybe_print_update_indicator() {
+    let current = advisor::resolve_version();
+    if let Some(update) = advisor::check_for_update_cached(current, 86400, None) {
+        let warn_char = glyph("⚠", "[!]");
+        let warn = paint(&warn_char, "33;1");
+        let msg = paint(&format!("update available: v{update}"), "33");
+        let cur = paint(
+            &format!("(current: v{current} — run `advisor update`)"),
+            "2",
         );
+        println!();
+        println!("  {warn} {msg} {cur}");
     }
-    ExitCode::FAILURE
 }
 
 // ── install / uninstall / status / doctor ────────────────────────────────────
@@ -2091,12 +2455,12 @@ fn print_status(
     let installed_v = get_installed_skill_version(sp);
     let version = advisor::resolve_version();
 
-    let update_ok = s.update_skill.as_ref().map_or(true, |u| u.present && u.current);
-    let healthy = s.nudge.present
-        && s.nudge.current
-        && s.skill.present
-        && s.skill.current
-        && update_ok;
+    let update_ok = s
+        .update_skill
+        .as_ref()
+        .map_or(true, |u| u.present && u.current);
+    let healthy =
+        s.nudge.present && s.nudge.current && s.skill.present && s.skill.current && update_ok;
 
     if json {
         let mut payload = serde_json::json!({
@@ -2132,14 +2496,21 @@ fn print_status(
         if let Some(v) = &installed_v {
             println!("  installed skill version: {v}");
         }
-        println!("{}", format_component("nudge (CLAUDE.md)", s.nudge.present, s.nudge.current));
-        println!("{}", format_component("skill (SKILL.md)", s.skill.present, s.skill.current));
+        println!(
+            "{}",
+            format_component("nudge (CLAUDE.md)", s.nudge.present, s.nudge.current)
+        );
+        println!(
+            "{}",
+            format_component("skill (SKILL.md)", s.skill.present, s.skill.current)
+        );
         if let Some(u) = &s.update_skill {
             println!("{}", format_component("update-skill", u.present, u.current));
         }
         if s.opt_out {
             println!("  (ADVISOR_NO_NUDGE is set)");
         }
+        maybe_print_update_indicator();
     }
     (healthy, ExitCode::SUCCESS)
 }
@@ -2190,16 +2561,15 @@ fn cmd_install(
         None
     };
 
-    let emit = |label: &str, res: &Result<advisor::install::InstallResult, std::io::Error>| {
-        match res {
+    let emit =
+        |label: &str, res: &Result<advisor::install::InstallResult, std::io::Error>| match res {
             Ok(r) => {
                 if !quiet {
                     println!("  {} {label}", r.action);
                 }
             }
             Err(e) => eprintln!("  error {label}: {e}"),
-        }
-    };
+        };
 
     if !json {
         emit("nudge (CLAUDE.md)", &nudge_result);
@@ -2217,14 +2587,12 @@ fn cmd_install(
             println!("Next: /advisor <path>");
         }
     } else {
-        let to_json = |res: &Result<advisor::install::InstallResult, std::io::Error>| {
-            match res {
-                Ok(r) => serde_json::json!({
-                    "action": r.action.as_str(),
-                    "path": r.path.display().to_string(),
-                }),
-                Err(e) => serde_json::json!({ "error": e.to_string() }),
-            }
+        let to_json = |res: &Result<advisor::install::InstallResult, std::io::Error>| match res {
+            Ok(r) => serde_json::json!({
+                "action": r.action.as_str(),
+                "path": r.path.display().to_string(),
+            }),
+            Err(e) => serde_json::json!({ "error": e.to_string() }),
         };
         let mut payload = serde_json::json!({
             "schema_version": "1.0",
@@ -2260,14 +2628,12 @@ fn cmd_uninstall(
     let update_result = uninstall_update_skill(Some(&up));
 
     if json {
-        let to_json = |res: &Result<advisor::install::InstallResult, std::io::Error>| {
-            match res {
-                Ok(r) => serde_json::json!({
-                    "action": r.action.as_str(),
-                    "path": r.path.display().to_string(),
-                }),
-                Err(e) => serde_json::json!({ "error": e.to_string() }),
-            }
+        let to_json = |res: &Result<advisor::install::InstallResult, std::io::Error>| match res {
+            Ok(r) => serde_json::json!({
+                "action": r.action.as_str(),
+                "path": r.path.display().to_string(),
+            }),
+            Err(e) => serde_json::json!({ "error": e.to_string() }),
         };
         let payload = serde_json::json!({
             "schema_version": "1.0",
@@ -2349,6 +2715,7 @@ fn cmd_doctor(
         } else {
             println!("Next: advisor install");
         }
+        maybe_print_update_indicator();
     }
 
     if strict && !report.healthy {
@@ -2577,7 +2944,10 @@ fn cmd_live(action: LiveAction) -> ExitCode {
                 return ExitCode::SUCCESS;
             }
             if events.is_empty() {
-                eprintln!("no live events yet at {}", live_events_path(&target).display());
+                eprintln!(
+                    "no live events yet at {}",
+                    live_events_path(&target).display()
+                );
                 return ExitCode::SUCCESS;
             }
             for ev in &events {
@@ -2766,11 +3136,12 @@ fn collect_files_by_glob_patterns(root: &Path, patterns: &[String]) -> Vec<Strin
 fn cmd_codex_plan_csv(args: CodexPlanCsvArgs) -> ExitCode {
     let target = PathBuf::from(&args.target);
     let ignore_patterns = load_advisorignore(&args.target);
-    let preset_extras: Option<Vec<(i64, Vec<&'static str>)>> = args.preset.as_deref().and_then(|p| {
-        presets::get_preset(p)
-            .ok()
-            .map(|rp| rp.extra_keywords_by_tier.clone())
-    });
+    let preset_extras: Option<Vec<(i64, Vec<&'static str>)>> =
+        args.preset.as_deref().and_then(|p| {
+            presets::get_preset(p)
+                .ok()
+                .map(|rp| rp.extra_keywords_by_tier.clone())
+        });
 
     let paths = match advisor::git_scope::resolve_git_scope(
         &target,
@@ -2817,7 +3188,11 @@ fn cmd_codex_plan_csv(args: CodexPlanCsvArgs) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let batch_size = if args.batch_size == 0 { 5 } else { args.batch_size };
+    let batch_size = if args.batch_size == 0 {
+        5
+    } else {
+        args.batch_size
+    };
     let batches = match create_focus_batches(&tasks, batch_size, "auto") {
         Ok(b) => b,
         Err(e) => {

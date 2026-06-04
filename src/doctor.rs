@@ -3,8 +3,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::install::{
-    codex_cli_available, default_codex_skills_root, get_installed_skill_version,
-    get_status, update_skill_path_for, OPT_OUT_ENV,
+    codex_cli_available, default_codex_skills_root, get_installed_skill_version, get_status,
+    update_skill_path_for, OPT_OUT_ENV,
 };
 use crate::version::resolve_version;
 
@@ -72,13 +72,25 @@ pub struct Check {
 
 impl Check {
     fn ok(name: &str, msg: &str) -> Self {
-        Self { name: name.to_string(), level: HealthLevel::Ok, message: msg.to_string() }
+        Self {
+            name: name.to_string(),
+            level: HealthLevel::Ok,
+            message: msg.to_string(),
+        }
     }
     fn warn(name: &str, msg: &str) -> Self {
-        Self { name: name.to_string(), level: HealthLevel::Warn, message: msg.to_string() }
+        Self {
+            name: name.to_string(),
+            level: HealthLevel::Warn,
+            message: msg.to_string(),
+        }
     }
     fn fail(name: &str, msg: &str) -> Self {
-        Self { name: name.to_string(), level: HealthLevel::Fail, message: msg.to_string() }
+        Self {
+            name: name.to_string(),
+            level: HealthLevel::Fail,
+            message: msg.to_string(),
+        }
     }
 
     pub fn to_json(&self) -> serde_json::Value {
@@ -123,7 +135,10 @@ fn check_git() -> Check {
     if which("git") {
         Check::ok("git", "git available on PATH")
     } else {
-        Check::warn("git", "git not on PATH; --since/--staged/--branch will be unavailable")
+        Check::warn(
+            "git",
+            "git not on PATH; --since/--staged/--branch will be unavailable",
+        )
     }
 }
 
@@ -172,7 +187,10 @@ fn check_home_dir(check_name: &str, dir_path: &Path) -> Check {
             Err(e) => {
                 return Check::warn(
                     check_name,
-                    &format!("{} is a symlink that could not be resolved: {e}", dir_path.display()),
+                    &format!(
+                        "{} is a symlink that could not be resolved: {e}",
+                        dir_path.display()
+                    ),
                 );
             }
         }
@@ -182,7 +200,10 @@ fn check_home_dir(check_name: &str, dir_path: &Path) -> Check {
                 .unwrap_or_else(|e| format!("<unreadable: {e}>"));
             return Check::warn(
                 check_name,
-                &format!("{} is a broken symlink (target: {target})", dir_path.display()),
+                &format!(
+                    "{} is a broken symlink (target: {target})",
+                    dir_path.display()
+                ),
             );
         }
     }
@@ -201,7 +222,10 @@ fn check_home_dir(check_name: &str, dir_path: &Path) -> Check {
             &format!("{} exists but is not a directory", dir_path.display()),
         );
     }
-    Check::ok(check_name, &format!("{} is a regular directory", dir_path.display()))
+    Check::ok(
+        check_name,
+        &format!("{} is a regular directory", dir_path.display()),
+    )
 }
 
 fn check_claude_home() -> Check {
@@ -220,7 +244,10 @@ fn check_codex_skill_install() -> Option<Check> {
     if !skill_path.exists() {
         Some(Check::warn(
             "install-codex-skill",
-            &format!("codex skill not installed at {} (run: advisor install)", skill_path.display()),
+            &format!(
+                "codex skill not installed at {} (run: advisor install)",
+                skill_path.display()
+            ),
         ))
     } else {
         Some(Check::ok(
@@ -236,8 +263,7 @@ fn check_install(
     current_version: &str,
 ) -> Vec<Check> {
     let mut checks = Vec::new();
-    let mut components: Vec<&crate::install::ComponentStatus> =
-        vec![&status.nudge, &status.skill];
+    let mut components: Vec<&crate::install::ComponentStatus> = vec![&status.nudge, &status.skill];
     if let Some(u) = &status.update_skill {
         components.push(u);
     }
@@ -306,13 +332,18 @@ pub fn run_doctor(nudge_path: Option<&Path>, skill_path: Option<&Path>) -> Docto
     let status = get_status(nudge_path, skill_path, Some(&update_sp));
     let installed = get_installed_skill_version(skill_path);
 
-    let mut checks = vec![check_git(), check_claude_cli(), check_codex_cli(), check_claude_home()];
+    let mut checks = vec![
+        check_git(),
+        check_claude_cli(),
+        check_codex_cli(),
+        check_claude_home(),
+    ];
 
     let codex_present = codex_cli_available();
     if codex_present {
         checks.push(check_codex_home());
     }
-    checks.extend(check_install(&status, installed.as_deref(), &version));
+    checks.extend(check_install(&status, installed.as_deref(), version));
     if codex_present {
         if let Some(c) = check_codex_skill_install() {
             checks.push(c);
@@ -322,7 +353,7 @@ pub fn run_doctor(nudge_path: Option<&Path>, skill_path: Option<&Path>) -> Docto
     let healthy = !checks.iter().any(|c| c.level == HealthLevel::Fail);
     let platform = {
         let os = std::env::consts::OS;
-        format!("{os}")
+        os.to_string()
     };
 
     DoctorReport {

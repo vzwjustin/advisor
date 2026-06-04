@@ -266,19 +266,40 @@ mod tests {
         let presets = list_presets();
         assert_eq!(presets.len() as u64, v["preset_count"].as_u64().unwrap());
         let names: Vec<&str> = presets.iter().map(|p| p.name).collect();
-        let expected: Vec<&str> =
-            v["preset_names"].as_array().unwrap().iter().map(|s| s.as_str().unwrap()).collect();
+        let expected: Vec<&str> = v["preset_names"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s.as_str().unwrap())
+            .collect();
         // Python's PRESETS dict is insertion-ordered; Rust may sort differently — check set equality
         let mut got = names.clone();
         got.sort_unstable();
         let mut exp = expected.clone();
         exp.sort_unstable();
         assert_eq!(got, exp);
-        assert_eq!(get_preset("python-web").unwrap().file_types, v["python_web_file_types"].as_str().unwrap());
-        assert_eq!(get_preset("python-web").unwrap().min_priority as u64, v["python_web_min_priority"].as_u64().unwrap());
-        assert_eq!(!get_preset("python-web").unwrap().extra_keywords_by_tier.is_empty(), v["python_web_has_extra_keywords"].as_bool().unwrap());
-        assert_eq!(get_preset("rust-crate").unwrap().file_types, v["rust_crate_file_types"].as_str().unwrap());
-        assert!(get_preset("nonexistent-preset").is_err() == v["get_unknown_raises"].as_bool().unwrap());
+        assert_eq!(
+            get_preset("python-web").unwrap().file_types,
+            v["python_web_file_types"].as_str().unwrap()
+        );
+        assert_eq!(
+            get_preset("python-web").unwrap().min_priority as u64,
+            v["python_web_min_priority"].as_u64().unwrap()
+        );
+        assert_eq!(
+            !get_preset("python-web")
+                .unwrap()
+                .extra_keywords_by_tier
+                .is_empty(),
+            v["python_web_has_extra_keywords"].as_bool().unwrap()
+        );
+        assert_eq!(
+            get_preset("rust-crate").unwrap().file_types,
+            v["rust_crate_file_types"].as_str().unwrap()
+        );
+        assert!(
+            get_preset("nonexistent-preset").is_err() == v["get_unknown_raises"].as_bool().unwrap()
+        );
     }
 
     #[test]
