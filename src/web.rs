@@ -31,31 +31,38 @@ pub struct AppState {
 
 const ACTIVE_WINDOW_SECONDS: f64 = 15.0;
 
-// Simple percent decoding function
+// Percent-decode a URL component. Accumulates raw bytes then UTF-8-decodes once,
+// so multi-byte sequences (e.g. %C3%A9) decode correctly instead of as Latin-1.
 fn decode_percent(s: &str) -> String {
-    let mut res = String::new();
-    let mut bytes = s.as_bytes().iter();
-    while let Some(&b) = bytes.next() {
-        if b == b'%' {
-            if let (Some(&h), Some(&l)) = (bytes.next(), bytes.next()) {
-                if let Some(c) = hex_to_char(h, l) {
-                    res.push(c);
+    let bytes = s.as_bytes();
+    let mut buf: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            if i + 2 < bytes.len() {
+                if let Some(b) = hex_byte(bytes[i + 1], bytes[i + 2]) {
+                    buf.push(b);
+                    i += 3;
                     continue;
                 }
             }
-        } else if b == b'+' {
-            res.push(' ');
-            continue;
+            // truncated or invalid %XX: emit remaining bytes literally
+            buf.extend_from_slice(&bytes[i..]);
+            break;
+        } else if bytes[i] == b'+' {
+            buf.push(b' ');
+        } else {
+            buf.push(bytes[i]);
         }
-        res.push(b as char);
+        i += 1;
     }
-    res
+    String::from_utf8_lossy(&buf).into_owned()
 }
 
-fn hex_to_char(h: u8, l: u8) -> Option<char> {
-    let h_val = (h as char).to_digit(16)?;
-    let l_val = (l as char).to_digit(16)?;
-    char::from_u32((h_val << 4) | l_val)
+fn hex_byte(h: u8, l: u8) -> Option<u8> {
+    let h_val = (h as char).to_digit(16)? as u8;
+    let l_val = (l as char).to_digit(16)? as u8;
+    Some((h_val << 4) | l_val)
 }
 
 // Simple query parameter parser
@@ -299,7 +306,7 @@ fn handle_get(state: &AppState, request: tiny_http::Request) {
         format!("[::1]:{bound_port}"),
     ];
 
-    if !allowed_hosts.iter().any(|allowed| host_header == allowed) && !host_header.is_empty() {
+    if host_header.is_empty() || !allowed_hosts.iter().any(|allowed| host_header == allowed) {
         send_json(request, 403, &json!({"error": "forbidden"}));
         return;
     }
@@ -557,7 +564,7 @@ pub fn run_server(
                 if log_requests {
                     eprintln!("Error receiving request: {}", e);
                 }
-                break;
+                continue;
             }
         };
 
@@ -573,6 +580,7 @@ pub fn run_server(
         handle_get(&state, request);
     }
 
+    #[allow(unreachable_code)]
     Ok(())
 }
 

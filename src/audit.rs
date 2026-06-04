@@ -292,27 +292,26 @@ fn audit_context_pressure(transcript: &str) -> (Vec<String>, usize) {
 fn audit_protocol_violations(transcript: &str) -> (Vec<String>, bool) {
     let unfenced = strip_fenced_blocks(transcript);
     let mut order: Vec<String> = Vec::new();
-    let mut counts: Vec<(String, i64)> = Vec::new();
+    let mut counts: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
     let mut truncated = false;
+    let mut total = 0usize;
     for m in PROTOCOL_VIOLATION_RE.find_iter(&unfenced) {
-        let text = m.as_str().to_string();
-        if !counts.iter().any(|(k, _)| *k == text) {
-            if order.len() >= PROTOCOL_VIOLATION_CAP {
-                truncated = true;
-                continue;
-            }
-            order.push(text.clone());
+        if total >= PROTOCOL_VIOLATION_CAP {
+            truncated = true;
+            break;
         }
-        upsert_count(&mut counts, &text);
+        total += 1;
+        let text = m.as_str().to_string();
+        let entry = counts.entry(text.clone()).or_insert(0);
+        if *entry == 0 {
+            order.push(text);
+        }
+        *entry += 1;
     }
     let violations = order
         .iter()
         .map(|text| {
-            let n = counts
-                .iter()
-                .find(|(k, _)| k == text)
-                .map(|(_, c)| *c)
-                .unwrap_or(1);
+            let n = counts.get(text).copied().unwrap_or(1);
             if n == 1 {
                 text.clone()
             } else {

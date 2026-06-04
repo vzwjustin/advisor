@@ -180,7 +180,7 @@ pub fn load_suppressions(path: &Path) -> Result<Vec<Suppression>, String> {
         }
         let obj: serde_json::Value = match serde_json::from_str(stripped) {
             Ok(v) => v,
-            Err(_) => continue, // malformed JSON line: skip (warn elided)
+            Err(err) => return Err(format!("{}:{}: invalid JSON — {err}", path.display(), line_no)),
         };
         let Some(map) = obj.as_object() else { continue };
         if map
