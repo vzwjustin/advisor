@@ -36,6 +36,7 @@ parity assertions.
 | `src/fence.rs` | `orchestrate/_fence.py` | `sanitize_inline`, `fence` (+ linebreak/invisible strip) | Unit tests vs Python outputs |
 | `src/style.rs` | `_style.py` | `strip_ansi` (CSI+OSC regex) | Unit tests |
 | `src/fs.rs` | `_fs.py` | `normalize_path`, `validate_file_types`, `CONTENT_SCAN_LIMIT`, POSIX `normpath` | Reference table vs Python (10 cases) |
+| `src/checkpoint.rs` | `checkpoint.py` | `Checkpoint`, `checkpoint_path`, run-id validation, `load_checkpoint`, `list_checkpoints` | unit (load round-trip, run-id validation) + backs `advisor audit` |
 | `src/audit.rs` | `audit.py` | transcript analysis: fix-assignment counting + runner attribution (SendMessage-envelope/proximity), cap overruns, CONTEXT_PRESSURE attribution, PROTOCOL_VIOLATION dedup/cap, fenced-block stripping, handoff/rotation count, scope-drift classification; `AuditReport`, `audit_to_dict`, `format_audit_report` | **Golden JSON** vs Python (full `audit_to_dict` + `format` on a crafted transcript) |
 | `src/suppressions.rs` | `suppressions.py` | `Suppression` + `matches`, `severity_from_rule_id`, `**`-aware glob match (shared with rank) + fnmatch fallback, `until` date validation/expiry (UTC), `load_suppressions` (structural validation → errors), `apply_suppressions` | **Golden JSON** vs Python (severity ranks, matches, apply, load valid + 4 error shapes) |
 | `src/baseline.rs` | `baseline.py` | `BaselineEntry`/`BaselineDiff`, `findings_to_entries`, `description_hash`, `normalize_identity_path`, `write_baseline`/`read_baseline` (JSONL), `filter_against_baseline`, `diff_against_baseline` (incl. abs/rel suffix aliasing) | **Golden JSON** vs Python (entries, written bytes, hashes, normalize, filter, diff) |
@@ -62,6 +63,8 @@ parity assertions.
 | `advisor plan --json` (flat/batch/min-priority/preset) | ✓ | ✓ | **IDENTICAL** end-to-end (discovery→rank→focus→JSON) on a fixture tree | `scripts/parity_check.sh` (4 variants) |
 | `advisor baseline create` (file bytes) | ✓ | ✓ | **IDENTICAL** written `baseline.jsonl` (JSON findings input) | `scripts/parity_check.sh` |
 | `advisor baseline diff --json` | ✓ | ✓ | **IDENTICAL** (new/persisting_count/fixed) | `scripts/parity_check.sh` |
+| `advisor suppressions [--json/--expired]` | ✓ | ✓ | **IDENTICAL** (list/json/expired) | `scripts/parity_check.sh` |
+| `advisor audit --json` / `--format pr-comment` / `--fail-on` | ✓ | ✓ | **IDENTICAL** end-to-end (checkpoint+transcript) incl. exit-4 gate | `scripts/parity_check.sh` |
 | `advisor --version` | n/a (`advisor version`) | ✓ | Intentional difference — Rust uses clap `--version`; full `version` subcommand pending | classified *intentional* |
 | `sanitize_inline` / `fence` | ✓ | ✓ | IDENTICAL on tested inputs | |
 | `normalize_path` | ✓ | ✓ | IDENTICAL on 10-case reference table | |
@@ -82,8 +85,8 @@ Everything else. The Python package is fully intact and authoritative. Largest
 remaining work, roughly in dependency order (see `RUST_PORT_PLAN.md` §6):
 
 - **Core logic**: `runner_budget.py`, `git_scope.py` (subprocess),
-  `history.py`, `checkpoint.py` (JSON load/save — needed to wire `advisor audit`
-  RUN_ID), full `cost.py` estimator, remaining `_fs.py` nuances.
+  `history.py`, full `cost.py` estimator, remaining `_fs.py` nuances,
+  `checkpoint.py` save path (`plan --checkpoint`).
 - **Orchestration prompts**: `advisor_prompt.py`, `runner_prompts.py`,
   `verify_dispatch.py`, `pipeline.py`, `_schema.py`, the embedded
   `_prompts/advisor.txt`, and the 20+ golden snapshot fixtures (parity linchpin).
@@ -123,11 +126,12 @@ remaining work, roughly in dependency order (see `RUST_PORT_PLAN.md` §6):
 
 `rank.py`, `focus.py`, `config.py`, `verify.py`, `sarif.py`, and the
 **`advisor plan` CLI** are now ported and parity-verified. Next:
-1. Port **`checkpoint.py`** (`run-<id>.json` load/save) then wire **`advisor audit RUN_ID`**
-   (load checkpoint → `audit_transcript` → `--format pretty/json/pr-comment` +
-   `--fail-on` + `--sarif` + `--baseline`) — `audit`, `sarif`, `pr_comment`,
-   `baseline`, `suppressions` are all ported, so only the checkpoint loader gates it.
-2. Remaining `plan` flags not yet wired (documented gaps): `--since/--staged/--branch`
+1. Port **`cost.py`** estimator + wire `plan --estimate`/`--dump-pricing-template`,
+   and **`git_scope.py`** + wire `plan --since/--staged/--branch`.
+2. Port **`history.py`** to close the `plan` history-ranking gap, then
+   **`checkpoint.py` save** for `plan --checkpoint`/`--resume` and the
+   `advisor checkpoints` list command (loader already ported).
+3. Remaining `plan` flags not yet wired (documented gaps): `--since/--staged/--branch`
    (needs `git_scope.py`), `--estimate`/`--pricing` (needs full `cost.py`),
    `--checkpoint`/`--resume` (needs `checkpoint.py`), `--sarif`, `--exclude`,
    `--output`, and **history-informed ranking** (needs `history.py` — the Rust

@@ -10,6 +10,7 @@
 
 pub mod audit;
 pub mod baseline;
+pub mod checkpoint;
 pub mod config;
 pub mod cost;
 pub mod fence;
@@ -35,6 +36,7 @@ pub use baseline::{
     diff_against_baseline, filter_against_baseline, findings_to_entries, read_baseline,
     write_baseline, BaselineDiff, BaselineEntry,
 };
+pub use checkpoint::{checkpoint_path, list_checkpoints, load_checkpoint, Checkpoint};
 pub use config::{
     default_team_config, is_known_model, TeamConfig, TeamConfigInput, DEFAULT_ADVISOR_MODEL,
     DEFAULT_RUNNER_MODEL, POOL_SIZE_CEILING,

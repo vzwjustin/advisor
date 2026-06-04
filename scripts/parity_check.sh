@@ -117,6 +117,48 @@ JSONL
 }
 suppressions_check
 
+# ── audit: --json + --format pr-comment + --fail-on exit code ──
+audit_check() {
+  local tmp; tmp="$(mktemp -d)"; mkdir -p "$tmp/.advisor"
+  cat > "$tmp/.advisor/run-r1.json" <<'JSON'
+{"run_id":"r1","created_at":"2026-06-04T00:00:00+00:00","target":"/repo","team_name":"review","file_types":"*.py","min_priority":3,"max_runners":5,"advisor_model":"claude-opus-4-7","runner_model":"claude-sonnet-4-6","max_fixes_per_runner":2,"large_file_line_threshold":800,"large_file_max_fixes":3,"test_command":"","context":"","tasks":[{"file_path":"src/auth.py","priority":5,"prompt":"p"}],"batches":[{"batch_id":1,"complexity":"high","top_priority":5,"tasks":[{"file_path":"src/auth.py","priority":5}]}],"schema_version":"1.0"}
+JSON
+  cat > "$tmp/t.txt" <<'TXT'
+SendMessage(to='runner-2', message='d')
+## Fix assignment (fix 3 of 2)
+runner-2 CONTEXT_PRESSURE
+## Handoff from runner-2
+
+### Finding 1
+- **File**: `src/auth.py:10`
+- **Severity**: HIGH
+- **Description**: in-batch issue
+- **Evidence**: ev
+- **Fix**: fx
+
+### Finding 2
+- **File**: `other/drift.py:5`
+- **Severity**: LOW
+- **Description**: out of batch
+- **Evidence**: e2
+- **Fix**: f2
+TXT
+  local py rs name args
+  for spec in "audit --json::--json" "audit pr-comment::--format pr-comment"; do
+    name="${spec%%::*}"; args="${spec##*::}"
+    py="$(NO_COLOR=1 $PY audit r1 "$tmp" --transcript "$tmp/t.txt" $args 2>/dev/null || true)"
+    rs="$(NO_COLOR=1 "$RUST_BIN" audit r1 "$tmp" --transcript "$tmp/t.txt" $args 2>/dev/null || true)"
+    if [[ "$py" == "$rs" ]]; then echo "PASS  $name"; else echo "FAIL  $name"; diff <(printf '%s' "$py") <(printf '%s' "$rs") | sed 's/^/    /'; fail=1; fi
+  done
+  # --fail-on exit codes (capture without tripping set -e)
+  local pc=0 rc=0
+  NO_COLOR=1 $PY audit r1 "$tmp" --transcript "$tmp/t.txt" --json --fail-on high >/dev/null 2>&1 || pc=$?
+  NO_COLOR=1 "$RUST_BIN" audit r1 "$tmp" --transcript "$tmp/t.txt" --json --fail-on high >/dev/null 2>&1 || rc=$?
+  if [[ "$pc" == "$rc" && "$pc" == 4 ]]; then echo "PASS  audit --fail-on (exit $pc)"; else echo "FAIL  audit --fail-on (py=$pc rs=$rc)"; fail=1; fi
+  rm -rf "$tmp"
+}
+audit_check
+
 if [[ "$fail" -ne 0 ]]; then
   echo "parity check FAILED" >&2
   exit 1

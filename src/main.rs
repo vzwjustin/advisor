@@ -12,8 +12,10 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+use advisor::audit::AuditCheckpoint;
 use advisor::baseline::{
-    diff_against_baseline, findings_to_entries, read_baseline, write_baseline,
+    diff_against_baseline, filter_against_baseline, findings_to_entries, read_baseline,
+    write_baseline,
 };
 use advisor::config::{default_team_config, TeamConfigInput};
 use advisor::focus::{
@@ -76,6 +78,31 @@ enum Command {
     Baseline {
         #[command(subcommand)]
         action: BaselineAction,
+    },
+    /// Analyze a run transcript against a saved checkpoint.
+    Audit {
+        /// Checkpoint run id (see `advisor checkpoints`).
+        run_id: String,
+        #[arg(default_value = ".")]
+        target: String,
+        /// Transcript file ("-" = stdin, the default).
+        #[arg(long, default_value = "-")]
+        transcript: String,
+        /// Emit the report as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Write in-batch findings as SARIF 2.1.0 to PATH.
+        #[arg(long)]
+        sarif: Option<String>,
+        /// Exit 4 if any in-batch finding meets/exceeds LEVEL.
+        #[arg(long = "fail-on", default_value = "never", value_parser = ["never", "low", "medium", "high", "critical"])]
+        fail_on: String,
+        /// Output format.
+        #[arg(long, default_value = "pretty", value_parser = ["pretty", "json", "pr-comment"])]
+        format: String,
+        /// Suppress findings matching this baseline JSONL.
+        #[arg(long = "baseline")]
+        baseline_path: Option<String>,
     },
     /// List active (or expired) false-positive suppressions.
     Suppressions {
@@ -147,6 +174,25 @@ fn main() -> ExitCode {
             no_history,
         }),
         Command::Baseline { action } => cmd_baseline(action),
+        Command::Audit {
+            run_id,
+            target,
+            transcript,
+            json,
+            sarif,
+            fail_on,
+            format,
+            baseline_path,
+        } => cmd_audit(AuditArgs {
+            run_id,
+            target,
+            transcript,
+            json,
+            sarif,
+            fail_on,
+            format,
+            baseline_path,
+        }),
         Command::Suppressions {
             target,
             list,
@@ -688,4 +734,195 @@ fn cmd_baseline(action: BaselineAction) -> ExitCode {
             ExitCode::SUCCESS
         }
     }
+}
+
+// ── audit ──────────────────────────────────────────────────────────
+
+struct AuditArgs {
+    run_id: String,
+    target: String,
+    transcript: String,
+    json: bool,
+    sarif: Option<String>,
+    fail_on: String,
+    format: String,
+    baseline_path: Option<String>,
+}
+
+/// Exit code 4 if any finding meets/exceeds `threshold`. Mirrors
+/// `_fail_on_findings` (UNKNOWN ranks 99 so only `--fail-on never`/below skips it).
+fn fail_on_exit(threshold: &str, findings: &[Finding]) -> Option<u8> {
+    if threshold.is_empty() || threshold == "never" {
+        return None;
+    }
+    let gate = match threshold {
+        "low" => 1,
+        "medium" => 2,
+        "high" => 3,
+        "critical" => 4,
+        _ => 99,
+    };
+    let rank = |sev: &str| match sev.to_uppercase().as_str() {
+        "LOW" => 1,
+        "MEDIUM" => 2,
+        "HIGH" => 3,
+        "CRITICAL" => 4,
+        "UNKNOWN" => 99,
+        _ => 0,
+    };
+    if findings.iter().any(|f| rank(&f.severity) >= gate) {
+        Some(4)
+    } else {
+        None
+    }
+}
+
+/// Write a SARIF doc for `findings`. Mirrors `_write_sarif` (returns Some(exit)
+/// on error). Writes `json.dumps(indent=2) + "\n"`.
+fn write_sarif(path: &Path, findings: &[Finding], target: &Path) -> Option<u8> {
+    match advisor::sarif::findings_to_sarif(findings, advisor::resolve_version(), target, "advisor")
+    {
+        Ok(doc) => {
+            let rendered = format!("{}\n", advisor::sarif::to_pretty_json(&doc));
+            match advisor::fs::atomic_write_text(path, &rendered) {
+                Ok(()) => None,
+                Err(e) => {
+                    eprintln!("✗ sarif: {e}");
+                    Some(1)
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("✗ sarif: {e}");
+            Some(1)
+        }
+    }
+}
+
+/// `advisor audit RUN_ID [TARGET]` — mirrors `cmd_audit`.
+fn cmd_audit(args: AuditArgs) -> ExitCode {
+    let target = Path::new(&args.target);
+    let cp = match advisor::checkpoint::load_checkpoint(target, &args.run_id) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("✗ {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    // Read transcript (stdin or file), tolerating non-UTF-8 (errors=replace).
+    let transcript = if args.transcript == "-" {
+        if std::io::stdin().is_terminal() {
+            eprintln!("✗ audit: no transcript on stdin; pipe the Claude Code conversation in");
+            return ExitCode::from(2);
+        }
+        let mut buf = Vec::new();
+        if std::io::stdin()
+            .take((STDIN_LIMIT + 1) as u64)
+            .read_to_end(&mut buf)
+            .is_err()
+        {
+            eprintln!("✗ audit: failed reading stdin");
+            return ExitCode::from(2);
+        }
+        if buf.len() > STDIN_LIMIT {
+            eprintln!("✗ audit transcript exceeds {STDIN_LIMIT}-byte cap; refusing to load");
+            return ExitCode::from(2);
+        }
+        String::from_utf8_lossy(&buf).into_owned()
+    } else {
+        let p = Path::new(&args.transcript);
+        let bytes = match std::fs::read(p) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("✗ {e}");
+                return ExitCode::from(2);
+            }
+        };
+        if bytes.len() > STDIN_LIMIT {
+            eprintln!(
+                "✗ audit transcript {} exceeds {STDIN_LIMIT}-byte cap; refusing to load",
+                p.display()
+            );
+            return ExitCode::from(2);
+        }
+        String::from_utf8_lossy(&bytes).into_owned()
+    };
+
+    let audit_cp = AuditCheckpoint {
+        run_id: cp.run_id.clone(),
+        max_fixes_per_runner: cp.max_fixes_per_runner,
+        large_file_line_threshold: cp.large_file_line_threshold,
+        large_file_max_fixes: cp.large_file_max_fixes,
+        tasks: cp.tasks.clone(),
+        batches: cp.batches.clone(),
+    };
+    let mut report = advisor::audit::audit_transcript(&transcript, &audit_cp);
+
+    // Baseline filter (in-batch findings only).
+    if let Some(bp) = &args.baseline_path {
+        let bpath = Path::new(bp);
+        if !bpath.exists() {
+            eprintln!("✗ --baseline path not found: {bp}");
+            return ExitCode::from(2);
+        }
+        let baseline = read_baseline(bpath);
+        let (kept, _) = filter_against_baseline(&report.findings_in_batch, &baseline);
+        report.findings_in_batch = kept;
+    }
+
+    // Always consult .advisor/suppressions.jsonl.
+    let suppr_path = target.join(".advisor").join("suppressions.jsonl");
+    if suppr_path.exists() {
+        match advisor::suppressions::load_suppressions(&suppr_path) {
+            Ok(entries) => {
+                let (kept, _dropped) =
+                    advisor::suppressions::apply_suppressions(&report.findings_in_batch, &entries);
+                report.findings_in_batch = kept;
+            }
+            Err(e) => {
+                eprintln!("✗ {e}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+
+    if let Some(sp) = &args.sarif {
+        if let Some(code) = write_sarif(Path::new(sp), &report.findings_in_batch, target) {
+            return ExitCode::from(code);
+        }
+    }
+
+    let fail_rc = fail_on_exit(&args.fail_on, &report.findings_in_batch);
+    let exit = |rc: Option<u8>| ExitCode::from(rc.unwrap_or(0));
+
+    if args.format == "pr-comment" {
+        println!(
+            "{}",
+            advisor::pr_comment::format_pr_comment(&report.findings_in_batch)
+        );
+        return exit(fail_rc);
+    }
+
+    let as_json = args.json || args.format == "json";
+    if as_json {
+        // {schema_version, **audit_to_dict(report)} — schema_version first.
+        let mut map = serde_json::Map::new();
+        map.insert("schema_version".to_string(), serde_json::json!("1.0"));
+        if let serde_json::Value::Object(d) = advisor::audit::audit_to_dict(&report) {
+            for (k, v) in d {
+                map.insert(k, v);
+            }
+        }
+        let payload = serde_json::Value::Object(map);
+        println!(
+            "{}",
+            ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
+        );
+        return exit(fail_rc);
+    }
+
+    // Pretty (color disabled in the Rust port — colorize_markdown is a no-op here).
+    println!("{}", advisor::audit::format_audit_report(&report));
+    exit(fail_rc)
 }
