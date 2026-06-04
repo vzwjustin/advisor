@@ -206,6 +206,7 @@ type FixTally = (
 );
 
 fn audit_fix_assignments(transcript: &str) -> FixTally {
+    let transcript = &strip_fenced_blocks(transcript);
     let mut fix_counts: Vec<(String, i64)> = Vec::new();
     let mut fix_numbers: Vec<(String, Vec<i64>)> = Vec::new();
     let mut per_message_caps: Vec<(String, Vec<i64>)> = Vec::new();

@@ -1,0 +1,110 @@
+{
+  "new_budget_default": {
+    "runner_id": "runner-1",
+    "char_ceiling": 80000,
+    "file_read_ceiling": 20,
+    "fix_ceiling": 5,
+    "output_chars": 0,
+    "files_read": [],
+    "fixes_done": 0,
+    "soft_nudge_sent": false,
+    "rotate_nudge_sent": false,
+    "last_stage": null,
+    "last_file": null
+  },
+  "new_budget_custom": {
+    "runner_id": "runner-2",
+    "char_ceiling": 50000,
+    "file_read_ceiling": 10,
+    "fix_ceiling": 3,
+    "output_chars": 0,
+    "files_read": [],
+    "fixes_done": 0,
+    "soft_nudge_sent": false,
+    "rotate_nudge_sent": false,
+    "last_stage": null,
+    "last_file": null
+  },
+  "parse_scope_two": [
+    {
+      "file_path": "src/foo.py",
+      "stage": "reading"
+    },
+    {
+      "file_path": "src/bar.py",
+      "stage": "fixing"
+    }
+  ],
+  "parse_scope_none": [],
+  "update_budget_basic": {
+    "runner_id": "runner-1",
+    "char_ceiling": 100,
+    "file_read_ceiling": 5,
+    "fix_ceiling": 3,
+    "output_chars": 39,
+    "files_read": [
+      "src/foo.py"
+    ],
+    "fixes_done": 0,
+    "soft_nudge_sent": false,
+    "rotate_nudge_sent": false,
+    "last_stage": "reading",
+    "last_file": "src/foo.py"
+  },
+  "update_budget_fix": {
+    "runner_id": "runner-1",
+    "char_ceiling": 100,
+    "file_read_ceiling": 5,
+    "fix_ceiling": 3,
+    "output_chars": 74,
+    "files_read": [
+      "src/foo.py",
+      "src/bar.py"
+    ],
+    "fixes_done": 1,
+    "soft_nudge_sent": false,
+    "rotate_nudge_sent": false,
+    "last_stage": "fixing",
+    "last_file": "src/bar.py"
+  },
+  "update_budget_file_read": {
+    "runner_id": "runner-1",
+    "char_ceiling": 100,
+    "file_read_ceiling": 5,
+    "fix_ceiling": 3,
+    "output_chars": 94,
+    "files_read": [
+      "src/foo.py",
+      "src/bar.py",
+      "src/baz.py"
+    ],
+    "fixes_done": 1,
+    "soft_nudge_sent": false,
+    "rotate_nudge_sent": false,
+    "last_stage": "fixing",
+    "last_file": "src/bar.py"
+  },
+  "status_ok": "OK",
+  "status_soft": "SOFT_WARN",
+  "status_rotate": "ROTATE",
+  "status_fix_rotate": "ROTATE",
+  "status_explore_ok": "OK",
+  "stage_ok": false,
+  "stage_regressed": true,
+  "stage_none": false,
+  "stage_unknown": false,
+  "normalize_batch": [
+    "src/bar.py",
+    "src/foo.py"
+  ],
+  "out_of_batch_in": false,
+  "out_of_batch_out": true,
+  "out_of_batch_none": false,
+  "out_of_batch_empty": false,
+  "nudge_soft_msg": "BUDGET SOFT \u2014 620/1000 chars used (~380 remaining). Compact your next reply: one primary finding, skip recaps, then confirm you are still under budget.",
+  "nudge_soft_flag": true,
+  "nudge_soft_no_double": null,
+  "nudge_rotate_msg": "BUDGET ROTATE \u2014 runner-1 has crossed the hard ceiling (chars 820/1000; ~180 chars left, files 0/20, fixes 0/5). Finish the current tool call, emit a one-paragraph handoff brief, then wait for shutdown_request.",
+  "nudge_rotate_flag": true,
+  "nudge_rotate_no_double": null
+}

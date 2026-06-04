@@ -1109,7 +1109,9 @@ def rank_files(
         if _is_test_path(fp):
             priority = min(priority, 1)
             reasons = ("test file",)
-        if history_scores is not None:
+        # Skip history boost for test paths so the P1 demote above is not
+        # undone by a +1 bump from repeat-offender scoring.
+        if history_scores is not None and not _is_test_path(fp):
             boost = _history_boost(fp, history_scores)
             if boost > 0:
                 boosted = min(5, priority + 1)  # +1 tier cap
@@ -1129,7 +1131,7 @@ def rank_files(
                 reasons = (*reasons, f"repeat offender{count_label}")
         ranked.append(RankedFile(path=fp, priority=priority, reasons=reasons))
 
-    return sorted(ranked, key=lambda r: (-r.priority, r.path))
+    return sorted(ranked, key=lambda r: (-r.priority, Path(r.path).as_posix()))
 
 
 # Minimum score that earns a +1 tier boost. Chosen so a single low-severity

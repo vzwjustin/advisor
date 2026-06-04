@@ -1,0 +1,6 @@
+{
+  "no_scope_returns_none": true,
+  "mutual_excl_since_staged_raises": true,
+  "mutual_excl_since_branch_raises": true,
+  "mutual_excl_staged_branch_raises": true
+}

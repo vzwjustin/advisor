@@ -1,0 +1,24 @@
+{
+  "preset_count": 7,
+  "preset_names": [
+    "general-python",
+    "python-web",
+    "python-cli",
+    "node-api",
+    "typescript-react",
+    "go-service",
+    "rust-crate"
+  ],
+  "python_web_exists": true,
+  "rust_crate_exists": true,
+  "get_unknown_raises": true,
+  "list_presets_returns_names": true,
+  "python_web_file_types": "*.py",
+  "python_web_min_priority": 3,
+  "python_web_has_extra_keywords": true,
+  "rust_crate_file_types": "*.rs",
+  "rust_crate_keyword_tiers": [
+    3,
+    4
+  ]
+}

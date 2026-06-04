@@ -223,6 +223,34 @@ mod tests {
     }
 
     #[test]
+    fn parity_checkpoint_json() {
+        use std::collections::HashMap;
+        let raw = std::fs::read_to_string("tests/parity/checkpoint.json").unwrap();
+        let v: HashMap<String, serde_json::Value> = serde_json::from_str(&raw).unwrap();
+        // run_id RE matches
+        assert_eq!(
+            v["run_id_valid"].as_bool().unwrap(),
+            validate_run_id("run-20240101-120000-abc123de").is_ok()
+        );
+        assert_eq!(
+            v["run_id_invalid_bang"].as_bool().unwrap(),
+            validate_run_id("!bad").is_ok()
+        );
+        assert_eq!(
+            v["run_id_invalid_empty"].as_bool().unwrap(),
+            validate_run_id("").is_ok()
+        );
+        assert_eq!(
+            v["run_id_valid_simple"].as_bool().unwrap(),
+            validate_run_id("run-abc").is_ok()
+        );
+        // checkpoint_path dir and suffix
+        let p = checkpoint_path(std::path::Path::new("."), "run-abc").unwrap();
+        assert_eq!(p.file_name().unwrap().to_str().unwrap(), v["checkpoint_path_suffix"].as_str().unwrap());
+        assert_eq!(p.parent().unwrap().file_name().unwrap().to_str().unwrap(), v["checkpoint_path_dir"].as_str().unwrap());
+    }
+
+    #[test]
     fn load_roundtrip() {
         let dir = std::env::temp_dir().join(format!("advisor_cp_{}", std::process::id()));
         std::fs::create_dir_all(dir.join(".advisor")).unwrap();

@@ -401,6 +401,12 @@ def _audit_fix_assignments(
     cap embedded in the dispatch (``fix 3 of 3`` against a default of 5) is
     not lost on its way to :func:`_audit_cap_overruns`.
     """
+    # Strip fenced blocks before searching — mirrors _audit_context_pressure
+    # and _audit_protocol_violations. A runner embedding a fake
+    # ``## Fix assignment`` header inside a fenced code block (e.g. quoting
+    # the format in its reply) would otherwise register as a real dispatch
+    # and corrupt cap-overrun attribution.
+    transcript = _strip_fenced_blocks(transcript)
     fix_counts: dict[str, int] = {}
     fix_numbers: dict[str, list[int]] = {}
     per_message_caps: dict[str, list[int]] = {}

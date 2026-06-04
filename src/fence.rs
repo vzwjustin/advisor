@@ -65,17 +65,14 @@ fn strip_linebreaks(value: &str) -> String {
 
 /// Neutralize markdown-fence breakers in a value rendered inline.
 ///
-/// Swaps backticks for a typographic single quote (U+2019), then routes through
-/// the canonical line-break / zero-width strip. Mirrors Python `sanitize_inline`.
+/// Swaps backticks for a straight single quote (U+0027), then strips
+/// invisible / bidi characters and collapses linebreaks to spaces.
+/// Mirrors Python `sanitize_inline`.
 pub fn sanitize_inline(value: &str) -> String {
-    // Python: _strip_linebreaks(value.replace("`", "'")) where "'" is the
-    // typographic single quote U+2019. Folded into a single pass: the
-    // substituted quote is neither a linebreak nor an invisible, so the order
-    // of the two Python steps does not affect the result.
     let mut out = String::with_capacity(value.len());
     for ch in value.chars() {
         if ch == '`' {
-            out.push('\u{2019}');
+            out.push('\u{0027}');
         } else if INVISIBLE_TO_DROP.contains(&ch) {
             continue;
         } else if LINEBREAK_TO_SPACE.contains(&ch) {
@@ -118,6 +115,27 @@ mod tests {
 
     // Reference values captured from the Python implementation.
     #[test]
+    fn parity_fence_json() {
+        use std::collections::HashMap;
+        let raw = std::fs::read_to_string("tests/parity/fence.json").unwrap();
+        let v: HashMap<String, serde_json::Value> = serde_json::from_str(&raw).unwrap();
+        assert_eq!(fence("hello world", ""), v["fence_plain"].as_str().unwrap());
+        assert_eq!(fence("x = 1", "python"), v["fence_python"].as_str().unwrap());
+        assert_eq!(fence("code", "rust"), v["fence_with_lang"].as_str().unwrap());
+        // collision: body contains ``` → use ````
+        let collision = fence("```triple```", "");
+        assert_eq!(collision, v["fence_collision"].as_str().unwrap());
+        // sanitize_inline
+        assert_eq!(sanitize_inline("hello"), v["sanitize_inline_basic"].as_str().unwrap());
+        assert_eq!(sanitize_inline("`code`"), v["sanitize_inline_backtick"].as_str().unwrap());
+        assert_eq!(sanitize_inline("line1\nline2"), v["sanitize_inline_newline"].as_str().unwrap());
+        // bidi: U+202E stripped
+        assert_eq!(sanitize_inline("test\u{202e}evil"), v["sanitize_inline_bidi"].as_str().unwrap());
+        // invisible: U+200B stripped
+        assert_eq!(sanitize_inline("a\u{200b}b"), v["sanitize_inline_invisible"].as_str().unwrap());
+    }
+
+    #[test]
     fn fence_basic() {
         assert_eq!(fence("hello", ""), "```\nhello\n```");
     }
@@ -134,8 +152,8 @@ mod tests {
 
     #[test]
     fn sanitize_inline_backtick_and_newline() {
-        // Python: "a`b\nc" -> "a'b c" with the single quote being U+2019.
-        assert_eq!(sanitize_inline("a`b\nc"), "a\u{2019}b c");
+        // Python: "a`b\nc" -> "a'b c" where ' is U+0027.
+        assert_eq!(sanitize_inline("a`b\nc"), "a\u{0027}b c");
     }
 
     #[test]

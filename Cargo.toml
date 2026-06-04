@@ -32,6 +32,7 @@ clap = { version = "4", features = ["derive"] }     # argparse CLI
 [dev-dependencies]
 # Reserved for upcoming CLI integration + property parity tests
 # (assert_cmd / predicates / proptest) per RUST_PORT_PLAN.md §3.
+tempfile = "3"
 
 [profile.release]
 opt-level = 3
