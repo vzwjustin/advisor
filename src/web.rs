@@ -286,13 +286,18 @@ fn send_text(request: tiny_http::Request, body: &str, content_type: &str) {
     let _ = request.respond(response);
 }
 
-fn handle_get(state: &AppState, request: tiny_http::Request) {
-    // DNS-rebinding defense: verify Host header
-    let bound_port = request
-        .remote_addr()
-        .map(|addr| addr.port())
-        .unwrap_or(8765);
+fn host_header_allowed(host_header: &str, bound_port: u16) -> bool {
+    let allowed_hosts = [
+        format!("127.0.0.1:{bound_port}"),
+        format!("localhost:{bound_port}"),
+        format!("[::1]:{bound_port}"),
+    ];
+    !host_header.is_empty() && allowed_hosts.iter().any(|allowed| host_header == allowed)
+}
 
+fn handle_get(state: &AppState, request: tiny_http::Request, bound_port: u16) {
+    // DNS-rebinding defense: verify Host header against the server's local
+    // listening port. The request remote port is the client's ephemeral port.
     let host_header = request
         .headers()
         .iter()
@@ -300,13 +305,7 @@ fn handle_get(state: &AppState, request: tiny_http::Request) {
         .map(|h| h.value.as_str())
         .unwrap_or("");
 
-    let allowed_hosts = [
-        format!("127.0.0.1:{bound_port}"),
-        format!("localhost:{bound_port}"),
-        format!("[::1]:{bound_port}"),
-    ];
-
-    if host_header.is_empty() || !allowed_hosts.iter().any(|allowed| host_header == allowed) {
+    if !host_header_allowed(host_header, bound_port) {
         send_json(request, 403, &json!({"error": "forbidden"}));
         return;
     }
@@ -578,7 +577,7 @@ pub fn run_server(
             continue;
         }
 
-        handle_get(&state, request);
+        handle_get(&state, request, actual_port);
     }
 
     Ok(())
@@ -614,5 +613,16 @@ mod tests {
             epoch_to_iso8601_sec(1780576200),
             "2026-06-04T12:30:00+00:00"
         );
+    }
+
+    #[test]
+    fn test_host_header_allowed_uses_bound_port() {
+        assert!(host_header_allowed("127.0.0.1:7070", 7070));
+        assert!(host_header_allowed("localhost:7070", 7070));
+        assert!(host_header_allowed("[::1]:7070", 7070));
+
+        assert!(!host_header_allowed("", 7070));
+        assert!(!host_header_allowed("127.0.0.1:51234", 7070));
+        assert!(!host_header_allowed("evil.example:7070", 7070));
     }
 }
