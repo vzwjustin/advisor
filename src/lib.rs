@@ -20,6 +20,7 @@ pub mod git_scope;
 pub mod history;
 pub mod jsonutil;
 pub mod models;
+pub mod orchestrate;
 pub mod pr_comment;
 pub mod presets;
 pub mod rank;

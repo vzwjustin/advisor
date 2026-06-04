@@ -53,6 +53,7 @@ parity assertions.
 | `src/rank.rs` | `rank.py` | `language_for_path`, shebang detection, keyword scoring (`finditer` simulation), test-path cap, history boost, `rank_files`, `rank_to_prompt`, `.advisorignore` glob engine, `load_advisorignore` | **Golden JSON** vs Python (language/shebang/score/test/rank/history/ignore — 60+ cases) |
 | `src/pr_comment.rs` | `pr_comment.py` | `format_pr_comment` (collapsible `<details>` blocks, severity table, HTML escaping `quote=True`, summary/inline-code escaping, evidence byte-cap + fence/`<details>` neutralization, severity sort, unknown→LOW clamp, body-byte truncation) | **Golden JSON** vs Python (empty, basic, unknown severity, hostile HTML) |
 | `src/jsonutil.rs` | (CPython `json.dumps`) | `ensure_ascii` escaping (incl. surrogate pairs) | Unit tests vs CPython |
+| `src/orchestrate/*` | `orchestrate/_schema.py`, `verify_dispatch.py` | `FINDING_SCHEMA`, `build_verify_dispatch_prompt`, `build_verify_message` | **Byte-exact golden snapshots** (`verify_dispatch_prompt.txt`, `verify_message.txt`) |
 | `src/version.rs` | `_version.py` | `resolve_version` (crate version) | Unit test |
 | `src/main.rs` | `__main__.py` (subset) | `advisor presets [--json]`, `advisor plan [...]`, `advisor baseline create/diff [--from/--output/--baseline/--json]` (incl. JSON+markdown findings input loader), `advisor --version` | Binary diff vs Python (byte-identical, incl. end-to-end `plan` + `baseline` on fixtures) |
 
