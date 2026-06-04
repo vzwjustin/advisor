@@ -8,6 +8,7 @@
 //! foundational, pure, parity-verified slices are ported so far; the rest remain
 //! in Python and ship alongside this binary until parity is proven.
 
+pub mod audit;
 pub mod baseline;
 pub mod config;
 pub mod cost;
@@ -27,6 +28,9 @@ pub mod version;
 
 // Re-export the most-used items at the crate root, mirroring the curated
 // surface of `advisor/__init__.py`.
+pub use audit::{
+    audit_to_dict, audit_transcript, format_audit_report, AuditCheckpoint, AuditReport,
+};
 pub use baseline::{
     diff_against_baseline, filter_against_baseline, findings_to_entries, read_baseline,
     write_baseline, BaselineDiff, BaselineEntry,

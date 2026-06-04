@@ -36,6 +36,7 @@ parity assertions.
 | `src/fence.rs` | `orchestrate/_fence.py` | `sanitize_inline`, `fence` (+ linebreak/invisible strip) | Unit tests vs Python outputs |
 | `src/style.rs` | `_style.py` | `strip_ansi` (CSI+OSC regex) | Unit tests |
 | `src/fs.rs` | `_fs.py` | `normalize_path`, `validate_file_types`, `CONTENT_SCAN_LIMIT`, POSIX `normpath` | Reference table vs Python (10 cases) |
+| `src/audit.rs` | `audit.py` | transcript analysis: fix-assignment counting + runner attribution (SendMessage-envelope/proximity), cap overruns, CONTEXT_PRESSURE attribution, PROTOCOL_VIOLATION dedup/cap, fenced-block stripping, handoff/rotation count, scope-drift classification; `AuditReport`, `audit_to_dict`, `format_audit_report` | **Golden JSON** vs Python (full `audit_to_dict` + `format` on a crafted transcript) |
 | `src/suppressions.rs` | `suppressions.py` | `Suppression` + `matches`, `severity_from_rule_id`, `**`-aware glob match (shared with rank) + fnmatch fallback, `until` date validation/expiry (UTC), `load_suppressions` (structural validation → errors), `apply_suppressions` | **Golden JSON** vs Python (severity ranks, matches, apply, load valid + 4 error shapes) |
 | `src/baseline.rs` | `baseline.py` | `BaselineEntry`/`BaselineDiff`, `findings_to_entries`, `description_hash`, `normalize_identity_path`, `write_baseline`/`read_baseline` (JSONL), `filter_against_baseline`, `diff_against_baseline` (incl. abs/rel suffix aliasing) | **Golden JSON** vs Python (entries, written bytes, hashes, normalize, filter, diff) |
 | `src/fs.rs` (+helpers) | `_fs.py` | `normalize_path`, `validate_file_types`, **`read_text_capped`**, **`atomic_write_text`**, `posix_normpath` | reference table + used by baseline round-trip |
@@ -81,8 +82,8 @@ Everything else. The Python package is fully intact and authoritative. Largest
 remaining work, roughly in dependency order (see `RUST_PORT_PLAN.md` §6):
 
 - **Core logic**: `runner_budget.py`, `git_scope.py` (subprocess),
-  `history.py`, `checkpoint.py`, `audit.py`, full `cost.py` estimator,
-  remaining `_fs.py` (symlink-reject/locking nuances).
+  `history.py`, `checkpoint.py` (JSON load/save — needed to wire `advisor audit`
+  RUN_ID), full `cost.py` estimator, remaining `_fs.py` nuances.
 - **Orchestration prompts**: `advisor_prompt.py`, `runner_prompts.py`,
   `verify_dispatch.py`, `pipeline.py`, `_schema.py`, the embedded
   `_prompts/advisor.txt`, and the 20+ golden snapshot fixtures (parity linchpin).
@@ -122,13 +123,11 @@ remaining work, roughly in dependency order (see `RUST_PORT_PLAN.md` §6):
 
 `rank.py`, `focus.py`, `config.py`, `verify.py`, `sarif.py`, and the
 **`advisor plan` CLI** are now ported and parity-verified. Next:
-1. Port **`audit.py`** (`AuditReport`, transcript regex analysis) then wire
-   **`advisor audit`** (transcript → `parse_findings_with_drift` →
-   sarif/pr-comment/json + `--fail-on` + `--baseline`) into the CLI — the
-   findings input loader, `verify`, `sarif`, `pr_comment`, `baseline`, and
-   `suppressions` are all ported, so `audit`'s sinks are ready.
-2. Wire **`advisor suppressions [--list/--expired/--json]`** (suppressions.rs done).
-3. Remaining `plan` flags not yet wired (documented gaps): `--since/--staged/--branch`
+1. Port **`checkpoint.py`** (`run-<id>.json` load/save) then wire **`advisor audit RUN_ID`**
+   (load checkpoint → `audit_transcript` → `--format pretty/json/pr-comment` +
+   `--fail-on` + `--sarif` + `--baseline`) — `audit`, `sarif`, `pr_comment`,
+   `baseline`, `suppressions` are all ported, so only the checkpoint loader gates it.
+2. Remaining `plan` flags not yet wired (documented gaps): `--since/--staged/--branch`
    (needs `git_scope.py`), `--estimate`/`--pricing` (needs full `cost.py`),
    `--checkpoint`/`--resume` (needs `checkpoint.py`), `--sarif`, `--exclude`,
    `--output`, and **history-informed ranking** (needs `history.py` — the Rust
