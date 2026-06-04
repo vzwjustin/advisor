@@ -23,7 +23,10 @@ pub mod version;
 
 // Re-export the most-used items at the crate root, mirroring the curated
 // surface of `advisor/__init__.py`.
-pub use config::{is_known_model, DEFAULT_ADVISOR_MODEL, DEFAULT_RUNNER_MODEL, POOL_SIZE_CEILING};
+pub use config::{
+    default_team_config, is_known_model, TeamConfig, TeamConfigInput, DEFAULT_ADVISOR_MODEL,
+    DEFAULT_RUNNER_MODEL, POOL_SIZE_CEILING,
+};
 pub use fence::{fence, sanitize_inline};
 pub use focus::{
     create_focus_batches, create_focus_tasks, format_batch_plan, format_dispatch_plan, FocusBatch,

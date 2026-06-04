@@ -36,7 +36,7 @@ parity assertions.
 | `src/fence.rs` | `orchestrate/_fence.py` | `sanitize_inline`, `fence` (+ linebreak/invisible strip) | Unit tests vs Python outputs |
 | `src/style.rs` | `_style.py` | `strip_ansi` (CSI+OSC regex) | Unit tests |
 | `src/fs.rs` | `_fs.py` | `normalize_path`, `validate_file_types`, `CONTENT_SCAN_LIMIT`, POSIX `normpath` | Reference table vs Python (10 cases) |
-| `src/config.rs` | `orchestrate/config.py` | `is_known_model`, model regex, `POOL_SIZE_CEILING`, default model ids, `KNOWN_MODEL_SHORTCUTS` | Matrix vs Python |
+| `src/config.rs` | `orchestrate/config.py` | `is_known_model` + model regex/constants, **`TeamConfig`**, **`default_team_config`** (env fallbacks, range clamping + stderr warnings, preset merge) | Matrix + **golden JSON** (7 scenarios: minimal, presets, clamps, explicit) |
 | `src/sarif.rs` | `sarif.py` | `synthesize_rule_id`, `level_for`, schema/version constants | SHA-1 rule-id vs Python |
 | `src/cost.rs` | `cost.py` | pricing table, token-overhead constants, `family_of`, `PRICING_AS_OF` | Unit tests |
 | `src/models.rs` | `verify.py`, `rank.py` | `Finding`, `RankedFile`, `Severity` (+ canonicalization), serde | Serde field-completeness test |
@@ -76,7 +76,6 @@ remaining work, roughly in dependency order (see `RUST_PORT_PLAN.md` §6):
   `git_scope.py` (subprocess), `history.py`, `baseline.py`, `checkpoint.py`,
   `suppressions.py`, `pr_comment.py`, `audit.py`, full `cost.py` estimator,
   full `sarif.py` document builder, full `_fs.py` atomic write/locking.
-- **Config**: `TeamConfig` struct + `default_team_config` env/clamp assembler.
 - **Orchestration prompts**: `advisor_prompt.py`, `runner_prompts.py`,
   `verify_dispatch.py`, `pipeline.py`, `_schema.py`, the embedded
   `_prompts/advisor.txt`, and the 20+ golden snapshot fixtures (parity linchpin).
@@ -114,11 +113,13 @@ remaining work, roughly in dependency order (see `RUST_PORT_PLAN.md` §6):
 
 ## Exact next recommended step
 
-`rank.py` and `focus.py` are now ported and parity-verified. Next:
-1. Port **`config.py`'s `TeamConfig` + `default_team_config`** (env fallbacks +
-   clamp warnings) so the planning CLI has its config object.
-2. Wire **`advisor plan <target> --json --no-history`** into the Rust CLI behind
-   the verified ranker + focus, then capture a Python golden for a fixture tree
-   and add it as the third cross-language check in `scripts/parity_check.sh`.
-3. Port **`verify.py`** (`Finding` parse/format state machine) — needed for the
+`rank.py`, `focus.py`, and `config.py` (incl. `TeamConfig`/`default_team_config`)
+are now ported and parity-verified. The ranker, batcher, and config object are
+all in place — the next step is to surface them through the CLI. Next:
+1. Wire **`advisor plan <target> --json --no-history`** into the Rust CLI behind
+   the verified ranker + focus + config: filesystem discovery (glob walk honoring
+   `--file-types`, `SKIP_DIRS`, `.advisorignore`) → `rank_files` → `create_focus_*`
+   → JSON. Capture a Python golden for a fixture tree and add it as the third
+   cross-language check in `scripts/parity_check.sh`.
+2. Port **`verify.py`** (`Finding` parse/format state machine) — needed for the
    findings-lifecycle commands (`baseline`, `audit`, `sarif`).
