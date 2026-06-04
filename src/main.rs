@@ -73,6 +73,15 @@ enum Command {
         /// Ignore `.advisor/history.jsonl` (currently always-on in the Rust port).
         #[arg(long)]
         no_history: bool,
+        /// Include a token/cost estimate in the JSON output.
+        #[arg(long)]
+        estimate: bool,
+        /// Load model pricing (cents per 1M tokens) from a JSON file.
+        #[arg(long)]
+        pricing: Option<String>,
+        /// Print the default pricing JSON template and exit.
+        #[arg(long = "dump-pricing-template")]
+        dump_pricing_template: bool,
     },
     /// Snapshot findings as a baseline, or diff current findings against it.
     Baseline {
@@ -164,6 +173,9 @@ fn main() -> ExitCode {
             preset,
             json,
             no_history,
+            estimate,
+            pricing,
+            dump_pricing_template,
         } => cmd_plan(PlanArgs {
             target,
             file_types,
@@ -172,6 +184,9 @@ fn main() -> ExitCode {
             preset,
             json,
             no_history,
+            estimate,
+            pricing,
+            dump_pricing_template,
         }),
         Command::Baseline { action } => cmd_baseline(action),
         Command::Audit {
@@ -299,6 +314,20 @@ struct PlanArgs {
     preset: Option<String>,
     json: bool,
     no_history: bool,
+    estimate: bool,
+    pricing: Option<String>,
+    dump_pricing_template: bool,
+}
+
+/// `advisor plan --dump-pricing-template` payload (mirrors the Python handler).
+fn dump_pricing_template() -> String {
+    let payload = serde_json::json!({
+        "_comment": "values are cents per 1M tokens — verify at https://www.anthropic.com/pricing; opus/sonnet/haiku are all required, extra keys (like this one) are ignored",
+        "opus": {"input": 1500, "output": 7500},
+        "sonnet": {"input": 300, "output": 1500},
+        "haiku": {"input": 25, "output": 125},
+    });
+    ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
 }
 
 /// `advisor plan` — discovery → rank → focus → JSON/pretty. Mirrors `cmd_plan`
@@ -309,6 +338,24 @@ struct PlanArgs {
 /// this is identical to the Python default. See PORT_NOTES.md.
 fn cmd_plan(args: PlanArgs) -> ExitCode {
     let _ = args.no_history; // history not yet ported; plan is always no-history
+
+    // `--dump-pricing-template` short-circuits all discovery.
+    if args.dump_pricing_template {
+        println!("{}", dump_pricing_template());
+        return ExitCode::SUCCESS;
+    }
+
+    // Load a `--pricing FILE` override up front (parse errors fail fast).
+    let pricing_override = match &args.pricing {
+        Some(p) => match advisor::cost::load_pricing(Path::new(p)) {
+            Ok(map) => Some(map),
+            Err(e) => {
+                eprintln!("✗ {e}");
+                return ExitCode::from(2);
+            }
+        },
+        None => None,
+    };
 
     let target = Path::new(&args.target);
     if !target.exists() {
@@ -379,7 +426,32 @@ fn cmd_plan(args: PlanArgs) -> ExitCode {
         let target_abs = target
             .canonicalize()
             .unwrap_or_else(|_| target.to_path_buf());
-        println!("{}", plan_json(&target_abs, &tasks, batches.as_deref()));
+        // Optional cost estimate (Python passes target=None, so files are
+        // stat'd by their absolute path directly).
+        let estimate = if args.estimate {
+            match advisor::cost::estimate_cost(
+                &tasks,
+                batches.as_deref(),
+                &cfg.advisor_model,
+                &cfg.runner_model,
+                cfg.max_fixes_per_runner,
+                Some(cfg.max_runners),
+                pricing_override.as_ref(),
+                None,
+            ) {
+                Ok(est) => Some(est.to_dict()),
+                Err(e) => {
+                    eprintln!("✗ {e}");
+                    return ExitCode::from(2);
+                }
+            }
+        } else {
+            None
+        };
+        println!(
+            "{}",
+            plan_json(&target_abs, &tasks, batches.as_deref(), estimate)
+        );
     } else if let Some(b) = &batches {
         print!("{}", focus::format_batch_plan(b));
     } else {
@@ -455,7 +527,12 @@ fn discover(target: &Path, file_types: &str) -> Result<Vec<String>, String> {
 
 /// Serialize a plan to match the Python CLI's `plan --json` payload (key order,
 /// 2-space indent, `ensure_ascii=True`). Mirrors `_plan_to_dict` + `json.dumps`.
-fn plan_json(target_abs: &Path, tasks: &[FocusTask], batches: Option<&[FocusBatch]>) -> String {
+fn plan_json(
+    target_abs: &Path,
+    tasks: &[FocusTask],
+    batches: Option<&[FocusBatch]>,
+    estimate: Option<serde_json::Value>,
+) -> String {
     use serde::Serialize;
 
     #[derive(Serialize)]
@@ -478,6 +555,8 @@ fn plan_json(target_abs: &Path, tasks: &[FocusTask], batches: Option<&[FocusBatc
         tasks: Vec<PlanTask<'a>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         batches: Option<Vec<PlanBatch<'a>>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        estimate: Option<serde_json::Value>,
     }
 
     let task_data: Vec<PlanTask> = tasks
@@ -510,6 +589,7 @@ fn plan_json(target_abs: &Path, tasks: &[FocusTask], batches: Option<&[FocusBatc
         task_count: tasks.len(),
         tasks: task_data,
         batches: batch_data,
+        estimate,
     };
     ensure_ascii(&serde_json::to_string_pretty(&payload).expect("plan payload serializes"))
 }

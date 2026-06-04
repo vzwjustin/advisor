@@ -63,6 +63,10 @@ plan_check "plan --json"                 --json --no-history
 plan_check "plan --json --batch-size 2"  --json --no-history --batch-size 2
 plan_check "plan --json --min-priority 1" --json --no-history --min-priority 1
 plan_check "plan --json --preset python-web" --json --no-history --preset python-web
+plan_check "plan --json --estimate"      --json --no-history --estimate
+plan_check "plan --json --estimate --batch-size 1" --json --no-history --estimate --batch-size 1
+
+check "plan --dump-pricing-template" plan --dump-pricing-template
 
 # ── baseline: create (file bytes) + diff --json, JSON and markdown inputs ──
 baseline_check() {

@@ -41,6 +41,7 @@ pub use config::{
     default_team_config, is_known_model, TeamConfig, TeamConfigInput, DEFAULT_ADVISOR_MODEL,
     DEFAULT_RUNNER_MODEL, POOL_SIZE_CEILING,
 };
+pub use cost::{estimate_cost, format_estimate, load_pricing, CostEstimate};
 pub use fence::{fence, sanitize_inline};
 pub use focus::{
     create_focus_batches, create_focus_tasks, format_batch_plan, format_dispatch_plan, FocusBatch,

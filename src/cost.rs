@@ -51,6 +51,271 @@ pub fn default_pricing_for(family: &str) -> (i64, i64) {
     }
 }
 
+use std::collections::HashMap;
+use std::path::Path;
+
+use crate::focus::{FocusBatch, FocusTask};
+
+/// Token + USD range for a planned advisor run. Mirrors `CostEstimate`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CostEstimate {
+    pub input_tokens_min: i64,
+    pub input_tokens_max: i64,
+    pub output_tokens_min: i64,
+    pub output_tokens_max: i64,
+    pub cost_usd_min: f64,
+    pub cost_usd_max: f64,
+    pub runner_count: i64,
+    pub file_count: i64,
+    pub advisor_model: String,
+    pub runner_model: String,
+}
+
+fn round4(x: f64) -> f64 {
+    (x * 10_000.0).round() / 10_000.0
+}
+
+impl CostEstimate {
+    /// Round-trippable dict for JSON output (key order matches Python `to_dict`).
+    pub fn to_dict(&self) -> serde_json::Value {
+        serde_json::json!({
+            "runner_count": self.runner_count,
+            "file_count": self.file_count,
+            "advisor_model": self.advisor_model,
+            "runner_model": self.runner_model,
+            "input_tokens_min": self.input_tokens_min,
+            "input_tokens_max": self.input_tokens_max,
+            "output_tokens_min": self.output_tokens_min,
+            "output_tokens_max": self.output_tokens_max,
+            "cost_usd_min": round4(self.cost_usd_min),
+            "cost_usd_max": round4(self.cost_usd_max),
+        })
+    }
+}
+
+/// Best-effort token estimate for a file (single stat; `size / CHARS_PER_TOKEN`).
+/// Returns 0 for missing files or paths outside `target`. Mirrors `_tokens_for_file`.
+fn tokens_for_file(path: &str, target: Option<&Path>) -> i64 {
+    if let Some(t) = target {
+        match (Path::new(path).canonicalize(), t.canonicalize()) {
+            (Ok(p), Ok(tr)) if p.starts_with(&tr) => {}
+            _ => return 0,
+        }
+    }
+    match std::fs::metadata(path) {
+        Ok(m) => (m.len() as f64 / CHARS_PER_TOKEN) as i64,
+        Err(_) => 0,
+    }
+}
+
+/// Estimate token usage + USD cost for a planned run. Mirrors `estimate_cost`.
+#[allow(clippy::too_many_arguments)]
+pub fn estimate_cost(
+    tasks: &[FocusTask],
+    batches: Option<&[FocusBatch]>,
+    advisor_model: &str,
+    runner_model: &str,
+    max_fixes_per_runner: i64,
+    max_runners: Option<i64>,
+    pricing: Option<&HashMap<String, (i64, i64)>>,
+    target: Option<&Path>,
+) -> Result<CostEstimate, String> {
+    let default_pricing: HashMap<String, (i64, i64)> = [
+        ("opus", OPUS_CENTS_PER_MTOK),
+        ("sonnet", SONNET_CENTS_PER_MTOK),
+        ("haiku", HAIKU_CENTS_PER_MTOK),
+    ]
+    .iter()
+    .map(|(k, v)| (k.to_string(), *v))
+    .collect();
+    let pricing = pricing.unwrap_or(&default_pricing);
+
+    for fam in ["sonnet", "opus", "haiku"] {
+        if !pricing.contains_key(fam) {
+            return Err(
+                "pricing= is missing required keys; supply entries for sonnet/opus/haiku"
+                    .to_string(),
+            );
+        }
+    }
+    if max_fixes_per_runner < 0 {
+        return Err(format!(
+            "max_fixes_per_runner must be >= 0 (got {max_fixes_per_runner}); 0 disables fix waves, negative is not meaningful"
+        ));
+    }
+
+    let runner_limit = max_runners.map(|m| m.max(0)).unwrap_or(5);
+    let runner_count: i64 = if let Some(b) = batches.filter(|b| !b.is_empty()) {
+        if runner_limit > 0 {
+            (b.len() as i64).min(runner_limit)
+        } else {
+            0
+        }
+    } else if runner_limit == 0 || tasks.is_empty() {
+        0
+    } else {
+        runner_limit.min(tasks.len() as i64)
+    };
+    let file_count = tasks.len() as i64;
+
+    let mut token_cache: HashMap<&str, i64> = HashMap::new();
+    let mut content_tokens: i64 = 0;
+    for task in tasks {
+        let t = *token_cache
+            .entry(task.file_path.as_str())
+            .or_insert_with(|| tokens_for_file(&task.file_path, target));
+        content_tokens += t;
+    }
+
+    // MIN scenario.
+    let advisor_in_min = ADVISOR_SYSTEM_TOKENS + PER_MESSAGE_OVERHEAD_TOKENS * runner_count * 2;
+    let runner_in_min = runner_count * RUNNER_SYSTEM_TOKENS
+        + content_tokens
+        + runner_count * PER_MESSAGE_OVERHEAD_TOKENS;
+    let advisor_out_min = runner_count * 400;
+    let runner_out_min = runner_count * 800;
+
+    // MAX scenario.
+    let fix_rounds = max_fixes_per_runner.max(0) * runner_count;
+    let advisor_in_max = advisor_in_min + fix_rounds * PER_MESSAGE_OVERHEAD_TOKENS * 2;
+    let avg_file_tokens = content_tokens / file_count.max(1);
+    let runner_in_max =
+        runner_in_min + fix_rounds * (avg_file_tokens + PER_MESSAGE_OVERHEAD_TOKENS);
+    let advisor_out_max = advisor_out_min + fix_rounds * 200;
+    let runner_out_max = runner_out_min + fix_rounds * 600;
+
+    let (adv_in_c, adv_out_c) = *pricing
+        .get(family_of(advisor_model))
+        .unwrap_or(&pricing["sonnet"]);
+    let (run_in_c, run_out_c) = *pricing
+        .get(family_of(runner_model))
+        .unwrap_or(&pricing["sonnet"]);
+
+    let dollars = |it: i64, ot: i64, ic: i64, oc: i64| -> f64 {
+        (it * ic + ot * oc) as f64 / 1_000_000.0 / 100.0
+    };
+    let cost_min = dollars(advisor_in_min, advisor_out_min, adv_in_c, adv_out_c)
+        + dollars(runner_in_min, runner_out_min, run_in_c, run_out_c);
+    let cost_max = dollars(advisor_in_max, advisor_out_max, adv_in_c, adv_out_c)
+        + dollars(runner_in_max, runner_out_max, run_in_c, run_out_c);
+
+    Ok(CostEstimate {
+        input_tokens_min: advisor_in_min + runner_in_min,
+        input_tokens_max: advisor_in_max + runner_in_max,
+        output_tokens_min: advisor_out_min + runner_out_min,
+        output_tokens_max: advisor_out_max + runner_out_max,
+        cost_usd_min: cost_min,
+        cost_usd_max: cost_max,
+        runner_count,
+        file_count,
+        advisor_model: advisor_model.to_string(),
+        runner_model: runner_model.to_string(),
+    })
+}
+
+/// Group an integer with thousands commas (Python `{:,}`).
+fn group_thousands(n: i64) -> String {
+    let s = n.abs().to_string();
+    let bytes = s.as_bytes();
+    let mut out = String::new();
+    for (i, b) in bytes.iter().enumerate() {
+        if i > 0 && (bytes.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(*b as char);
+    }
+    if n < 0 {
+        format!("-{out}")
+    } else {
+        out
+    }
+}
+
+/// Human-readable summary. Mirrors `format_estimate`.
+pub fn format_estimate(est: &CostEstimate) -> String {
+    let as_of = format!(
+        "{:04}-{:02}-{:02}",
+        PRICING_AS_OF.0, PRICING_AS_OF.1, PRICING_AS_OF.2
+    );
+    format!(
+        "## Cost estimate\n\n- Files: {}\n- Runners: {}\n- Models: advisor={}, runners={}\n- Input tokens: {} – {}\n- Output tokens: {} – {}\n- **Est. cost: ${:.2} – ${:.2}**\n\n_Range covers review-only (min) to full fix waves (max). Actual cost depends on dialogue depth and fix count. Pricing as of {} — verify at https://www.anthropic.com/pricing._",
+        est.file_count,
+        est.runner_count,
+        est.advisor_model,
+        est.runner_model,
+        group_thousands(est.input_tokens_min),
+        group_thousands(est.input_tokens_max),
+        group_thousands(est.output_tokens_min),
+        group_thousands(est.output_tokens_max),
+        est.cost_usd_min,
+        est.cost_usd_max,
+        as_of,
+    )
+}
+
+/// Load a pricing override table from a JSON file. Mirrors `load_pricing`.
+pub fn load_pricing(path: &Path) -> Result<HashMap<String, (i64, i64)>, String> {
+    let text = crate::fs::read_text_capped(path, 1_048_576)
+        .map_err(|e| format!("could not read pricing file {}: {e}", path.display()))?;
+    let raw: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| format!("pricing file {} is not valid JSON: {e}", path.display()))?;
+    let Some(obj) = raw.as_object() else {
+        return Err(format!(
+            "pricing file {} must be a JSON object at the top level",
+            path.display()
+        ));
+    };
+    let mut out = HashMap::new();
+    for family in ["opus", "sonnet", "haiku"] {
+        let entry = obj.get(family).ok_or_else(|| {
+            format!(
+                "pricing file {} is missing family '{family}'; all three of opus/sonnet/haiku must be present",
+                path.display()
+            )
+        })?;
+        let (in_c, out_c) = if let Some(m) = entry.as_object() {
+            let getint = |k: &str| -> Result<i64, String> {
+                match m.get(k) {
+                    Some(serde_json::Value::Number(n)) if n.is_i64() || n.is_u64() => {
+                        Ok(n.as_i64().unwrap_or(0))
+                    }
+                    _ => Err(format!(
+                        "pricing file {}: family '{family}' {k:?} must be an integer",
+                        path.display()
+                    )),
+                }
+            };
+            (getint("input")?, getint("output")?)
+        } else if let Some(arr) = entry.as_array().filter(|a| a.len() == 2) {
+            let getint = |v: &serde_json::Value, label: &str| -> Result<i64, String> {
+                match v {
+                    serde_json::Value::Number(n) if n.is_i64() || n.is_u64() => {
+                        Ok(n.as_i64().unwrap_or(0))
+                    }
+                    _ => Err(format!(
+                        "pricing file {}: family '{family}' array {label:?} must be an integer",
+                        path.display()
+                    )),
+                }
+            };
+            (getint(&arr[0], "input")?, getint(&arr[1], "output")?)
+        } else {
+            return Err(format!(
+                "pricing file {}: family '{family}' must be an object {{input, output}} or a [input, output] array",
+                path.display()
+            ));
+        };
+        if in_c < 0 || out_c < 0 {
+            return Err(format!(
+                "pricing file {}: family '{family}' cents values must be non-negative",
+                path.display()
+            ));
+        }
+        out.insert(family.to_string(), (in_c, out_c));
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -70,5 +335,107 @@ mod tests {
         assert_eq!(default_pricing_for("sonnet"), (300, 1500));
         assert_eq!(default_pricing_for("haiku"), (25, 125));
         assert_eq!(default_pricing_for("unknown"), (300, 1500));
+    }
+
+    fn golden() -> serde_json::Value {
+        serde_json::from_str(include_str!("../tests/parity/cost.json")).unwrap()
+    }
+
+    fn task(p: &str, pri: u8) -> FocusTask {
+        FocusTask {
+            file_path: p.into(),
+            priority: pri,
+            prompt: "p".into(),
+        }
+    }
+
+    #[test]
+    fn estimate_matches_python() {
+        let g = golden();
+        let tasks = vec![task("nope_a.py", 5), task("nope_b.py", 3)];
+        let est = estimate_cost(
+            &tasks,
+            None,
+            "claude-opus-4-7",
+            "claude-sonnet-4-6",
+            2,
+            Some(5),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(est.to_dict(), g["to_dict"]);
+        assert_eq!(format_estimate(&est), g["format"].as_str().unwrap());
+
+        let batches = vec![
+            FocusBatch {
+                batch_id: 1,
+                tasks: vec![task("nope_a.py", 5)],
+                complexity: crate::focus::Complexity::High,
+            },
+            FocusBatch {
+                batch_id: 2,
+                tasks: vec![task("nope_b.py", 3)],
+                complexity: crate::focus::Complexity::Medium,
+            },
+        ];
+        let est2 = estimate_cost(
+            &tasks,
+            Some(&batches),
+            "opus",
+            "haiku",
+            3,
+            Some(5),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(est2.to_dict(), g["to_dict_batches"]);
+    }
+
+    #[test]
+    fn load_pricing_shapes_and_errors() {
+        let g = golden();
+        let dir = std::env::temp_dir().join(format!("advisor_cost_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let obj = dir.join("obj.json");
+        std::fs::write(&obj, r#"{"opus":{"input":1500,"output":7500},"sonnet":{"input":300,"output":1500},"haiku":{"input":25,"output":125}}"#).unwrap();
+        let arr = dir.join("arr.json");
+        std::fs::write(
+            &arr,
+            r#"{"opus":[1500,7500],"sonnet":[300,1500],"haiku":[25,125]}"#,
+        )
+        .unwrap();
+        let to_map = |v: &serde_json::Value| -> HashMap<String, Vec<i64>> {
+            v.as_object()
+                .unwrap()
+                .iter()
+                .map(|(k, x)| {
+                    (
+                        k.clone(),
+                        x.as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|n| n.as_i64().unwrap())
+                            .collect(),
+                    )
+                })
+                .collect()
+        };
+        let loaded_obj = load_pricing(&obj).unwrap();
+        let loaded_arr = load_pricing(&arr).unwrap();
+        for (fam, pair) in to_map(&g["load_obj"]) {
+            assert_eq!(loaded_obj[&fam], (pair[0], pair[1]));
+        }
+        for (fam, pair) in to_map(&g["load_arr"]) {
+            assert_eq!(loaded_arr[&fam], (pair[0], pair[1]));
+        }
+        let missing = dir.join("e.json");
+        std::fs::write(&missing, r#"{"opus":[1,2],"sonnet":[1,2]}"#).unwrap();
+        let err = load_pricing(&missing)
+            .unwrap_err()
+            .replace(missing.to_str().unwrap(), "<P>");
+        assert_eq!(err, g["err_missing"].as_str().unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

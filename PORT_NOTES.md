@@ -43,7 +43,7 @@ parity assertions.
 | `src/fs.rs` (+helpers) | `_fs.py` | `normalize_path`, `validate_file_types`, **`read_text_capped`**, **`atomic_write_text`**, `posix_normpath` | reference table + used by baseline round-trip |
 | `src/config.rs` | `orchestrate/config.py` | `is_known_model` + model regex/constants, **`TeamConfig`**, **`default_team_config`** (env fallbacks, range clamping + stderr warnings, preset merge) | Matrix + **golden JSON** (7 scenarios: minimal, presets, clamps, explicit) |
 | `src/sarif.rs` | `sarif.py` | **full `findings_to_sarif`** document builder (rule dedup/ordering, `path:line:col:col` parsing, region clamps, control stripping, `%SRCROOT%` URIs, percent-encoding, partial fingerprints), `synthesize_rule_id`, `level_for`, `short_text`, `strip_controls` | **Golden JSON** vs Python (full SARIF doc byte-for-byte + parse/short/strip cases) |
-| `src/cost.rs` | `cost.py` | pricing table, token-overhead constants, `family_of`, `PRICING_AS_OF` | Unit tests |
+| `src/cost.rs` | `cost.py` | pricing table + token constants + `family_of`, **`estimate_cost`**, **`load_pricing`** (object/array shapes + errors), **`format_estimate`**, `CostEstimate` | **Golden JSON** vs Python (estimate to_dict + format, load shapes, error) |
 | `src/models.rs` | `verify.py`, `rank.py` | `Finding`, `RankedFile`, `Severity` (+ canonicalization), serde | Serde field-completeness test |
 | `src/presets.rs` | `presets.py` + CLI handler | `RulePack`, `list_presets`, `get_preset`, `presets_json`, `presets_pretty` | **Byte-exact golden** vs Python `presets [--json]` |
 | `src/verify.rs` | `verify.py` | `Finding` format/parse state machine: `format_findings_block`, `build_verify_prompt`, `parse_findings_from_text`/`_with_drift`, `safe_inline`, severity canonicalization, fenced-block auto-recovery, scope filtering | **Golden JSON** vs Python (round-trip, plain/list, ASCII arrow, fenced, invented severity, header-less, scope, safe_inline) |
@@ -65,6 +65,7 @@ parity assertions.
 | `advisor baseline diff --json` | ✓ | ✓ | **IDENTICAL** (new/persisting_count/fixed) | `scripts/parity_check.sh` |
 | `advisor suppressions [--json/--expired]` | ✓ | ✓ | **IDENTICAL** (list/json/expired) | `scripts/parity_check.sh` |
 | `advisor audit --json` / `--format pr-comment` / `--fail-on` | ✓ | ✓ | **IDENTICAL** end-to-end (checkpoint+transcript) incl. exit-4 gate | `scripts/parity_check.sh` |
+| `advisor plan --estimate` / `--dump-pricing-template` | ✓ | ✓ | **IDENTICAL** (cost estimate on real file sizes; pricing template) | `scripts/parity_check.sh` |
 | `advisor --version` | n/a (`advisor version`) | ✓ | Intentional difference — Rust uses clap `--version`; full `version` subcommand pending | classified *intentional* |
 | `sanitize_inline` / `fence` | ✓ | ✓ | IDENTICAL on tested inputs | |
 | `normalize_path` | ✓ | ✓ | IDENTICAL on 10-case reference table | |
@@ -85,7 +86,7 @@ Everything else. The Python package is fully intact and authoritative. Largest
 remaining work, roughly in dependency order (see `RUST_PORT_PLAN.md` §6):
 
 - **Core logic**: `runner_budget.py`, `git_scope.py` (subprocess),
-  `history.py`, full `cost.py` estimator, remaining `_fs.py` nuances,
+  `history.py`, `git_scope.py` (subprocess), remaining `_fs.py` nuances,
   `checkpoint.py` save path (`plan --checkpoint`).
 - **Orchestration prompts**: `advisor_prompt.py`, `runner_prompts.py`,
   `verify_dispatch.py`, `pipeline.py`, `_schema.py`, the embedded
@@ -126,8 +127,7 @@ remaining work, roughly in dependency order (see `RUST_PORT_PLAN.md` §6):
 
 `rank.py`, `focus.py`, `config.py`, `verify.py`, `sarif.py`, and the
 **`advisor plan` CLI** are now ported and parity-verified. Next:
-1. Port **`cost.py`** estimator + wire `plan --estimate`/`--dump-pricing-template`,
-   and **`git_scope.py`** + wire `plan --since/--staged/--branch`.
+1. Port **`git_scope.py`** (git subprocess) + wire `plan --since/--staged/--branch`.
 2. Port **`history.py`** to close the `plan` history-ranking gap, then
    **`checkpoint.py` save** for `plan --checkpoint`/`--resume` and the
    `advisor checkpoints` list command (loader already ported).
