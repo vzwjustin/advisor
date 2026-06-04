@@ -5,6 +5,7 @@
 //! dispatch prompt/message; the advisor/runner prompt builders (snapshot-parity
 //! gated) are tracked in PORT_NOTES.
 
+pub mod runner_prompts;
 pub mod verify_dispatch;
 
 /// Canonical finding-report schema for runner output. Mirrors `_schema.FINDING_SCHEMA`.
