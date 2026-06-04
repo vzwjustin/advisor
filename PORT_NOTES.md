@@ -37,7 +37,7 @@ parity assertions.
 | `src/style.rs` | `_style.py` | `strip_ansi` (CSI+OSC regex) | Unit tests |
 | `src/fs.rs` | `_fs.py` | `normalize_path`, `validate_file_types`, `CONTENT_SCAN_LIMIT`, POSIX `normpath` | Reference table vs Python (10 cases) |
 | `src/config.rs` | `orchestrate/config.py` | `is_known_model` + model regex/constants, **`TeamConfig`**, **`default_team_config`** (env fallbacks, range clamping + stderr warnings, preset merge) | Matrix + **golden JSON** (7 scenarios: minimal, presets, clamps, explicit) |
-| `src/sarif.rs` | `sarif.py` | `synthesize_rule_id`, `level_for`, schema/version constants | SHA-1 rule-id vs Python |
+| `src/sarif.rs` | `sarif.py` | **full `findings_to_sarif`** document builder (rule dedup/ordering, `path:line:col:col` parsing, region clamps, control stripping, `%SRCROOT%` URIs, percent-encoding, partial fingerprints), `synthesize_rule_id`, `level_for`, `short_text`, `strip_controls` | **Golden JSON** vs Python (full SARIF doc byte-for-byte + parse/short/strip cases) |
 | `src/cost.rs` | `cost.py` | pricing table, token-overhead constants, `family_of`, `PRICING_AS_OF` | Unit tests |
 | `src/models.rs` | `verify.py`, `rank.py` | `Finding`, `RankedFile`, `Severity` (+ canonicalization), serde | Serde field-completeness test |
 | `src/presets.rs` | `presets.py` + CLI handler | `RulePack`, `list_presets`, `get_preset`, `presets_json`, `presets_pretty` | **Byte-exact golden** vs Python `presets [--json]` |
@@ -76,8 +76,8 @@ remaining work, roughly in dependency order (see `RUST_PORT_PLAN.md` §6):
 
 - **Core logic**: `runner_budget.py`, `git_scope.py` (subprocess),
   `history.py`, `baseline.py`, `checkpoint.py`, `suppressions.py`,
-  `pr_comment.py`, `audit.py`, full `cost.py` estimator, full `sarif.py`
-  document builder, full `_fs.py` atomic write/locking.
+  `pr_comment.py`, `audit.py`, full `cost.py` estimator, full `_fs.py`
+  atomic write/locking.
 - **Orchestration prompts**: `advisor_prompt.py`, `runner_prompts.py`,
   `verify_dispatch.py`, `pipeline.py`, `_schema.py`, the embedded
   `_prompts/advisor.txt`, and the 20+ golden snapshot fixtures (parity linchpin).
@@ -115,13 +115,11 @@ remaining work, roughly in dependency order (see `RUST_PORT_PLAN.md` §6):
 
 ## Exact next recommended step
 
-`rank.py`, `focus.py`, `config.py`, `verify.py`, and the **`advisor plan` CLI**
-(discovery → rank → focus → JSON) are now ported and parity-verified. With
-`Finding` parse/format in place, the findings-lifecycle commands are unblocked.
-Next:
-1. Port the full **`sarif.py`** `findings_to_sarif` document builder + **`pr_comment.py`**,
-   then **`baseline.py`** / **`suppressions.py`**, to light up
-   `advisor audit`/`baseline`/`--sarif`/`--fail-on`.
+`rank.py`, `focus.py`, `config.py`, `verify.py`, `sarif.py`, and the
+**`advisor plan` CLI** are now ported and parity-verified. Next:
+1. Port **`pr_comment.py`** (GitHub PR body formatter) and **`baseline.py`** /
+   **`suppressions.py`**, then wire **`advisor audit`** (transcript → findings →
+   sarif/pr-comment/json + `--fail-on`) and **`advisor baseline`** into the CLI.
 2. Remaining `plan` flags not yet wired (documented gaps): `--since/--staged/--branch`
    (needs `git_scope.py`), `--estimate`/`--pricing` (needs full `cost.py`),
    `--checkpoint`/`--resume` (needs `checkpoint.py`), `--sarif`, `--exclude`,
