@@ -11,20 +11,26 @@
 pub mod audit;
 pub mod baseline;
 pub mod checkpoint;
+pub mod codex_skill;
 pub mod config;
+pub mod doctor;
+pub mod install;
 pub mod cost;
 pub mod fence;
 pub mod focus;
 pub mod fs;
 pub mod git_scope;
 pub mod history;
+pub mod live;
 pub mod jsonutil;
 pub mod models;
 pub mod orchestrate;
 pub mod pr_comment;
 pub mod presets;
 pub mod rank;
+pub mod runner_budget;
 pub mod sarif;
+pub mod skill_asset;
 pub mod style;
 pub mod suppressions;
 pub mod verify;
@@ -40,6 +46,7 @@ pub use baseline::{
     write_baseline, BaselineDiff, BaselineEntry,
 };
 pub use checkpoint::{checkpoint_path, list_checkpoints, load_checkpoint, Checkpoint};
+pub use codex_skill::{build_codex_runner_prompt, render_codex_skill_md};
 pub use config::{
     default_team_config, is_known_model, TeamConfig, TeamConfigInput, DEFAULT_ADVISOR_MODEL,
     DEFAULT_RUNNER_MODEL, POOL_SIZE_CEILING,
@@ -63,6 +70,15 @@ pub use rank::{language_for_path, load_advisorignore, rank_files, rank_to_prompt
 pub use sarif::{
     findings_to_sarif, level_for, synthesize_rule_id, SARIF_SCHEMA_URI, SARIF_VERSION,
 };
+pub use doctor::{format_report, run_doctor, Check, DoctorReport, HealthLevel};
+pub use install::{
+    apply_nudge, get_installed_skill_version, get_status, install, install_skill,
+    install_update_skill, parse_badge, uninstall_nudge, uninstall_skill, InstallAction,
+    InstallResult, ComponentStatus, Status, NUDGE_BODY, OPT_OUT_ENV,
+};
+pub use live::{append_event, latest_seq, live_events_path, load_recent_events, LIVE_DIR_NAME, LIVE_FILE_NAME, LIVE_SCHEMA_VERSION};
+pub use runner_budget::{BudgetStatus, RunnerBudget, ScopeAnchor, new_budget, update_budget};
+pub use skill_asset::{skill_md, skill_md_update, version_badge};
 pub use style::strip_ansi;
 pub use suppressions::{apply_suppressions, load_suppressions, Suppression};
 pub use verify::{

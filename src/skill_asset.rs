@@ -1,0 +1,44 @@
+use crate::version::resolve_version;
+
+pub fn version_badge() -> String {
+    format!("<!-- advisor:{} -->", resolve_version())
+}
+
+const SKILL_MD_TEMPLATE: &str = include_str!("../advisor/skill_asset_skill_md.txt");
+const SKILL_MD_UPDATE_TEMPLATE: &str = include_str!("../advisor/skill_asset_skill_md_update.txt");
+
+pub fn skill_md() -> String {
+    SKILL_MD_TEMPLATE.replace("__VERSION_BADGE__", &version_badge())
+}
+
+pub fn skill_md_update() -> String {
+    SKILL_MD_UPDATE_TEMPLATE.replace("__VERSION_BADGE__", &version_badge())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn golden() -> serde_json::Value {
+        let s = include_str!("../tests/parity/skill_strings.json");
+        serde_json::from_str(s).unwrap()
+    }
+
+    #[test]
+    fn parity_skill_md() {
+        let g = golden();
+        assert_eq!(skill_md(), g["SKILL_MD"].as_str().unwrap());
+    }
+
+    #[test]
+    fn parity_skill_md_update() {
+        let g = golden();
+        assert_eq!(skill_md_update(), g["SKILL_MD_UPDATE"].as_str().unwrap());
+    }
+
+    #[test]
+    fn parity_version_badge() {
+        let g = golden();
+        assert_eq!(version_badge(), g["version_badge"].as_str().unwrap());
+    }
+}

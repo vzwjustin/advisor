@@ -192,6 +192,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn parity_git_scope_json() {
+        use std::collections::HashMap;
+        let raw = std::fs::read_to_string("tests/parity/git_scope.json").unwrap();
+        let v: HashMap<String, serde_json::Value> = serde_json::from_str(&raw).unwrap();
+        let t = Path::new(".");
+        // no scope returns None
+        assert_eq!(
+            resolve_git_scope(t, None, false, None).unwrap().is_none(),
+            v["no_scope_returns_none"].as_bool().unwrap()
+        );
+        // mutual exclusion
+        assert_eq!(
+            resolve_git_scope(t, Some("main"), true, None).is_err(),
+            v["mutual_excl_since_staged_raises"].as_bool().unwrap()
+        );
+        assert_eq!(
+            resolve_git_scope(t, Some("main"), false, Some("origin/main")).is_err(),
+            v["mutual_excl_since_branch_raises"].as_bool().unwrap()
+        );
+        assert_eq!(
+            resolve_git_scope(t, None, true, Some("main")).is_err(),
+            v["mutual_excl_staged_branch_raises"].as_bool().unwrap()
+        );
+    }
+
+    #[test]
     fn ref_validation() {
         assert!(validate_ref("--since", "main").is_ok());
         assert!(validate_ref("--since", "HEAD~3").is_ok());

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import warnings
 from dataclasses import dataclass
 from datetime import date
@@ -107,6 +108,12 @@ def _warn_unknown_family(model: str) -> None:
 
 
 _stale_pricing_warned = False
+# Guards the check-and-set of ``_stale_pricing_warned`` so two threads
+# entering this function concurrently can't both observe ``False`` and
+# both emit the warning. The lock is held only for the flag flip — the
+# stale-age check and the actual ``warnings.warn`` emission happen
+# outside the lock to minimize hold time.
+_stale_pricing_lock = threading.Lock()
 
 
 def _maybe_warn_stale_default_pricing() -> None:
@@ -120,12 +127,13 @@ def _maybe_warn_stale_default_pricing() -> None:
     stderr so callers can filter via ``-W`` or ``warnings.simplefilter``.
     """
     global _stale_pricing_warned
-    if _stale_pricing_warned:
-        return
     age_days = (date.today() - PRICING_AS_OF).days
     if age_days <= _PRICING_STALE_DAYS:
         return
-    _stale_pricing_warned = True
+    with _stale_pricing_lock:
+        if _stale_pricing_warned:
+            return
+        _stale_pricing_warned = True
     warnings.warn(
         f"cost: default pricing table is stale "
         f"(snapshot {PRICING_AS_OF.isoformat()}, {age_days} days old); "

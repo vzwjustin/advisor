@@ -733,7 +733,7 @@ pub fn rank_files(
             priority = priority.min(1);
             reasons = vec!["test file".to_string()];
         }
-        if let Some(scores) = history_scores {
+        if let Some(scores) = history_scores.filter(|_| !is_test_path(fp)) {
             let boost = history_boost(fp, scores);
             if boost > 0.0 {
                 let boosted = (priority + 1).min(5);

@@ -4535,7 +4535,25 @@ _NUDGE_SKIP_COMMANDS = {
 }
 
 
+def _try_exec_rust_binary() -> None:
+    """If the bundled Rust binary exists, exec into it — no return."""
+    import platform as _platform
+
+    bin_name = "advisor.exe" if _platform.system() == "Windows" else "advisor"
+    pkg_dir = os.path.dirname(os.path.abspath(__file__))
+    candidate = os.path.join(pkg_dir, "_bin", bin_name)
+    if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+        os.execv(candidate, [candidate] + sys.argv[1:])
+    # Binary absent or not executable — fall through to Python implementation.
+
+
 def main(argv: list[str] | None = None) -> int:
+    # Hand off to the compiled Rust binary when available.  The exec replaces
+    # this process so there is no return; the Python implementation below is
+    # the fallback for platforms / builds where the binary was not compiled.
+    if argv is None:
+        _try_exec_rust_binary()
+
     parser = build_parser()
     args = parser.parse_args(argv)
     if getattr(args, "no_color", False):

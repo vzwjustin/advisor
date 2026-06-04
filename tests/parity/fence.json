@@ -1,0 +1,12 @@
+{
+  "fence_plain": "```\nhello world\n```",
+  "fence_python": "```python\nx = 1\n```",
+  "fence_collision": "````\n```triple```\n````",
+  "fence_with_lang": "```rust\ncode\n```",
+  "fence_empty": "```\n\n```",
+  "sanitize_inline_basic": "hello",
+  "sanitize_inline_backtick": "'code'",
+  "sanitize_inline_newline": "line1 line2",
+  "sanitize_inline_bidi": "testevil",
+  "sanitize_inline_invisible": "ab"
+}

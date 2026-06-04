@@ -17,12 +17,23 @@ use advisor::baseline::{
     diff_against_baseline, filter_against_baseline, findings_to_entries, read_baseline,
     write_baseline,
 };
+use advisor::codex_skill::build_codex_runner_prompt;
+use advisor::install::{
+    codex_cli_available, get_installed_skill_version, get_status, install, install_skill,
+    install_update_skill, load_changelog_sections, load_release_notes,
+    uninstall_nudge, uninstall_skill, uninstall_update_skill, InstallAction, NUDGE_BODY,
+};
 use advisor::config::{default_team_config, TeamConfigInput};
+use advisor::fence::sanitize_inline;
 use advisor::focus::{
     self, create_focus_batches, create_focus_tasks, FocusBatch, FocusTask, DEFAULT_TASK_PROMPT,
 };
 use advisor::jsonutil::ensure_ascii;
+use advisor::live::{append_event, latest_seq, live_events_path, load_recent_events};
 use advisor::models::Severity;
+use advisor::orchestrate::advisor_prompt::build_advisor_prompt;
+use advisor::orchestrate::runner_prompts::build_runner_pool_prompt;
+use advisor::orchestrate::verify_dispatch::build_verify_dispatch_prompt;
 use advisor::presets;
 use advisor::rank::{self, fnmatch_match, load_advisorignore, rank_files};
 use advisor::verify::{parse_findings_from_text, INCOMPLETE_FILE_PATH};
@@ -182,6 +193,285 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Print the full pipeline reference for a target directory.
+    Pipeline {
+        /// Target directory (used to fill model names / team name in the reference).
+        #[arg(default_value = ".")]
+        target: String,
+        /// Emit pipeline as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Suppress decorations (CTA/tips).
+        #[arg(long)]
+        quiet: bool,
+        /// Override the advisor model.
+        #[arg(long)]
+        advisor_model: Option<String>,
+        /// Override the runner model.
+        #[arg(long)]
+        runner_model: Option<String>,
+        /// Team name.
+        #[arg(long, default_value = "review")]
+        team: String,
+    },
+    /// Print the strict team-lifecycle protocol as an ad-hoc reference.
+    Protocol {
+        /// Emit protocol as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Suppress the trailing CTA line.
+        #[arg(long)]
+        quiet: bool,
+    },
+    /// Print version and environment details.
+    Version {
+        /// Emit as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Emit / inspect the live event stream (.advisor/live/events.jsonl).
+    Live {
+        #[command(subcommand)]
+        action: LiveAction,
+    },
+    /// Print a step prompt for pasting into Claude Code.
+    Prompt {
+        /// Which step: advisor, runner, verify.
+        #[arg(value_parser = ["advisor", "runner", "verify"])]
+        step: String,
+        /// Target directory.
+        #[arg(default_value = ".")]
+        target: String,
+        /// Runner number (only used with --step runner).
+        #[arg(long, default_value_t = 1)]
+        runner_id: usize,
+        /// File count hint for verify prompt.
+        #[arg(long)]
+        file_count: Option<usize>,
+        /// Max runners hint for verify prompt.
+        #[arg(long, default_value_t = 5)]
+        max_runners: usize,
+        /// Emit as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Suppress TTY framing.
+        #[arg(long)]
+        quiet: bool,
+        /// Override the advisor model.
+        #[arg(long)]
+        advisor_model: Option<String>,
+        /// Override the runner model.
+        #[arg(long)]
+        runner_model: Option<String>,
+        /// Team name.
+        #[arg(long, default_value = "review")]
+        team: String,
+        /// Ignore .advisor/history.jsonl.
+        #[arg(long)]
+        no_history: bool,
+        /// Apply a rule-pack preset.
+        #[arg(long)]
+        preset: Option<String>,
+        /// Glob pattern(s) for files.
+        #[arg(long, default_value = "*.py")]
+        file_types: String,
+    },
+    /// Install the /advisor skill AND append the CLAUDE.md nudge.
+    Install {
+        /// Path to CLAUDE.md (default: ~/.claude/CLAUDE.md).
+        #[arg(long)]
+        path: Option<String>,
+        /// Path to SKILL.md (default: ~/.claude/skills/advisor/SKILL.md).
+        #[arg(long = "skill-path")]
+        skill_path: Option<String>,
+        /// Check install health only — do not write.
+        #[arg(long)]
+        check: bool,
+        /// Emit as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Suppress decorations.
+        #[arg(long)]
+        quiet: bool,
+        /// Exit 3 if not fully installed.
+        #[arg(long)]
+        strict: bool,
+        /// Skip writing the SKILL.md (nudge only).
+        #[arg(long = "skip-skill")]
+        skip_skill: bool,
+    },
+    /// Remove the /advisor skill and CLAUDE.md nudge block.
+    Uninstall {
+        /// Path to CLAUDE.md.
+        #[arg(long)]
+        path: Option<String>,
+        /// Path to SKILL.md.
+        #[arg(long = "skill-path")]
+        skill_path: Option<String>,
+        /// Emit as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Suppress decorations.
+        #[arg(long)]
+        quiet: bool,
+    },
+    /// Print a health summary of the local advisor install.
+    Status {
+        /// Path to CLAUDE.md.
+        #[arg(long)]
+        path: Option<String>,
+        /// Path to SKILL.md.
+        #[arg(long = "skill-path")]
+        skill_path: Option<String>,
+        /// Emit as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Suppress decorations.
+        #[arg(long)]
+        quiet: bool,
+        /// Exit 3 if not healthy.
+        #[arg(long)]
+        strict: bool,
+    },
+    /// Extended diagnostics: status + git/Claude/env checks.
+    Doctor {
+        /// Path to CLAUDE.md.
+        #[arg(long)]
+        path: Option<String>,
+        /// Path to SKILL.md.
+        #[arg(long = "skill-path")]
+        skill_path: Option<String>,
+        /// Emit as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Suppress decorations.
+        #[arg(long)]
+        quiet: bool,
+        /// Exit 3 if not healthy.
+        #[arg(long)]
+        strict: bool,
+    },
+    /// Print bundled CHANGELOG entries — single version or --since X.Y.Z.
+    Changelog {
+        /// Print notes for this specific version (e.g. 0.8.4).
+        version: Option<String>,
+        /// Only show sections strictly newer than this version.
+        #[arg(long)]
+        since: Option<String>,
+        /// Emit as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Suppress trailing CTA.
+        #[arg(long)]
+        quiet: bool,
+    },
+    /// Self-upgrade advisor-agent to the latest PyPI release.
+    Update {
+        /// Skip confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+        /// Suppress output.
+        #[arg(long)]
+        quiet: bool,
+        /// Emit as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Launch the local web dashboard (127.0.0.1).
+    Ui {
+        /// Target directory.
+        #[arg(default_value = ".")]
+        target: String,
+        /// Port to listen on (0 = OS-assigned).
+        #[arg(long, default_value_t = 7070)]
+        port: u16,
+        /// Host to bind.
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        /// Emit startup info as JSON (no server launched).
+        #[arg(long)]
+        json: bool,
+        /// Suppress startup banner.
+        #[arg(long)]
+        quiet: bool,
+    },
+    /// Emit a Codex-flavored dispatch CSV (one row per runner batch).
+    #[command(name = "codex-plan-csv")]
+    CodexPlanCsv {
+        /// Target directory to scan.
+        #[arg(default_value = ".")]
+        target: String,
+        /// Glob pattern(s) for files, comma-separated.
+        #[arg(long, default_value = "*.py")]
+        file_types: String,
+        /// Minimum priority tier (1-5) to include.
+        #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u8).range(1..=5))]
+        min_priority: u8,
+        /// Files per batch (default 5).
+        #[arg(long, default_value_t = 5)]
+        batch_size: usize,
+        /// Apply a rule-pack preset.
+        #[arg(long)]
+        preset: Option<String>,
+        /// Write CSV to PATH instead of a tempfile.
+        #[arg(long)]
+        out: Option<String>,
+        /// Suppress the Codex-not-on-PATH warning.
+        #[arg(long)]
+        quiet: bool,
+        /// Scope to files changed since git REF.
+        #[arg(long)]
+        since: Option<String>,
+        /// Scope to currently staged files.
+        #[arg(long)]
+        staged: bool,
+        /// Scope to files changed vs BASE.
+        #[arg(long)]
+        branch: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum LiveAction {
+    /// Append one event to the live stream.
+    Record {
+        #[arg(default_value = ".")]
+        target: String,
+        /// Event kind (e.g. run_start, report_relay).
+        #[arg(long)]
+        kind: String,
+        /// JSON object payload ("-" = read from stdin).
+        #[arg(long)]
+        data: Option<String>,
+        /// Emit as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Suppress the success line.
+        #[arg(long)]
+        quiet: bool,
+    },
+    /// Print recent events.
+    Tail {
+        #[arg(default_value = ".")]
+        target: String,
+        /// Max events to show.
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+        /// Only show events after this sequence number.
+        #[arg(long)]
+        since: Option<i64>,
+        /// Emit as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delete the live events file.
+    Clear {
+        #[arg(default_value = ".")]
+        target: String,
+        /// Suppress the success line.
+        #[arg(long)]
+        quiet: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -297,6 +587,105 @@ fn main() -> ExitCode {
             let _ = list; // default-on flag, no behavior change
             cmd_suppressions(&target, expired, json)
         }
+        Command::Install {
+            path,
+            skill_path,
+            check,
+            json,
+            quiet,
+            strict,
+            skip_skill,
+        } => cmd_install(path, skill_path, check, json, quiet, strict, skip_skill),
+        Command::Uninstall {
+            path,
+            skill_path,
+            json,
+            quiet,
+        } => cmd_uninstall(path, skill_path, json, quiet),
+        Command::Status {
+            path,
+            skill_path,
+            json,
+            quiet,
+            strict,
+        } => cmd_status(path, skill_path, json, quiet, strict),
+        Command::Doctor {
+            path,
+            skill_path,
+            json,
+            quiet,
+            strict,
+        } => cmd_doctor(path, skill_path, json, quiet, strict),
+        Command::Changelog { version, since, json, quiet } => {
+            cmd_changelog(version, since, json, quiet)
+        }
+        Command::Update { yes, quiet, json } => cmd_update(yes, quiet, json),
+        Command::Ui { target, port, host, json, quiet } => {
+            cmd_ui(&target, port, &host, json, quiet)
+        }
+        Command::Pipeline {
+            target,
+            json,
+            quiet,
+            advisor_model,
+            runner_model,
+            team,
+        } => cmd_pipeline(&target, json, quiet, advisor_model, runner_model, &team),
+        Command::Protocol { json, quiet } => cmd_protocol(json, quiet),
+        Command::Version { json } => cmd_version(json),
+        Command::Live { action } => cmd_live(action),
+        Command::Prompt {
+            step,
+            target,
+            runner_id,
+            file_count,
+            max_runners,
+            json,
+            quiet,
+            advisor_model,
+            runner_model,
+            team,
+            no_history,
+            preset,
+            file_types,
+        } => cmd_prompt(PromptArgs {
+            step,
+            target,
+            runner_id,
+            file_count,
+            max_runners,
+            json,
+            quiet,
+            advisor_model,
+            runner_model,
+            team,
+            no_history,
+            preset,
+            file_types,
+        }),
+        Command::CodexPlanCsv {
+            target,
+            file_types,
+            min_priority,
+            batch_size,
+            preset,
+            out,
+            quiet,
+            since,
+            staged,
+            branch,
+        } => cmd_codex_plan_csv(CodexPlanCsvArgs {
+            target,
+            file_types,
+            min_priority,
+            batch_size,
+            preset,
+            out,
+            quiet,
+            since,
+            staged,
+            branch,
+        }),
     }
 }
 
@@ -1516,4 +1905,1002 @@ fn cmd_audit(args: AuditArgs) -> ExitCode {
     // Pretty (color disabled in the Rust port — colorize_markdown is a no-op here).
     println!("{}", advisor::audit::format_audit_report(&report));
     exit(fail_rc)
+}
+
+// ── changelog ────────────────────────────────────────────────────────────────
+
+fn cmd_changelog(
+    version: Option<String>,
+    since: Option<String>,
+    json: bool,
+    quiet: bool,
+) -> ExitCode {
+    if let Some(ref v) = version {
+        let notes = load_release_notes(v);
+        if json {
+            let payload = serde_json::json!({
+                "schema_version": "1.0",
+                "version": v,
+                "body": notes,
+            });
+            println!(
+                "{}",
+                ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
+            );
+            return if notes.is_some() { ExitCode::SUCCESS } else { ExitCode::FAILURE };
+        }
+        match notes {
+            Some(body) => {
+                println!("## v{v}");
+                println!("{body}");
+                ExitCode::SUCCESS
+            }
+            None => {
+                eprintln!("no changelog section for {v}");
+                ExitCode::FAILURE
+            }
+        }
+    } else {
+        let sections = load_changelog_sections(since.as_deref());
+        if json {
+            let arr: Vec<serde_json::Value> = sections
+                .iter()
+                .map(|(v, h, b)| {
+                    serde_json::json!({ "version": v, "heading": h, "body": b })
+                })
+                .collect();
+            let payload = serde_json::json!({
+                "schema_version": "1.0",
+                "since": since,
+                "sections": arr,
+            });
+            println!(
+                "{}",
+                ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
+            );
+            return if sections.is_empty() {
+                ExitCode::FAILURE
+            } else {
+                ExitCode::SUCCESS
+            };
+        }
+        if sections.is_empty() {
+            let target = match &since {
+                Some(s) => format!("newer than {s}"),
+                None => "available".to_string(),
+            };
+            eprintln!("no changelog sections {target}");
+            return ExitCode::FAILURE;
+        }
+        for (i, (v, _heading, body)) in sections.iter().enumerate() {
+            if i > 0 {
+                println!();
+            }
+            println!("## v{v}");
+            println!("{body}");
+        }
+        if !quiet {
+            println!();
+            println!("Next: advisor update");
+        }
+        ExitCode::SUCCESS
+    }
+}
+
+// ── update ────────────────────────────────────────────────────────────────────
+
+fn cmd_update(_yes: bool, quiet: bool, json: bool) -> ExitCode {
+    let current = advisor::resolve_version();
+    if json {
+        let payload = serde_json::json!({
+            "schema_version": "1.0",
+            "current_version": current,
+            "note": "advisor update is not supported in the Rust binary; \
+                     run: uv tool install --reinstall advisor-agent",
+        });
+        println!(
+            "{}",
+            ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
+        );
+        return ExitCode::FAILURE;
+    }
+    if !quiet {
+        eprintln!(
+            "advisor update is not supported in the Rust binary.\n\
+             To upgrade, run one of:\n\
+             \n  uv tool install --reinstall advisor-agent\
+             \n  pipx upgrade advisor-agent\
+             \n  pip install --upgrade advisor-agent\n"
+        );
+    }
+    ExitCode::FAILURE
+}
+
+// ── ui ────────────────────────────────────────────────────────────────────────
+
+fn cmd_ui(target: &str, port: u16, host: &str, json: bool, quiet: bool) -> ExitCode {
+    let target_path = std::path::Path::new(target);
+    if !target_path.exists() {
+        eprintln!("target not found: {target}");
+        return ExitCode::from(2);
+    }
+    if !target_path.is_dir() {
+        eprintln!("target is not a directory: {target}");
+        return ExitCode::from(2);
+    }
+    if json {
+        let display_host = if host.contains(':') {
+            format!("[{host}]")
+        } else {
+            host.to_string()
+        };
+        let payload = serde_json::json!({
+            "schema_version": "1.0",
+            "url": format!("http://{}:{}", display_host, port),
+            "note": "advisor ui is not supported in the Rust binary; \
+                     run: advisor ui (Python CLI)",
+            "server_running": false,
+        });
+        println!(
+            "{}",
+            ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
+        );
+        return ExitCode::FAILURE;
+    }
+    if !quiet {
+        eprintln!(
+            "advisor ui is not supported in the Rust binary.\n\
+             Run the Python CLI: advisor ui {target}"
+        );
+    }
+    ExitCode::FAILURE
+}
+
+// ── install / uninstall / status / doctor ────────────────────────────────────
+
+const STRICT_NOOP_EXIT: u8 = 3;
+
+fn format_component(label: &str, present: bool, current: bool) -> String {
+    let mark = if present && current {
+        "✓"
+    } else if present {
+        "~"
+    } else {
+        "✗"
+    };
+    let state = if present && current {
+        "installed and current"
+    } else if present {
+        "installed but outdated"
+    } else {
+        "not installed"
+    };
+    format!("  {mark} {label}: {state}")
+}
+
+fn print_status(
+    path: Option<String>,
+    skill_path: Option<String>,
+    json: bool,
+    quiet: bool,
+) -> (bool, ExitCode) {
+    let nudge_path = path.as_deref().map(std::path::Path::new);
+    let sp = skill_path.as_deref().map(std::path::Path::new);
+    let update_sp = advisor::install::update_skill_path_for(sp);
+    let s = get_status(nudge_path, sp, Some(&update_sp));
+    let installed_v = get_installed_skill_version(sp);
+    let version = advisor::resolve_version();
+
+    let update_ok = s.update_skill.as_ref().map_or(true, |u| u.present && u.current);
+    let healthy = s.nudge.present
+        && s.nudge.current
+        && s.skill.present
+        && s.skill.current
+        && update_ok;
+
+    if json {
+        let mut payload = serde_json::json!({
+            "schema_version": "1.0",
+            "version": version,
+            "installed_version": installed_v,
+            "healthy": healthy,
+            "opt_out": s.opt_out,
+            "nudge": {
+                "present": s.nudge.present,
+                "current": s.nudge.current,
+                "path": s.nudge.path.display().to_string(),
+            },
+            "skill": {
+                "present": s.skill.present,
+                "current": s.skill.current,
+                "path": s.skill.path.display().to_string(),
+            },
+        });
+        if let Some(u) = &s.update_skill {
+            payload["update_skill"] = serde_json::json!({
+                "present": u.present,
+                "current": u.current,
+                "path": u.path.display().to_string(),
+            });
+        }
+        println!(
+            "{}",
+            ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
+        );
+    } else if !quiet {
+        println!("advisor {version}");
+        if let Some(v) = &installed_v {
+            println!("  installed skill version: {v}");
+        }
+        println!("{}", format_component("nudge (CLAUDE.md)", s.nudge.present, s.nudge.current));
+        println!("{}", format_component("skill (SKILL.md)", s.skill.present, s.skill.current));
+        if let Some(u) = &s.update_skill {
+            println!("{}", format_component("update-skill", u.present, u.current));
+        }
+        if s.opt_out {
+            println!("  (ADVISOR_NO_NUDGE is set)");
+        }
+    }
+    (healthy, ExitCode::SUCCESS)
+}
+
+fn cmd_install(
+    path: Option<String>,
+    skill_path: Option<String>,
+    check: bool,
+    json: bool,
+    quiet: bool,
+    strict: bool,
+    skip_skill: bool,
+) -> ExitCode {
+    if check {
+        let (healthy, _) = print_status(path, skill_path, json, quiet);
+        if healthy && !quiet && !json {
+            println!();
+            println!("Next: /advisor <path>");
+        }
+        return if strict && !healthy {
+            ExitCode::from(STRICT_NOOP_EXIT)
+        } else {
+            ExitCode::SUCCESS
+        };
+    }
+
+    let nudge_path = path.as_deref().map(std::path::Path::new);
+    let sp = skill_path.as_deref().map(std::path::Path::new);
+
+    let nudge_result = install(nudge_path, NUDGE_BODY);
+    let skill_result = if skip_skill {
+        None
+    } else {
+        Some(install_skill(sp))
+    };
+    let update_result = if skip_skill {
+        None
+    } else {
+        let up = advisor::install::update_skill_path_for(sp);
+        Some(install_update_skill(Some(&up)))
+    };
+    let codex_result = if !skip_skill && codex_cli_available() {
+        let codex_sp = advisor::install::default_codex_skills_root()
+            .join("advisor")
+            .join("SKILL.md");
+        Some(advisor::install::install_skill(Some(&codex_sp)))
+    } else {
+        None
+    };
+
+    let emit = |label: &str, res: &Result<advisor::install::InstallResult, std::io::Error>| {
+        match res {
+            Ok(r) => {
+                if !quiet {
+                    println!("  {} {label}", r.action);
+                }
+            }
+            Err(e) => eprintln!("  error {label}: {e}"),
+        }
+    };
+
+    if !json {
+        emit("nudge (CLAUDE.md)", &nudge_result);
+        if let Some(ref r) = skill_result {
+            emit("skill (SKILL.md)", r);
+        }
+        if let Some(ref r) = update_result {
+            emit("update-skill", r);
+        }
+        if let Some(ref r) = codex_result {
+            emit("codex-skill", r);
+        }
+        if !quiet {
+            println!();
+            println!("Next: /advisor <path>");
+        }
+    } else {
+        let to_json = |res: &Result<advisor::install::InstallResult, std::io::Error>| {
+            match res {
+                Ok(r) => serde_json::json!({
+                    "action": r.action.as_str(),
+                    "path": r.path.display().to_string(),
+                }),
+                Err(e) => serde_json::json!({ "error": e.to_string() }),
+            }
+        };
+        let mut payload = serde_json::json!({
+            "schema_version": "1.0",
+            "nudge": to_json(&nudge_result),
+        });
+        if let Some(ref r) = skill_result {
+            payload["skill"] = to_json(r);
+        }
+        if let Some(ref r) = update_result {
+            payload["update_skill"] = to_json(r);
+        }
+        println!(
+            "{}",
+            ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
+        );
+    }
+
+    ExitCode::SUCCESS
+}
+
+fn cmd_uninstall(
+    path: Option<String>,
+    skill_path: Option<String>,
+    json: bool,
+    quiet: bool,
+) -> ExitCode {
+    let nudge_path = path.as_deref().map(std::path::Path::new);
+    let sp = skill_path.as_deref().map(std::path::Path::new);
+    let up = advisor::install::update_skill_path_for(sp);
+
+    let nudge_result = uninstall_nudge(nudge_path);
+    let skill_result = uninstall_skill(sp);
+    let update_result = uninstall_update_skill(Some(&up));
+
+    if json {
+        let to_json = |res: &Result<advisor::install::InstallResult, std::io::Error>| {
+            match res {
+                Ok(r) => serde_json::json!({
+                    "action": r.action.as_str(),
+                    "path": r.path.display().to_string(),
+                }),
+                Err(e) => serde_json::json!({ "error": e.to_string() }),
+            }
+        };
+        let payload = serde_json::json!({
+            "schema_version": "1.0",
+            "nudge": to_json(&nudge_result),
+            "skill": to_json(&skill_result),
+            "update_skill": to_json(&update_result),
+        });
+        println!(
+            "{}",
+            ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
+        );
+        return ExitCode::SUCCESS;
+    }
+
+    let emit =
+        |label: &str, res: &Result<advisor::install::InstallResult, std::io::Error>| match res {
+            Ok(r) => {
+                if !quiet && r.action != InstallAction::Absent {
+                    println!("  {} {label}", r.action);
+                }
+            }
+            Err(e) => eprintln!("  error {label}: {e}"),
+        };
+    emit("nudge (CLAUDE.md)", &nudge_result);
+    emit("skill (SKILL.md)", &skill_result);
+    emit("update-skill", &update_result);
+    ExitCode::SUCCESS
+}
+
+fn cmd_status(
+    path: Option<String>,
+    skill_path: Option<String>,
+    json: bool,
+    quiet: bool,
+    strict: bool,
+) -> ExitCode {
+    let (healthy, _) = print_status(path, skill_path, json, quiet);
+    if healthy && !quiet && !json {
+        println!();
+        println!("Next: /advisor <path>");
+    }
+    if strict && !healthy {
+        ExitCode::from(STRICT_NOOP_EXIT)
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+fn cmd_doctor(
+    path: Option<String>,
+    skill_path: Option<String>,
+    json: bool,
+    quiet: bool,
+    strict: bool,
+) -> ExitCode {
+    let nudge_path = path.as_deref().map(std::path::Path::new);
+    let sp = skill_path.as_deref().map(std::path::Path::new);
+    let report = advisor::doctor::run_doctor(nudge_path, sp);
+
+    if json {
+        let mut payload = report.to_dict();
+        payload["schema_version"] = serde_json::json!("1.0");
+        println!(
+            "{}",
+            ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
+        );
+        return if strict && !report.healthy {
+            ExitCode::from(STRICT_NOOP_EXIT)
+        } else {
+            ExitCode::SUCCESS
+        };
+    }
+
+    if !quiet {
+        println!("{}", advisor::doctor::format_report(&report));
+        println!();
+        if report.healthy {
+            println!("Next: advisor pipeline .");
+        } else {
+            println!("Next: advisor install");
+        }
+    }
+
+    if strict && !report.healthy {
+        ExitCode::from(STRICT_NOOP_EXIT)
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+// ── pipeline ─────────────────────────────────────────────────────────────────
+
+fn render_pipeline_text(cfg: &advisor::config::TeamConfig) -> String {
+    format!(
+        "## Pipeline reference\n\n\
+### Step 1: Reset and create the team\n\
+```\nTeamDelete()\nTeamCreate(name=\"{team}\")\n```\n\n\
+### Step 2: Spawn advisor FIRST (no runners yet)\n\
+```\nAgent(\n  name=\"advisor\",\n  description=\"Investigate, rank, and dispatch runners\",\n  model=\"{advisor_model}\",\n  subagent_type=\"advisor-executor\",\n  team_name=\"{team}\",\n  prompt=<build_advisor_prompt(config)>\n)\n```\n\n\
+### Step 3: Spawn the right-sized runner pool\n\
+Opus decides pool size. Spawn using Opus's verbatim per-runner prompts:\n\
+```\nAgent(\n  name=\"runner-N\",\n  model=\"{runner_model}\",\n  subagent_type=\"code-review\",\n  team_name=\"{team}\",\n  run_in_background=true,\n  prompt=<verbatim text from Opus's dispatch plan>\n)\n```\n\n\
+### Step 4: Live dialogue\n\
+Runners → team-lead → advisor. Advisor replies in real time.\n\n\
+### Step 5: Shutdown (individually)\n\
+```\nSendMessage({{\"to\": \"advisor\",  \"message\": {{\"type\": \"shutdown_request\"}}}})\nSendMessage({{\"to\": \"runner-1\", \"message\": {{\"type\": \"shutdown_request\"}}}})\n...\nTeamDelete()\n```\n",
+        team = cfg.team_name,
+        advisor_model = cfg.advisor_model,
+        runner_model = cfg.runner_model,
+    )
+}
+
+fn cmd_pipeline(
+    target: &str,
+    json: bool,
+    quiet: bool,
+    advisor_model: Option<String>,
+    runner_model: Option<String>,
+    team: &str,
+) -> ExitCode {
+    let mut inp = TeamConfigInput::new(target);
+    if let Some(m) = advisor_model {
+        inp.advisor_model = m;
+    }
+    if let Some(m) = runner_model {
+        inp.runner_model = m;
+    }
+    inp.team_name = team.to_string();
+    let cfg = default_team_config(inp);
+    let text = render_pipeline_text(&cfg);
+    if json {
+        let payload = serde_json::json!({
+            "schema_version": "1.0",
+            "text": text,
+        });
+        println!(
+            "{}",
+            ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
+        );
+        return ExitCode::SUCCESS;
+    }
+    println!("{text}");
+    if !quiet {
+        println!();
+        println!("Run the live pipeline: /advisor {target}");
+    }
+    ExitCode::SUCCESS
+}
+
+// ── protocol ─────────────────────────────────────────────────────────────────
+
+const PROTOCOL_TEXT: &str = concat!(
+    "# Advisor team lifecycle protocol\n\n",
+    "Strict sequence for any Claude Code or Codex session using the /advisor skill.\n",
+    "Deviating (e.g. shutting down with broadcast \"*\", forgetting TeamDelete,\n",
+    "or spawning runners before the advisor) breaks the pipeline.\n\n",
+    "1. Reset and create the team:\n",
+    "   TeamDelete()\n",
+    "   TeamCreate(name=\"review\")\n\n",
+    "2. Spawn advisor FIRST (no runners yet):\n",
+    "   Agent(name=\"advisor\", description=\"Investigate, rank, and dispatch runners\",\n",
+    "         subagent_type=\"advisor-executor\", team_name=\"review\",\n",
+    "         prompt=<build_advisor_prompt(config)>)\n\n",
+    "3. Advisor does Glob+Grep discovery, ranks P1-P5, decides runner pool size,\n",
+    "   THEN sends a dispatch plan with a per-runner prompt for each runner.\n\n",
+    "4. Runners send reports to team-lead; team-lead relays each to the advisor\n",
+    "   verbatim. Advisor verifies each output as it lands.\n\n",
+    "5. Shut down teammates INDIVIDUALLY:\n",
+    "     SendMessage({\"to\": \"advisor\",  \"message\": {\"type\": \"shutdown_request\"}})\n",
+    "     SendMessage({\"to\": \"runner-1\", \"message\": {\"type\": \"shutdown_request\"}})\n\n",
+    "6. TeamDelete()\n",
+);
+
+fn cmd_protocol(json: bool, quiet: bool) -> ExitCode {
+    if json {
+        let payload = serde_json::json!({
+            "schema_version": "1.0",
+            "text": PROTOCOL_TEXT,
+        });
+        println!(
+            "{}",
+            ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
+        );
+        return ExitCode::SUCCESS;
+    }
+    println!("{PROTOCOL_TEXT}");
+    if !quiet {
+        println!("Next: advisor pipeline .");
+    }
+    ExitCode::SUCCESS
+}
+
+// ── version ──────────────────────────────────────────────────────────────────
+
+fn cmd_version(json: bool) -> ExitCode {
+    let version = advisor::resolve_version();
+    if json {
+        let payload = serde_json::json!({
+            "schema_version": "1.0",
+            "advisor_version": version,
+        });
+        println!(
+            "{}",
+            ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
+        );
+        return ExitCode::SUCCESS;
+    }
+    println!("advisor {version}");
+    ExitCode::SUCCESS
+}
+
+// ── live ─────────────────────────────────────────────────────────────────────
+
+fn cmd_live(action: LiveAction) -> ExitCode {
+    match action {
+        LiveAction::Record {
+            target,
+            kind,
+            data,
+            json,
+            quiet,
+        } => {
+            let target = PathBuf::from(&target);
+            let data_val: Option<serde_json::Value> = match data.as_deref() {
+                None => None,
+                Some("-") => {
+                    let mut buf = String::new();
+                    if let Err(e) = std::io::stdin().read_to_string(&mut buf) {
+                        eprintln!("error reading stdin: {e}");
+                        return ExitCode::from(2);
+                    }
+                    if buf.trim().is_empty() {
+                        eprintln!("--data -: stdin was empty; expected a JSON object");
+                        return ExitCode::from(2);
+                    }
+                    match serde_json::from_str(&buf) {
+                        Ok(v) => Some(v),
+                        Err(e) => {
+                            eprintln!("invalid --data JSON: {e}");
+                            return ExitCode::from(2);
+                        }
+                    }
+                }
+                Some(s) => match serde_json::from_str(s) {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        eprintln!("invalid --data JSON: {e}");
+                        return ExitCode::from(2);
+                    }
+                },
+            };
+            if let Some(ref v) = data_val {
+                if !v.is_object() {
+                    eprintln!("--data must be a JSON object");
+                    return ExitCode::from(2);
+                }
+            }
+            match append_event(&target, &kind, data_val, None) {
+                Ok(path) => {
+                    let seq = latest_seq(&target);
+                    if json {
+                        let payload = serde_json::json!({
+                            "schema_version": "1.0",
+                            "path": path.display().to_string(),
+                            "seq": seq,
+                            "kind": kind,
+                        });
+                        println!(
+                            "{}",
+                            ensure_ascii(
+                                &serde_json::to_string_pretty(&payload).unwrap_or_default()
+                            )
+                        );
+                    } else if !quiet {
+                        eprintln!("recorded {kind} (seq {seq}) → {}", path.display());
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("advisor live record failed: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        LiveAction::Tail {
+            target,
+            limit,
+            since,
+            json,
+        } => {
+            let target = PathBuf::from(&target);
+            let limit = limit.clamp(1, 1000);
+            let events = load_recent_events(&target, since, limit);
+            if json {
+                let seq = latest_seq(&target);
+                let payload = serde_json::json!({
+                    "schema_version": "1.0",
+                    "target": target.display().to_string(),
+                    "count": events.len(),
+                    "next_token": seq,
+                    "events": events,
+                });
+                println!(
+                    "{}",
+                    ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
+                );
+                return ExitCode::SUCCESS;
+            }
+            if events.is_empty() {
+                eprintln!("no live events yet at {}", live_events_path(&target).display());
+                return ExitCode::SUCCESS;
+            }
+            for ev in &events {
+                let ts = ev.get("ts").and_then(|v| v.as_str()).unwrap_or("");
+                let kind = ev.get("kind").and_then(|v| v.as_str()).unwrap_or("event");
+                let data_payload = ev.get("data").cloned().unwrap_or(serde_json::json!({}));
+                let data_str = if data_payload
+                    .as_object()
+                    .map(|o| !o.is_empty())
+                    .unwrap_or(false)
+                {
+                    serde_json::to_string(&data_payload).unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                let line = format!("{ts} {kind} {data_str}");
+                println!("{}", line.trim_end());
+            }
+            ExitCode::SUCCESS
+        }
+        LiveAction::Clear { target, quiet } => {
+            let target = PathBuf::from(&target);
+            let path = live_events_path(&target);
+            if path.exists() {
+                match std::fs::remove_file(&path) {
+                    Ok(()) => {
+                        if !quiet {
+                            eprintln!("removed {}", path.display());
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("advisor live clear failed: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                }
+            } else if !quiet {
+                eprintln!("no live events file at {}", path.display());
+            }
+            ExitCode::SUCCESS
+        }
+    }
+}
+
+// ── prompt ───────────────────────────────────────────────────────────────────
+
+struct PromptArgs {
+    step: String,
+    target: String,
+    runner_id: usize,
+    file_count: Option<usize>,
+    max_runners: usize,
+    json: bool,
+    quiet: bool,
+    advisor_model: Option<String>,
+    runner_model: Option<String>,
+    team: String,
+    no_history: bool,
+    preset: Option<String>,
+    file_types: String,
+}
+
+fn cmd_prompt(args: PromptArgs) -> ExitCode {
+    let target = PathBuf::from(&args.target);
+    let mut inp = TeamConfigInput::new(&args.target);
+    if let Some(m) = args.advisor_model {
+        inp.advisor_model = m;
+    }
+    if let Some(m) = args.runner_model {
+        inp.runner_model = m;
+    }
+    inp.team_name = args.team.clone();
+    if let Some(p) = args.preset.as_deref() {
+        inp.preset = Some(p.to_string());
+    }
+    inp.file_types = args.file_types.clone();
+    let cfg = default_team_config(inp);
+
+    let text = match args.step.as_str() {
+        "advisor" => {
+            let history_block = if args.no_history {
+                String::new()
+            } else {
+                let entries = advisor::history::load_recent(&target, 20);
+                advisor::history::format_history_block(&entries)
+            };
+            build_advisor_prompt(&cfg, &history_block)
+        }
+        "runner" => {
+            let runner_id = args.runner_id as i64;
+            build_runner_pool_prompt(runner_id, &cfg)
+        }
+        "verify" => {
+            let file_count = args.file_count.unwrap_or(args.max_runners) as i64;
+            let runner_count = args.max_runners as i64;
+            // read findings from stdin if available
+            let findings_text = if !std::io::stdin().is_terminal() {
+                let mut buf = String::new();
+                let _ = std::io::stdin().read_to_string(&mut buf);
+                buf
+            } else {
+                String::new()
+            };
+            build_verify_dispatch_prompt(&findings_text, file_count, runner_count)
+        }
+        other => {
+            eprintln!("unknown step: {other:?}");
+            return ExitCode::from(2);
+        }
+    };
+
+    if args.json {
+        let payload = serde_json::json!({
+            "schema_version": "1.0",
+            "step": args.step,
+            "text": text,
+        });
+        println!(
+            "{}",
+            ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
+        );
+        return ExitCode::SUCCESS;
+    }
+    println!("{text}");
+    if !args.quiet && std::io::stdout().is_terminal() {
+        println!();
+        println!("Next: paste into Claude Code or Codex");
+    }
+    ExitCode::SUCCESS
+}
+
+// ── codex-plan-csv ───────────────────────────────────────────────────────────
+
+struct CodexPlanCsvArgs {
+    target: String,
+    file_types: String,
+    min_priority: u8,
+    batch_size: usize,
+    preset: Option<String>,
+    out: Option<String>,
+    quiet: bool,
+    since: Option<String>,
+    staged: bool,
+    branch: Option<String>,
+}
+
+fn collect_files_by_glob_patterns(root: &Path, patterns: &[String]) -> Vec<String> {
+    let mut result = Vec::new();
+    let Ok(canon) = root.canonicalize() else {
+        return result;
+    };
+    let exts: Vec<&str> = patterns
+        .iter()
+        .filter_map(|p| {
+            // "*.py" → ".py", "*.rs" → ".rs"
+            p.strip_prefix('*').map(|s| s.trim_start_matches('.'))
+        })
+        .collect();
+    fn walk(dir: &Path, exts: &[&str], out: &mut Vec<String>) {
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
+        let mut entries: Vec<_> = rd.flatten().collect();
+        entries.sort_by_key(|e| e.file_name());
+        for entry in entries {
+            let path = entry.path();
+            if path.is_dir() {
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if !name.starts_with('.') {
+                    walk(&path, exts, out);
+                }
+            } else if exts.is_empty() {
+                out.push(path.display().to_string());
+            } else {
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if exts.iter().any(|e| name.ends_with(&format!(".{e}"))) {
+                    out.push(path.display().to_string());
+                }
+            }
+        }
+    }
+    walk(&canon, &exts, &mut result);
+    result.dedup();
+    result
+}
+
+fn cmd_codex_plan_csv(args: CodexPlanCsvArgs) -> ExitCode {
+    let target = PathBuf::from(&args.target);
+    let ignore_patterns = load_advisorignore(&args.target);
+    let preset_extras: Option<Vec<(i64, Vec<&'static str>)>> = args.preset.as_deref().and_then(|p| {
+        presets::get_preset(p)
+            .ok()
+            .map(|rp| rp.extra_keywords_by_tier.clone())
+    });
+
+    let paths = match advisor::git_scope::resolve_git_scope(
+        &target,
+        args.since.as_deref(),
+        args.staged,
+        args.branch.as_deref(),
+    ) {
+        Ok(Some(p)) => p,
+        Ok(None) | Err(_) => {
+            let file_types: Vec<String> = args
+                .file_types
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect();
+            collect_files_by_glob_patterns(&target, &file_types)
+        }
+    };
+
+    // Convert &'static str extras to owned String for rank_files
+    let owned_extras: Option<Vec<(i64, Vec<String>)>> = preset_extras.map(|v| {
+        v.into_iter()
+            .map(|(k, kws)| (k, kws.into_iter().map(|s| s.to_string()).collect()))
+            .collect()
+    });
+    let ranked = rank_files(
+        &paths,
+        None,
+        &ignore_patterns,
+        owned_extras.as_deref(),
+        None,
+        None,
+        30,
+    );
+    let tasks = create_focus_tasks(&ranked, None, args.min_priority, DEFAULT_TASK_PROMPT);
+
+    if tasks.is_empty() {
+        if !args.quiet {
+            eprintln!(
+                "no files matched under {} at min_priority={}; nothing to dispatch",
+                target.display(),
+                args.min_priority
+            );
+        }
+        return ExitCode::FAILURE;
+    }
+
+    let batch_size = if args.batch_size == 0 { 5 } else { args.batch_size };
+    let batches = match create_focus_batches(&tasks, batch_size, "auto") {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("codex-plan-csv: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let out_path = if let Some(ref p) = args.out {
+        PathBuf::from(p)
+    } else {
+        // tempfile: advisor-codex-plan.XXXXXX.csv
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!("advisor-codex-plan.{ts}.csv"))
+    };
+
+    if let Some(parent) = out_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                eprintln!("cannot create output directory: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+
+    let mut csv_rows: Vec<String> = Vec::new();
+    // Header — QUOTE_ALL semantics: wrap every field in double-quotes, escape " as ""
+    csv_rows.push(csv_quote_row(&[
+        "runner_id",
+        "batch_id",
+        "file_count",
+        "max_priority",
+        "files",
+        "prompt",
+    ]));
+    for (i, batch) in batches.iter().enumerate() {
+        let runner_id = format!("runner-{}", i + 1);
+        let file_lines: Vec<String> = batch
+            .tasks
+            .iter()
+            .map(|t| format!("- `{}` (P{})", sanitize_inline(&t.file_path), t.priority))
+            .collect();
+        let file_line_refs: Vec<&str> = file_lines.iter().map(|s| s.as_str()).collect();
+        let prompt = build_codex_runner_prompt(&runner_id, &file_line_refs);
+        let files_joined = batch
+            .tasks
+            .iter()
+            .map(|t| t.file_path.clone())
+            .collect::<Vec<_>>()
+            .join("|");
+        csv_rows.push(csv_quote_row(&[
+            &runner_id,
+            &batch.batch_id.to_string(),
+            &batch.tasks.len().to_string(),
+            &batch.top_priority().to_string(),
+            &files_joined,
+            &prompt,
+        ]));
+    }
+
+    let csv_content = csv_rows.join("\r\n") + "\r\n";
+    match std::fs::write(&out_path, csv_content.as_bytes()) {
+        Ok(()) => {}
+        Err(e) => {
+            eprintln!("failed to write CSV: {e}");
+            return ExitCode::FAILURE;
+        }
+    }
+
+    println!("{}", out_path.display());
+    ExitCode::SUCCESS
+}
+
+/// Wrap each field in double-quotes; escape interior `"` as `""`.
+/// Mirrors Python's `csv.QUOTE_ALL` with `\r\n` row terminators.
+fn csv_quote_row(fields: &[&str]) -> String {
+    fields
+        .iter()
+        .map(|f| format!("\"{}\"", f.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(",")
 }
