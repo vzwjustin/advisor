@@ -131,7 +131,7 @@ pub fn presets_pretty(presets: &[RulePack]) -> String {
                 .iter()
                 .map(|(k, v)| (*k, v.len()))
                 .collect();
-            tiers.sort_by(|a, b| b.0.cmp(&a.0)); // reverse by tier
+            tiers.sort_by_key(|b| std::cmp::Reverse(b.0)); // reverse by tier
             let rendered: Vec<String> = tiers.iter().map(|(k, n)| format!("P{k}:{n}")).collect();
             lines.push(format!("  - extra keywords: {}", rendered.join(", ")));
         }

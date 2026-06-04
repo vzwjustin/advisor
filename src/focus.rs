@@ -106,7 +106,7 @@ pub fn create_focus_tasks(
 ) -> Vec<FocusTask> {
     let mut sorted_files: Vec<&RankedFile> = ranked_files.iter().collect();
     // Stable descending sort by priority (Python sorted with reverse=True is stable).
-    sorted_files.sort_by(|a, b| b.priority.cmp(&a.priority));
+    sorted_files.sort_by_key(|b| std::cmp::Reverse(b.priority));
 
     let mut tasks = Vec::new();
     for rf in sorted_files {

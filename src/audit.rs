@@ -244,7 +244,7 @@ fn audit_cap_overruns(
     per_message_caps: &[(String, Vec<i64>)],
 ) -> Vec<String> {
     let mut sorted: Vec<&(String, i64)> = fix_counts.iter().collect();
-    sorted.sort_by(|a, b| runner_sort_key(&a.0).cmp(&runner_sort_key(&b.0)));
+    sorted.sort_by_key(|a| runner_sort_key(&a.0));
     let mut out = Vec::new();
     for (runner, count) in sorted {
         let observed = per_message_caps
@@ -420,7 +420,7 @@ fn single_line(value: &str) -> String {
 
 fn sorted_runner_keys(counts: &[(String, i64)]) -> Vec<&(String, i64)> {
     let mut v: Vec<&(String, i64)> = counts.iter().collect();
-    v.sort_by(|a, b| runner_sort_key(&a.0).cmp(&runner_sort_key(&b.0)));
+    v.sort_by_key(|a| runner_sort_key(&a.0));
     v
 }
 
