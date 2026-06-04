@@ -294,13 +294,11 @@ fn audit_protocol_violations(transcript: &str) -> (Vec<String>, bool) {
     let mut order: Vec<String> = Vec::new();
     let mut counts: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
     let mut truncated = false;
-    let mut total = 0usize;
-    for m in PROTOCOL_VIOLATION_RE.find_iter(&unfenced) {
+    for (total, m) in PROTOCOL_VIOLATION_RE.find_iter(&unfenced).enumerate() {
         if total >= PROTOCOL_VIOLATION_CAP {
             truncated = true;
             break;
         }
-        total += 1;
         let text = m.as_str().to_string();
         let entry = counts.entry(text.clone()).or_insert(0);
         if *entry == 0 {
