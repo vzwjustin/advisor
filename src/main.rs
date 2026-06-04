@@ -82,6 +82,15 @@ enum Command {
         /// Print the default pricing JSON template and exit.
         #[arg(long = "dump-pricing-template")]
         dump_pricing_template: bool,
+        /// Scope to files changed since git REF.
+        #[arg(long)]
+        since: Option<String>,
+        /// Scope to currently staged files.
+        #[arg(long)]
+        staged: bool,
+        /// Scope to files changed vs BASE (PR-style).
+        #[arg(long)]
+        branch: Option<String>,
     },
     /// Snapshot findings as a baseline, or diff current findings against it.
     Baseline {
@@ -176,6 +185,9 @@ fn main() -> ExitCode {
             estimate,
             pricing,
             dump_pricing_template,
+            since,
+            staged,
+            branch,
         } => cmd_plan(PlanArgs {
             target,
             file_types,
@@ -187,6 +199,9 @@ fn main() -> ExitCode {
             estimate,
             pricing,
             dump_pricing_template,
+            since,
+            staged,
+            branch,
         }),
         Command::Baseline { action } => cmd_baseline(action),
         Command::Audit {
@@ -317,6 +332,9 @@ struct PlanArgs {
     estimate: bool,
     pricing: Option<String>,
     dump_pricing_template: bool,
+    since: Option<String>,
+    staged: bool,
+    branch: Option<String>,
 }
 
 /// `advisor plan --dump-pricing-template` payload (mirrors the Python handler).
@@ -394,11 +412,31 @@ fn cmd_plan(args: PlanArgs) -> ExitCode {
         None => None,
     };
 
-    let paths = match discover(target, &cfg.file_types) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("✗ {e}");
-            return ExitCode::from(2);
+    // Git-scope selectors take precedence over the recursive scan. Mirrors
+    // `_resolve_plan_files`: filter git output by --file-types (fnmatch on the
+    // filename) and intersect with the target directory.
+    let git_selected = args.since.is_some() || args.staged || args.branch.is_some();
+    let paths = if git_selected {
+        match advisor::git_scope::resolve_git_scope(
+            target,
+            args.since.as_deref(),
+            args.staged,
+            args.branch.as_deref(),
+        ) {
+            Ok(Some(files)) => filter_git_scope(target, files, &cfg.file_types),
+            Ok(None) => Vec::new(),
+            Err(e) => {
+                eprintln!("✗ {e}");
+                return ExitCode::from(2);
+            }
+        }
+    } else {
+        match discover(target, &cfg.file_types) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("✗ {e}");
+                return ExitCode::from(2);
+            }
         }
     };
 
@@ -523,6 +561,36 @@ fn discover(target: &Path, file_types: &str) -> Result<Vec<String>, String> {
         }
     }
     Ok(out)
+}
+
+/// Filter git-scope output by `--file-types` (fnmatch on the filename) and
+/// intersect with `target`. Mirrors the git branch of `_resolve_plan_files`.
+fn filter_git_scope(target: &Path, files: Vec<String>, file_types: &str) -> Vec<String> {
+    let pats: Vec<&str> = file_types
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let apply_types = !file_types.is_empty() && file_types != "*";
+    let target_resolved = target.canonicalize().ok();
+    files
+        .into_iter()
+        .filter(|p| {
+            if apply_types {
+                let name = Path::new(p)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                if !pats.iter().any(|pat| fnmatch_match(&name, pat)) {
+                    return false;
+                }
+            }
+            match (&target_resolved, Path::new(p).canonicalize()) {
+                (Some(tr), Ok(rp)) => rp.starts_with(tr),
+                _ => true,
+            }
+        })
+        .collect()
 }
 
 /// Serialize a plan to match the Python CLI's `plan --json` payload (key order,

@@ -40,6 +40,7 @@ parity assertions.
 | `src/audit.rs` | `audit.py` | transcript analysis: fix-assignment counting + runner attribution (SendMessage-envelope/proximity), cap overruns, CONTEXT_PRESSURE attribution, PROTOCOL_VIOLATION dedup/cap, fenced-block stripping, handoff/rotation count, scope-drift classification; `AuditReport`, `audit_to_dict`, `format_audit_report` | **Golden JSON** vs Python (full `audit_to_dict` + `format` on a crafted transcript) |
 | `src/suppressions.rs` | `suppressions.py` | `Suppression` + `matches`, `severity_from_rule_id`, `**`-aware glob match (shared with rank) + fnmatch fallback, `until` date validation/expiry (UTC), `load_suppressions` (structural validation → errors), `apply_suppressions` | **Golden JSON** vs Python (severity ranks, matches, apply, load valid + 4 error shapes) |
 | `src/baseline.rs` | `baseline.py` | `BaselineEntry`/`BaselineDiff`, `findings_to_entries`, `description_hash`, `normalize_identity_path`, `write_baseline`/`read_baseline` (JSONL), `filter_against_baseline`, `diff_against_baseline` (incl. abs/rel suffix aliasing) | **Golden JSON** vs Python (entries, written bytes, hashes, normalize, filter, diff) |
+| `src/git_scope.rs` | `git_scope.py` | `resolve_git_scope`, `files_since/staged/branch`, `run_git` (std `Command`, stdin-null, byte caps, 30s poll-timeout), ref validation (option-injection/`..` guards), repo-root + existing-file resolution | unit (ref validation, mutual-exclusion) + end-to-end `plan --staged` parity |
 | `src/fs.rs` (+helpers) | `_fs.py` | `normalize_path`, `validate_file_types`, **`read_text_capped`**, **`atomic_write_text`**, `posix_normpath` | reference table + used by baseline round-trip |
 | `src/config.rs` | `orchestrate/config.py` | `is_known_model` + model regex/constants, **`TeamConfig`**, **`default_team_config`** (env fallbacks, range clamping + stderr warnings, preset merge) | Matrix + **golden JSON** (7 scenarios: minimal, presets, clamps, explicit) |
 | `src/sarif.rs` | `sarif.py` | **full `findings_to_sarif`** document builder (rule dedup/ordering, `path:line:col:col` parsing, region clamps, control stripping, `%SRCROOT%` URIs, percent-encoding, partial fingerprints), `synthesize_rule_id`, `level_for`, `short_text`, `strip_controls` | **Golden JSON** vs Python (full SARIF doc byte-for-byte + parse/short/strip cases) |
@@ -66,6 +67,7 @@ parity assertions.
 | `advisor suppressions [--json/--expired]` | ✓ | ✓ | **IDENTICAL** (list/json/expired) | `scripts/parity_check.sh` |
 | `advisor audit --json` / `--format pr-comment` / `--fail-on` | ✓ | ✓ | **IDENTICAL** end-to-end (checkpoint+transcript) incl. exit-4 gate | `scripts/parity_check.sh` |
 | `advisor plan --estimate` / `--dump-pricing-template` | ✓ | ✓ | **IDENTICAL** (cost estimate on real file sizes; pricing template) | `scripts/parity_check.sh` |
+| `advisor plan --since/--staged/--branch` | ✓ | ✓ | **IDENTICAL** end-to-end on a git fixture; bad-ref → exit 2 | `scripts/parity_check.sh` (`--staged`) |
 | `advisor --version` | n/a (`advisor version`) | ✓ | Intentional difference — Rust uses clap `--version`; full `version` subcommand pending | classified *intentional* |
 | `sanitize_inline` / `fence` | ✓ | ✓ | IDENTICAL on tested inputs | |
 | `normalize_path` | ✓ | ✓ | IDENTICAL on 10-case reference table | |
@@ -86,8 +88,9 @@ Everything else. The Python package is fully intact and authoritative. Largest
 remaining work, roughly in dependency order (see `RUST_PORT_PLAN.md` §6):
 
 - **Core logic**: `runner_budget.py`, `git_scope.py` (subprocess),
-  `history.py`, `git_scope.py` (subprocess), remaining `_fs.py` nuances,
-  `checkpoint.py` save path (`plan --checkpoint`).
+  `history.py`, remaining `_fs.py` nuances (symlink-reject/locking),
+  `checkpoint.py` save path (`plan --checkpoint`), the prompt-builder /
+  orchestrate modules + their golden snapshots, install/doctor, and the web UI.
 - **Orchestration prompts**: `advisor_prompt.py`, `runner_prompts.py`,
   `verify_dispatch.py`, `pipeline.py`, `_schema.py`, the embedded
   `_prompts/advisor.txt`, and the 20+ golden snapshot fixtures (parity linchpin).
@@ -127,11 +130,14 @@ remaining work, roughly in dependency order (see `RUST_PORT_PLAN.md` §6):
 
 `rank.py`, `focus.py`, `config.py`, `verify.py`, `sarif.py`, and the
 **`advisor plan` CLI** are now ported and parity-verified. Next:
-1. Port **`git_scope.py`** (git subprocess) + wire `plan --since/--staged/--branch`.
-2. Port **`history.py`** to close the `plan` history-ranking gap, then
-   **`checkpoint.py` save** for `plan --checkpoint`/`--resume` and the
+1. Port **`history.py`** (`.advisor/history.jsonl` + decay scoring) to close the
+   `plan` history-ranking gap (currently always `--no-history`).
+2. **`checkpoint.py` save** + wire `plan --checkpoint`/`--resume` and the
    `advisor checkpoints` list command (loader already ported).
-3. Remaining `plan` flags not yet wired (documented gaps): `--since/--staged/--branch`
+3. The remaining read-only `plan`/CLI surfaces (`--exclude`, `--output`,
+   `--sarif`, `--test-cmd`, `pipeline`/`protocol`/`version`/`prompt` text
+   commands), then the orchestrate prompt builders (snapshot-parity gated)
+   and install/doctor/web. not yet wired (documented gaps): `--since/--staged/--branch`
    (needs `git_scope.py`), `--estimate`/`--pricing` (needs full `cost.py`),
    `--checkpoint`/`--resume` (needs `checkpoint.py`), `--sarif`, `--exclude`,
    `--output`, and **history-informed ranking** (needs `history.py` — the Rust

@@ -163,6 +163,21 @@ TXT
 }
 audit_check
 
+# ── git scope: plan --staged (no commit needed) ──
+gitscope_check() {
+  command -v git >/dev/null 2>&1 || { echo "SKIP  plan --staged (git absent)"; return; }
+  local tmp py rs; tmp="$(mktemp -d)"
+  ( cd "$tmp" && git init -q && git config user.email t@t && git config user.name t \
+    && mkdir src && printf 'def login(password, token): pass\n' > src/auth.py \
+    && printf 'def helper(): pass\n' > src/util.py && git add -A ) >/dev/null 2>&1 || {
+      echo "SKIP  plan --staged (git init failed)"; rm -rf "$tmp"; return; }
+  py="$(cd "$tmp" && NO_COLOR=1 $PY plan . --json --no-history --staged 2>/dev/null || true)"
+  rs="$(cd "$tmp" && NO_COLOR=1 "$RUST_BIN" plan . --json --no-history --staged 2>/dev/null || true)"
+  if [[ "$py" == "$rs" ]]; then echo "PASS  plan --staged"; else echo "FAIL  plan --staged"; diff <(printf '%s' "$py") <(printf '%s' "$rs") | sed 's/^/    /'; fail=1; fi
+  rm -rf "$tmp"
+}
+gitscope_check
+
 if [[ "$fail" -ne 0 ]]; then
   echo "parity check FAILED" >&2
   exit 1
