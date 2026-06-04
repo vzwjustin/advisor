@@ -41,6 +41,7 @@ parity assertions.
 | `src/cost.rs` | `cost.py` | pricing table, token-overhead constants, `family_of`, `PRICING_AS_OF` | Unit tests |
 | `src/models.rs` | `verify.py`, `rank.py` | `Finding`, `RankedFile`, `Severity` (+ canonicalization), serde | Serde field-completeness test |
 | `src/presets.rs` | `presets.py` + CLI handler | `RulePack`, `list_presets`, `get_preset`, `presets_json`, `presets_pretty` | **Byte-exact golden** vs Python `presets [--json]` |
+| `src/rank.rs` | `rank.py` | `language_for_path`, shebang detection, keyword scoring (`finditer` simulation), test-path cap, history boost, `rank_files`, `rank_to_prompt`, `.advisorignore` glob engine, `load_advisorignore` | **Golden JSON** vs Python (language/shebang/score/test/rank/history/ignore — 60+ cases) |
 | `src/jsonutil.rs` | (CPython `json.dumps`) | `ensure_ascii` escaping (incl. surrogate pairs) | Unit tests vs CPython |
 | `src/version.rs` | `_version.py` | `resolve_version` (crate version) | Unit test |
 | `src/main.rs` | `__main__.py` (subset) | `advisor presets [--json]`, `advisor --version` | Binary diff vs Python (byte-identical) |
@@ -56,6 +57,9 @@ parity assertions.
 | `normalize_path` | ✓ | ✓ | IDENTICAL on 10-case reference table | |
 | `is_known_model` | ✓ | ✓ | IDENTICAL on 6-case matrix | |
 | `synthesize_rule_id` | ✓ | ✓ | IDENTICAL (SHA-1 slug) | |
+| `rank_files` / `_score_file` | ✓ | ✓ | IDENTICAL incl. position-ordered reasons, test cap, history boost | golden `tests/parity/rank.json` |
+| `.advisorignore` glob match | ✓ | ✓ | IDENTICAL on `*`/`**`/slash/dir/bare/char-class cases | golden |
+| `language_for_path` / shebang | ✓ | ✓ | IDENTICAL | golden |
 
 No accidental mismatches found in the ported surface. The single intentional
 difference (`--version` vs the `version` subcommand) is recorded above and will
@@ -67,8 +71,7 @@ fields — `python_version`, `install_path` — that need a defined Rust analog)
 Everything else. The Python package is fully intact and authoritative. Largest
 remaining work, roughly in dependency order (see `RUST_PORT_PLAN.md` §6):
 
-- **Core logic**: `rank.py` (ranking + bespoke `.advisorignore`/glob engine),
-  `verify.py` parse/format state machine, `focus.py`, `runner_budget.py`,
+- **Core logic**: `verify.py` parse/format state machine, `focus.py`, `runner_budget.py`,
   `git_scope.py` (subprocess), `history.py`, `baseline.py`, `checkpoint.py`,
   `suppressions.py`, `pr_comment.py`, `audit.py`, full `cost.py` estimator,
   full `sarif.py` document builder, full `_fs.py` atomic write/locking.
@@ -110,14 +113,12 @@ remaining work, roughly in dependency order (see `RUST_PORT_PLAN.md` §6):
 
 ## Exact next recommended step
 
-Port **`rank.py`** next — it is the most-depended-on core module (drives
-`plan`, `focus`, `cost`, the web `/api/plan`) and is pure/deterministic, so it
-is highly parity-verifiable. Concretely:
-1. Port `PRIORITY_KEYWORDS`, `LANGUAGE_EXTRA_KEYWORDS`, `EXTENSION_LANGUAGE`,
-   `SKIP_DIRS`, `SKIP_EXTENSIONS`, and the constants in Appendix A of the plan.
-2. Port `language_for_path`, the keyword-scoring `_score_file`, `rank_files`,
-   `rank_to_prompt`, and the `.advisorignore` glob engine
-   (`_double_star_to_regex` + quantifier guard).
-3. Capture a Python golden for `advisor plan <fixture> --json --no-history` and
-   add it to `scripts/parity_check.sh` as the second cross-language check.
-4. Then wire `advisor plan` into the Rust CLI behind the verified ranker.
+`rank.py` is now ported and parity-verified. Next:
+1. Port **`focus.py`** (`FocusTask`/`FocusBatch`, `create_focus_tasks`,
+   `create_focus_batches`, `format_dispatch_plan`) — small, pure, depends only
+   on the now-ported `RankedFile`.
+2. Port **`config.py`'s `TeamConfig` + `default_team_config`** (env fallbacks +
+   clamp warnings) so the planning CLI has its config object.
+3. Wire **`advisor plan <target> --json --no-history`** into the Rust CLI behind
+   the verified ranker + focus, then capture a Python golden for a fixture tree
+   and add it as the third cross-language check in `scripts/parity_check.sh`.
