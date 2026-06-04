@@ -1,0 +1,91 @@
+{
+  "format_block": "### Finding 1\n- **File**: `src/auth.py:42`\n- **Severity**: HIGH\n- **Description**: SQL injection\n- **Evidence**: user input to query\n- **Fix**: parameterize\n\n### Finding 2\n- **File**: `api/x.py:1`\n- **Severity**: critical\n- **Description**: RCE via eval\n- **Evidence**: eval(req.body)\n- **Expected → Actual**: expected safe -> got eval\n- **Fix**: remove eval\n- **Rule**: advisor/high/abc\n",
+  "format_block_empty": "_No findings to verify._",
+  "verify_prompt": "You are the verification agent. Your job is to review findings from other agents and determine which are real, significant issues versus false positives or low-value noise.\n\n## Findings to Verify\n\n```\n### Finding 1\n- **File**: `src/auth.py:42`\n- **Severity**: HIGH\n- **Description**: SQL injection\n- **Evidence**: user input to query\n- **Fix**: parameterize\n\n```\n\n## Instructions\n\nFor each finding:\n1. Read the cited file and line to confirm the issue exists.\n2. Check whether the issue is exploitable or impactful in practice.\n3. Reject findings that are:\n   - False positives (the code is actually safe)\n   - Theoretical only (requires unrealistic conditions)\n   - Duplicates of another finding\n   - Too minor to act on (style nits, unlikely edge cases)\n\n4. For each finding, output:\n   - **CONFIRMED** or **REJECTED**\n   - **Reason**: why you confirmed or rejected it\n\n5. End with a summary: how many confirmed, how many rejected, and the top 3 most critical issues to fix first.\n\nBe strict. Only confirm issues that are real and worth fixing.",
+  "roundtrip_parsed": [
+    {
+      "file_path": "src/auth.py:42",
+      "severity": "HIGH",
+      "description": "SQL injection",
+      "evidence": "user input to query",
+      "fix": "parameterize",
+      "rule_id": null,
+      "expected_vs_actual": ""
+    },
+    {
+      "file_path": "api/x.py:1",
+      "severity": "CRITICAL",
+      "description": "RCE via eval",
+      "evidence": "eval(req.body)",
+      "fix": "remove eval",
+      "rule_id": "advisor/high/abc",
+      "expected_vs_actual": "expected safe -> got eval"
+    }
+  ],
+  "plain_parsed": [
+    {
+      "file_path": "lib/a.py:5",
+      "severity": "MEDIUM",
+      "description": "weak hash",
+      "evidence": "md5 used",
+      "fix": "use sha256",
+      "rule_id": null,
+      "expected_vs_actual": ""
+    }
+  ],
+  "ascii_arrow_parsed": [
+    {
+      "file_path": "a.py:1",
+      "severity": "LOW",
+      "description": "d",
+      "evidence": "e",
+      "fix": "f",
+      "rule_id": null,
+      "expected_vs_actual": "foo -> bar"
+    }
+  ],
+  "fenced_parsed": [],
+  "invented_severity_parsed": [
+    {
+      "file_path": "a.py:1",
+      "severity": "UNKNOWN",
+      "description": "d",
+      "evidence": "e",
+      "fix": "f",
+      "rule_id": null,
+      "expected_vs_actual": ""
+    }
+  ],
+  "scope_kept": [
+    "src/auth.py:42"
+  ],
+  "scope_dropped": [
+    "api/x.py:1"
+  ],
+  "headerless_parsed": [
+    {
+      "file_path": "a.py:1",
+      "severity": "LOW",
+      "description": "d1",
+      "evidence": "e1",
+      "fix": "f1",
+      "rule_id": null,
+      "expected_vs_actual": ""
+    },
+    {
+      "file_path": "b.py:2",
+      "severity": "HIGH",
+      "description": "d2",
+      "evidence": "e2",
+      "fix": "f2",
+      "rule_id": null,
+      "expected_vs_actual": ""
+    }
+  ],
+  "safe_inline": {
+    "backtick": "a'b",
+    "control": "abc",
+    "bidi": "ab",
+    "zw": "abc"
+  }
+}

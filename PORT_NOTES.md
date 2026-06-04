@@ -41,6 +41,7 @@ parity assertions.
 | `src/cost.rs` | `cost.py` | pricing table, token-overhead constants, `family_of`, `PRICING_AS_OF` | Unit tests |
 | `src/models.rs` | `verify.py`, `rank.py` | `Finding`, `RankedFile`, `Severity` (+ canonicalization), serde | Serde field-completeness test |
 | `src/presets.rs` | `presets.py` + CLI handler | `RulePack`, `list_presets`, `get_preset`, `presets_json`, `presets_pretty` | **Byte-exact golden** vs Python `presets [--json]` |
+| `src/verify.rs` | `verify.py` | `Finding` format/parse state machine: `format_findings_block`, `build_verify_prompt`, `parse_findings_from_text`/`_with_drift`, `safe_inline`, severity canonicalization, fenced-block auto-recovery, scope filtering | **Golden JSON** vs Python (round-trip, plain/list, ASCII arrow, fenced, invented severity, header-less, scope, safe_inline) |
 | `src/focus.rs` | `focus.py` | `FocusTask`/`FocusBatch`, `create_focus_tasks`, `create_focus_batches`, `format_dispatch_plan`, `format_batch_plan`, prompt templating | **Golden JSON** vs Python (tasks, batches, forced/auto complexity, plans, grammar) |
 | `src/rank.rs` | `rank.py` | `language_for_path`, shebang detection, keyword scoring (`finditer` simulation), test-path cap, history boost, `rank_files`, `rank_to_prompt`, `.advisorignore` glob engine, `load_advisorignore` | **Golden JSON** vs Python (language/shebang/score/test/rank/history/ignore — 60+ cases) |
 | `src/jsonutil.rs` | (CPython `json.dumps`) | `ensure_ascii` escaping (incl. surrogate pairs) | Unit tests vs CPython |
@@ -73,10 +74,10 @@ fields — `python_version`, `install_path` — that need a defined Rust analog)
 Everything else. The Python package is fully intact and authoritative. Largest
 remaining work, roughly in dependency order (see `RUST_PORT_PLAN.md` §6):
 
-- **Core logic**: `verify.py` parse/format state machine, `runner_budget.py`,
-  `git_scope.py` (subprocess), `history.py`, `baseline.py`, `checkpoint.py`,
-  `suppressions.py`, `pr_comment.py`, `audit.py`, full `cost.py` estimator,
-  full `sarif.py` document builder, full `_fs.py` atomic write/locking.
+- **Core logic**: `runner_budget.py`, `git_scope.py` (subprocess),
+  `history.py`, `baseline.py`, `checkpoint.py`, `suppressions.py`,
+  `pr_comment.py`, `audit.py`, full `cost.py` estimator, full `sarif.py`
+  document builder, full `_fs.py` atomic write/locking.
 - **Orchestration prompts**: `advisor_prompt.py`, `runner_prompts.py`,
   `verify_dispatch.py`, `pipeline.py`, `_schema.py`, the embedded
   `_prompts/advisor.txt`, and the 20+ golden snapshot fixtures (parity linchpin).
@@ -114,13 +115,14 @@ remaining work, roughly in dependency order (see `RUST_PORT_PLAN.md` §6):
 
 ## Exact next recommended step
 
-`rank.py`, `focus.py`, `config.py`, and the **`advisor plan` CLI** (discovery →
-rank → focus → JSON) are now ported and end-to-end parity-verified. Next:
-1. Port **`verify.py`** (`Finding` parse/format state machine) — the gateway to
-   the findings-lifecycle commands.
-2. Then `sarif.py` (full `findings_to_sarif`), `pr_comment.py`, `baseline.py`,
-   `suppressions.py` to light up `advisor audit`/`baseline`/`--sarif`.
-3. Remaining `plan` flags not yet wired (documented gaps): `--since/--staged/--branch`
+`rank.py`, `focus.py`, `config.py`, `verify.py`, and the **`advisor plan` CLI**
+(discovery → rank → focus → JSON) are now ported and parity-verified. With
+`Finding` parse/format in place, the findings-lifecycle commands are unblocked.
+Next:
+1. Port the full **`sarif.py`** `findings_to_sarif` document builder + **`pr_comment.py`**,
+   then **`baseline.py`** / **`suppressions.py`**, to light up
+   `advisor audit`/`baseline`/`--sarif`/`--fail-on`.
+2. Remaining `plan` flags not yet wired (documented gaps): `--since/--staged/--branch`
    (needs `git_scope.py`), `--estimate`/`--pricing` (needs full `cost.py`),
    `--checkpoint`/`--resume` (needs `checkpoint.py`), `--sarif`, `--exclude`,
    `--output`, and **history-informed ranking** (needs `history.py` — the Rust

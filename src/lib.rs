@@ -19,6 +19,7 @@ pub mod presets;
 pub mod rank;
 pub mod sarif;
 pub mod style;
+pub mod verify;
 pub mod version;
 
 // Re-export the most-used items at the crate root, mirroring the curated
@@ -38,4 +39,7 @@ pub use presets::{get_preset, list_presets, RulePack};
 pub use rank::{language_for_path, load_advisorignore, rank_files, rank_to_prompt};
 pub use sarif::{level_for, synthesize_rule_id, SARIF_SCHEMA_URI, SARIF_VERSION};
 pub use style::strip_ansi;
+pub use verify::{
+    build_verify_prompt, format_findings_block, parse_findings_from_text, parse_findings_with_drift,
+};
 pub use version::resolve_version;
