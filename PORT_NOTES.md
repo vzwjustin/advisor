@@ -26,6 +26,10 @@ pytest -q
 
 ## What was ported (real, tested, parity-verified)
 
+> **All 20 orchestration prompt snapshots** (`tests/snapshots/*.txt`) are now
+> reproduced byte-for-byte by the Rust builders — the agent-dispatch parity
+> linchpin called out in the plan's risk register is cleared.
+
 Each Rust module below mirrors its Python counterpart one-to-one. Every ported
 function carries unit tests whose expected values were **captured from the
 running Python implementation** (not hand-derived), so the tests are genuine
@@ -53,7 +57,7 @@ parity assertions.
 | `src/rank.rs` | `rank.py` | `language_for_path`, shebang detection, keyword scoring (`finditer` simulation), test-path cap, history boost, `rank_files`, `rank_to_prompt`, `.advisorignore` glob engine, `load_advisorignore` | **Golden JSON** vs Python (language/shebang/score/test/rank/history/ignore — 60+ cases) |
 | `src/pr_comment.rs` | `pr_comment.py` | `format_pr_comment` (collapsible `<details>` blocks, severity table, HTML escaping `quote=True`, summary/inline-code escaping, evidence byte-cap + fence/`<details>` neutralization, severity sort, unknown→LOW clamp, body-byte truncation) | **Golden JSON** vs Python (empty, basic, unknown severity, hostile HTML) |
 | `src/jsonutil.rs` | (CPython `json.dumps`) | `ensure_ascii` escaping (incl. surrogate pairs) | Unit tests vs CPython |
-| `src/orchestrate/*` | `orchestrate/_schema.py`, `verify_dispatch.py`, `runner_prompts.py` (builders) | `FINDING_SCHEMA`, `build_verify_dispatch_prompt`/`build_verify_message`, `build_runner_prompt`, `build_runner_batch_message`, `build_runner_dispatch_messages`, `build_fix_assignment_message`, `build_runner_handoff_message` | **Byte-exact golden snapshots** (verify ×2, runner_prompt ×3, batch_message ×2, dispatch, fix_assignment ×4, handoff ×2 = 14) |
+| `src/orchestrate/*` | `orchestrate/_schema.py`, `verify_dispatch.py`, `runner_prompts.py` (builders) | `FINDING_SCHEMA`, `build_verify_dispatch_prompt`/`build_verify_message`, `build_runner_prompt`, `build_runner_batch_message`, `build_runner_dispatch_messages`, `build_fix_assignment_message`, `build_runner_handoff_message`, **`build_runner_pool_prompt`**, **`build_advisor_prompt`** (+ embedded `_prompts/advisor.txt`) | **Byte-exact golden snapshots — all 20** (advisor ×2, pool ×3, verify ×2, runner_prompt ×3, batch ×2, dispatch, fix ×4, handoff ×2) |
 | `src/version.rs` | `_version.py` | `resolve_version` (crate version) | Unit test |
 | `src/main.rs` | `__main__.py` (subset) | `advisor presets [--json]`, `advisor plan [...]`, `advisor baseline create/diff [--from/--output/--baseline/--json]` (incl. JSON+markdown findings input loader), `advisor --version` | Binary diff vs Python (byte-identical, incl. end-to-end `plan` + `baseline` on fixtures) |
 
@@ -97,9 +101,9 @@ remaining work, roughly in dependency order (see `RUST_PORT_PLAN.md` §6):
   `history.py`, remaining `_fs.py` nuances (symlink-reject/locking),
   `checkpoint.py` save path (`plan --checkpoint`), the prompt-builder /
   orchestrate modules + their golden snapshots, install/doctor, and the web UI.
-- **Orchestration prompts (remaining)**: `runner_prompts.build_runner_pool_prompt`
-  (3 snapshots) + the agent-spec builders, `advisor_prompt.py` + embedded
-  `_prompts/advisor.txt` (2 snapshots), `pipeline.py`.
+- **Orchestration (remaining, non-snapshot)**: agent-spec builders
+  (`build_advisor_agent`, `build_runner_pool_agents`, `build_runner_agents`),
+  `check_batch_fix_budget`, `pipeline.render_pipeline`.
 - **CLI**: the remaining ~20 subcommands and all flags/exit-codes in
   `__main__.py`.
 - **install/doctor/update**: `install.py` (nudge + skill files, PyPI check),
