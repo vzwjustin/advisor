@@ -53,9 +53,22 @@ pub struct HistoryEntry {
 }
 
 impl HistoryEntry {
-    /// `json.dumps(asdict(self), ensure_ascii=False)` — raw UTF-8, declaration order.
+    /// `json.dumps(asdict(self), ensure_ascii=False)` — raw UTF-8, declaration
+    /// order, and Python's *default* `, `/`: ` separators (with spaces).
     pub fn to_json_line(&self) -> String {
-        serde_json::to_string(self).unwrap_or_default()
+        // Value::String(..).to_string() yields a properly-escaped JSON string
+        // with non-ASCII left raw (matching ensure_ascii=False).
+        let q = |s: &str| Value::String(s.to_string()).to_string();
+        format!(
+            "{{\"timestamp\": {}, \"file_path\": {}, \"severity\": {}, \"description\": {}, \"status\": {}, \"run_id\": {}, \"schema_version\": {}}}",
+            q(&self.timestamp),
+            q(&self.file_path),
+            q(&self.severity),
+            q(&self.description),
+            q(&self.status),
+            q(&self.run_id),
+            q(&self.schema_version),
+        )
     }
 }
 

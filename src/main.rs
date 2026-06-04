@@ -150,6 +150,24 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Append confirmed findings (stdin JSON/NDJSON) to history.jsonl.
+    #[command(name = "history-append")]
+    HistoryAppend {
+        #[arg(default_value = ".")]
+        target: String,
+        /// Override the run id (default: a fresh timestamped id).
+        #[arg(long = "run-id")]
+        run_id: Option<String>,
+        /// Skip entries already present in the last 500 (by run_id+path+sev+desc).
+        #[arg(long)]
+        dedup: bool,
+        /// Emit a JSON summary.
+        #[arg(long)]
+        json: bool,
+        /// Suppress the human-readable success line.
+        #[arg(long)]
+        quiet: bool,
+    },
     /// List active (or expired) false-positive suppressions.
     Suppressions {
         #[arg(default_value = ".")]
@@ -263,6 +281,13 @@ fn main() -> ExitCode {
             stats,
             json,
         } => cmd_history(&target, limit, stats, json),
+        Command::HistoryAppend {
+            target,
+            run_id,
+            dedup,
+            json,
+            quiet,
+        } => cmd_history_append(&target, run_id, dedup, json, quiet),
         Command::Suppressions {
             target,
             list,
@@ -273,6 +298,215 @@ fn main() -> ExitCode {
             cmd_suppressions(&target, expired, json)
         }
     }
+}
+
+/// Validate + normalize one incoming finding dict into a `HistoryEntry`.
+/// Mirrors `_coerce_finding_for_append` (errors are user-facing → exit 2).
+fn coerce_finding_for_append(
+    payload: &serde_json::Value,
+    default_run_id: &str,
+    default_ts: &str,
+) -> Result<advisor::history::HistoryEntry, String> {
+    let map = payload
+        .as_object()
+        .ok_or_else(|| "expected JSON object".to_string())?;
+    let req = |k: &str| -> Result<String, String> {
+        match map.get(k).and_then(|v| v.as_str()) {
+            Some(s) if !s.trim().is_empty() => Ok(s.to_string()),
+            _ => Err(format!("missing or empty required field: {k:?}")),
+        }
+    };
+    let file_path = req("file_path")?;
+    let _ = req("description")?;
+    let severity_raw = req("severity")?;
+    let severity = severity_raw.trim().to_uppercase();
+    if !matches!(severity.as_str(), "CRITICAL" | "HIGH" | "MEDIUM" | "LOW") {
+        return Err(format!(
+            "severity {severity_raw:?} not in ['CRITICAL', 'HIGH', 'LOW', 'MEDIUM']"
+        ));
+    }
+    let status_raw = map
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("CONFIRMED");
+    let status = status_raw.trim().to_uppercase();
+    if !matches!(status.as_str(), "CONFIRMED" | "FIXED" | "REJECTED") {
+        return Err(format!(
+            "status {status_raw:?} not in ['CONFIRMED', 'FIXED', 'REJECTED']"
+        ));
+    }
+    let run_id = map
+        .get("run_id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(default_run_id)
+        .trim()
+        .to_string();
+    let timestamp = map
+        .get("timestamp")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(default_ts)
+        .trim()
+        .to_string();
+    let description = map
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    Ok(advisor::history::HistoryEntry {
+        timestamp,
+        file_path: file_path.trim().to_string(),
+        severity,
+        description,
+        status,
+        run_id,
+        schema_version: map
+            .get("schema_version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("1.0")
+            .to_string(),
+    })
+}
+
+/// `advisor history-append` — append confirmed findings from stdin. Mirrors
+/// `cmd_history_append`.
+fn cmd_history_append(
+    target_str: &str,
+    run_id: Option<String>,
+    dedup: bool,
+    json: bool,
+    quiet: bool,
+) -> ExitCode {
+    let target = Path::new(target_str);
+    let mut buf = Vec::new();
+    if std::io::stdin()
+        .take((STDIN_LIMIT + 1) as u64)
+        .read_to_end(&mut buf)
+        .is_err()
+    {
+        eprintln!("✗ failed reading stdin");
+        return ExitCode::from(2);
+    }
+    if buf.len() > STDIN_LIMIT {
+        eprintln!("✗ advisor history-append input exceeds {STDIN_LIMIT}-byte cap");
+        return ExitCode::from(2);
+    }
+    let raw = String::from_utf8_lossy(&buf).into_owned();
+    if raw.trim().is_empty() {
+        eprintln!("no JSON input on stdin");
+        return ExitCode::from(2);
+    }
+    let mut payloads: Vec<serde_json::Value> = Vec::new();
+    if raw.trim_start().starts_with('[') {
+        match serde_json::from_str::<serde_json::Value>(&raw) {
+            Ok(serde_json::Value::Array(a)) => payloads = a,
+            Ok(_) => {
+                eprintln!("top-level JSON must be array or object");
+                return ExitCode::from(2);
+            }
+            Err(e) => {
+                eprintln!("invalid JSON array: {e}");
+                return ExitCode::from(2);
+            }
+        }
+    } else {
+        for (i, line) in raw.lines().enumerate() {
+            let s = line.trim();
+            if s.is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<serde_json::Value>(s) {
+                Ok(v) => payloads.push(v),
+                Err(e) => {
+                    eprintln!("line {}: invalid JSON: {e}", i + 1);
+                    return ExitCode::from(2);
+                }
+            }
+        }
+    }
+    if payloads.is_empty() {
+        eprintln!("no findings parsed from stdin");
+        return ExitCode::from(2);
+    }
+    let default_run_id = run_id.unwrap_or_else(advisor::history::new_run_id);
+    let default_run_id = default_run_id.trim().to_string();
+    // Default timestamp = now (seconds precision; explicit timestamps recommended
+    // for reproducible writes — see PORT_NOTES re microsecond-precision default).
+    let default_ts = advisor::history::entry_now("", "LOW", "", "CONFIRMED", "").timestamp;
+    let mut entries = Vec::new();
+    for p in &payloads {
+        match coerce_finding_for_append(p, &default_run_id, &default_ts) {
+            Ok(e) => entries.push(e),
+            Err(msg) => {
+                eprintln!("{msg}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    if dedup {
+        let existing =
+            advisor::history::load_recent_findings(&advisor::history::history_path(target), 500);
+        let mut seen: HashSet<(String, String, String, String)> = existing
+            .iter()
+            .map(|e| {
+                (
+                    e.run_id.clone(),
+                    e.file_path.clone(),
+                    e.severity.clone(),
+                    e.description.clone(),
+                )
+            })
+            .collect();
+        entries.retain(|e| {
+            let key = (
+                e.run_id.clone(),
+                e.file_path.clone(),
+                e.severity.clone(),
+                e.description.clone(),
+            );
+            seen.insert(key)
+        });
+    }
+    if entries.is_empty() {
+        if json {
+            println!(
+                "{{\"appended\": 0, \"run_id\": {}}}",
+                json_string(&default_run_id)
+            );
+        } else if !quiet {
+            println!("nothing to append (all entries deduped)");
+        }
+        return ExitCode::SUCCESS;
+    }
+    let path = match advisor::history::append_entries(target, &entries) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("✗ {e}");
+            return ExitCode::from(2);
+        }
+    };
+    if json {
+        println!(
+            "{{\"schema_version\": \"1.0\", \"appended\": {}, \"run_id\": {}, \"history_path\": {}}}",
+            entries.len(),
+            json_string(&default_run_id),
+            json_string(&path.to_string_lossy())
+        );
+    } else if !quiet {
+        println!(
+            "appended {} finding(s) to {}",
+            entries.len(),
+            path.display()
+        );
+    }
+    ExitCode::SUCCESS
+}
+
+/// Minimal JSON string literal (ASCII-escaped) for compact summary output.
+fn json_string(s: &str) -> String {
+    ensure_ascii(&serde_json::Value::String(s.to_string()).to_string())
 }
 
 /// `advisor checkpoints` — list / delete saved run checkpoints. Mirrors

@@ -71,6 +71,7 @@ parity assertions.
 | `advisor plan --since/--staged/--branch` | ✓ | ✓ | **IDENTICAL** end-to-end on a git fixture; bad-ref → exit 2 | `scripts/parity_check.sh` (`--staged`) |
 | `advisor history` / `--stats` (`--json`) | ✓ | ✓ | **IDENTICAL** (recent list + aggregate stats) | `scripts/parity_check.sh` |
 | `advisor checkpoints --json` (list / --rm / --clear) | ✓ | ✓ | **IDENTICAL** list payload | `scripts/parity_check.sh` |
+| `advisor history-append` (write path) | ✓ | ✓ | **IDENTICAL** written `history.jsonl` bytes (default `json.dumps` separators) | `scripts/parity_check.sh` |
 | `advisor plan` with history boost | ✓ | ✓ | **IDENTICAL** — repeat-offender tier bump matches | `scripts/parity_check.sh` |
 | `advisor --version` | n/a (`advisor version`) | ✓ | Intentional difference — Rust uses clap `--version`; full `version` subcommand pending | classified *intentional* |
 | `sanitize_inline` / `fence` | ✓ | ✓ | IDENTICAL on tested inputs | |
@@ -134,8 +135,7 @@ remaining work, roughly in dependency order (see `RUST_PORT_PLAN.md` §6):
 
 `rank.py`, `focus.py`, `config.py`, `verify.py`, `sarif.py`, and the
 **`advisor plan` CLI** are now ported and parity-verified. Next:
-1. **`checkpoint.py` save** + wire `plan --checkpoint`/`--resume`, and
-   `advisor history-append` (write path).
+1. **`checkpoint.py` save** + wire `plan --checkpoint`/`--resume`.
 2. The remaining `plan`/CLI surfaces (`--exclude`, `--output`, `--sarif` on
    plan, `--test-cmd`; `pipeline`/`protocol`/`version`/`prompt` text commands),
    then the orchestrate prompt builders (snapshot-parity gated) and

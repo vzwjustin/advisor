@@ -215,6 +215,21 @@ JSON
 }
 checkpoints_check
 
+# ── history-append: written history.jsonl bytes ──
+history_append_check() {
+  local py rs; py="$(mktemp -d)"; rs="$(mktemp -d)"
+  local input='[{"file_path":"src/auth.py","severity":"high","description":"sql injection","status":"CONFIRMED","run_id":"r1","timestamp":"2026-06-04T00:00:00+00:00"},{"file_path":"lib/x.py","severity":"LOW","description":"weak hash","run_id":"r1","timestamp":"2026-06-04T00:00:01+00:00"}]'
+  printf '%s' "$input" | $PY history-append "$py" --run-id r1 --quiet >/dev/null 2>&1
+  printf '%s' "$input" | "$RUST_BIN" history-append "$rs" --run-id r1 --quiet >/dev/null 2>&1
+  if diff -q "$py/.advisor/history.jsonl" "$rs/.advisor/history.jsonl" >/dev/null 2>&1; then
+    echo "PASS  history-append (file bytes)"
+  else
+    echo "FAIL  history-append"; diff "$py/.advisor/history.jsonl" "$rs/.advisor/history.jsonl" | sed 's/^/    /' || true; fail=1
+  fi
+  rm -rf "$py" "$rs"
+}
+history_append_check
+
 if [[ "$fail" -ne 0 ]]; then
   echo "parity check FAILED" >&2
   exit 1
