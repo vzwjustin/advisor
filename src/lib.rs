@@ -11,6 +11,7 @@
 pub mod config;
 pub mod cost;
 pub mod fence;
+pub mod focus;
 pub mod fs;
 pub mod jsonutil;
 pub mod models;
@@ -24,6 +25,10 @@ pub mod version;
 // surface of `advisor/__init__.py`.
 pub use config::{is_known_model, DEFAULT_ADVISOR_MODEL, DEFAULT_RUNNER_MODEL, POOL_SIZE_CEILING};
 pub use fence::{fence, sanitize_inline};
+pub use focus::{
+    create_focus_batches, create_focus_tasks, format_batch_plan, format_dispatch_plan, FocusBatch,
+    FocusTask,
+};
 pub use fs::{normalize_path, validate_file_types, CONTENT_SCAN_LIMIT};
 pub use models::{Finding, RankedFile, Severity};
 pub use presets::{get_preset, list_presets, RulePack};

@@ -41,6 +41,7 @@ parity assertions.
 | `src/cost.rs` | `cost.py` | pricing table, token-overhead constants, `family_of`, `PRICING_AS_OF` | Unit tests |
 | `src/models.rs` | `verify.py`, `rank.py` | `Finding`, `RankedFile`, `Severity` (+ canonicalization), serde | Serde field-completeness test |
 | `src/presets.rs` | `presets.py` + CLI handler | `RulePack`, `list_presets`, `get_preset`, `presets_json`, `presets_pretty` | **Byte-exact golden** vs Python `presets [--json]` |
+| `src/focus.rs` | `focus.py` | `FocusTask`/`FocusBatch`, `create_focus_tasks`, `create_focus_batches`, `format_dispatch_plan`, `format_batch_plan`, prompt templating | **Golden JSON** vs Python (tasks, batches, forced/auto complexity, plans, grammar) |
 | `src/rank.rs` | `rank.py` | `language_for_path`, shebang detection, keyword scoring (`finditer` simulation), test-path cap, history boost, `rank_files`, `rank_to_prompt`, `.advisorignore` glob engine, `load_advisorignore` | **Golden JSON** vs Python (language/shebang/score/test/rank/history/ignore — 60+ cases) |
 | `src/jsonutil.rs` | (CPython `json.dumps`) | `ensure_ascii` escaping (incl. surrogate pairs) | Unit tests vs CPython |
 | `src/version.rs` | `_version.py` | `resolve_version` (crate version) | Unit test |
@@ -71,7 +72,7 @@ fields — `python_version`, `install_path` — that need a defined Rust analog)
 Everything else. The Python package is fully intact and authoritative. Largest
 remaining work, roughly in dependency order (see `RUST_PORT_PLAN.md` §6):
 
-- **Core logic**: `verify.py` parse/format state machine, `focus.py`, `runner_budget.py`,
+- **Core logic**: `verify.py` parse/format state machine, `runner_budget.py`,
   `git_scope.py` (subprocess), `history.py`, `baseline.py`, `checkpoint.py`,
   `suppressions.py`, `pr_comment.py`, `audit.py`, full `cost.py` estimator,
   full `sarif.py` document builder, full `_fs.py` atomic write/locking.
@@ -113,12 +114,11 @@ remaining work, roughly in dependency order (see `RUST_PORT_PLAN.md` §6):
 
 ## Exact next recommended step
 
-`rank.py` is now ported and parity-verified. Next:
-1. Port **`focus.py`** (`FocusTask`/`FocusBatch`, `create_focus_tasks`,
-   `create_focus_batches`, `format_dispatch_plan`) — small, pure, depends only
-   on the now-ported `RankedFile`.
-2. Port **`config.py`'s `TeamConfig` + `default_team_config`** (env fallbacks +
+`rank.py` and `focus.py` are now ported and parity-verified. Next:
+1. Port **`config.py`'s `TeamConfig` + `default_team_config`** (env fallbacks +
    clamp warnings) so the planning CLI has its config object.
-3. Wire **`advisor plan <target> --json --no-history`** into the Rust CLI behind
+2. Wire **`advisor plan <target> --json --no-history`** into the Rust CLI behind
    the verified ranker + focus, then capture a Python golden for a fixture tree
    and add it as the third cross-language check in `scripts/parity_check.sh`.
+3. Port **`verify.py`** (`Finding` parse/format state machine) — needed for the
+   findings-lifecycle commands (`baseline`, `audit`, `sarif`).
