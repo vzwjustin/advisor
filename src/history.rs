@@ -109,6 +109,10 @@ pub fn load_recent_findings(history_file: &Path, limit: usize) -> Vec<HistoryEnt
     }
     let text = match std::fs::read(history_file) {
         Ok(b) => String::from_utf8_lossy(&b).into_owned(),
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            eprintln!("warning: history unreadable: {e}");
+            return Vec::new();
+        }
         Err(_) => return Vec::new(),
     };
     let mut entries: Vec<HistoryEntry> = Vec::new();

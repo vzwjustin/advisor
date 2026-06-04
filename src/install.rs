@@ -161,7 +161,8 @@ fn atomic_write(target: &Path, text: &str) -> Result<(), std::io::Error> {
     }
     let dir = target.parent().unwrap_or(Path::new("."));
     let tmp = dir.join(format!(
-        ".advisor_tmp_{}.tmp",
+        ".advisor_tmp_{}_{}.tmp",
+        std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())

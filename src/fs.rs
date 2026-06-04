@@ -133,13 +133,18 @@ impl std::fmt::Display for ReadCappedError {
 /// Read a text file with a hard byte cap (measured in bytes, not chars).
 /// Strips a leading UTF-8 BOM (`utf-8-sig`). Mirrors `_fs.read_text_capped`.
 pub fn read_text_capped(path: &std::path::Path, max_bytes: u64) -> Result<String, ReadCappedError> {
-    let bytes = match std::fs::read(path) {
-        Ok(b) => b,
+    use std::io::Read as _;
+    let file = match std::fs::File::open(path) {
+        Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return Err(ReadCappedError::NotFound)
         }
         Err(e) => return Err(ReadCappedError::Io(e)),
     };
+    let mut bytes = Vec::new();
+    file.take(max_bytes + 1)
+        .read_to_end(&mut bytes)
+        .map_err(ReadCappedError::Io)?;
     if bytes.len() as u64 > max_bytes {
         return Err(ReadCappedError::TooLarge(max_bytes));
     }

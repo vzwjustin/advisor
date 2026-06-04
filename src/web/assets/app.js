@@ -616,7 +616,7 @@
     pill.querySelector('.live-label').textContent = labelOverride || state.toUpperCase();
   }
 
-  fn = function scheduleLiveStreamPoll(delayMs) {
+  function scheduleLiveStreamPoll(delayMs) {
     if (liveStreamTimer) clearTimeout(liveStreamTimer);
     liveStreamTimer = setTimeout(liveStreamTick, Math.max(0, delayMs));
   }
