@@ -190,11 +190,16 @@ pub fn list_checkpoints(target: &Path) -> Vec<String> {
         if !entry.path().is_file() {
             continue;
         }
-        // Cheap JSON-object sniff on the first 2048 bytes.
-        let Ok(bytes) = std::fs::read(entry.path()) else {
+        // Cheap JSON-object sniff on the first 2048 bytes. Read only the head —
+        // a huge run-*.json must not trigger a full-file allocation here.
+        use std::io::Read as _;
+        let Ok(file) = std::fs::File::open(entry.path()) else {
             continue;
         };
-        let head: Vec<u8> = bytes.into_iter().take(2048).collect();
+        let mut head = Vec::new();
+        if file.take(2048).read_to_end(&mut head).is_err() {
+            continue;
+        }
         let trimmed = String::from_utf8_lossy(&head);
         if !trimmed.trim_start().starts_with('{') {
             continue;
