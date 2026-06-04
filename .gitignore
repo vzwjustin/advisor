@@ -10,3 +10,6 @@ build/
 .coverage
 .advisor/
 .claude/
+
+# Rust port (advisor-rs)
+/target/

@@ -1,0 +1,136 @@
+{
+  "schema_version": "1.0",
+  "count": 7,
+  "presets": [
+    {
+      "name": "general-python",
+      "description": "Generic Python codebase \u2014 no stack-specific keyword boosting",
+      "file_types": "*.py",
+      "min_priority": 3,
+      "test_command": "pytest -q",
+      "notes": [
+        "use when no python-web / python-cli preset fits \u2014 the ranker still uses its language-aware baseline keywords"
+      ],
+      "extra_keywords_by_tier": {}
+    },
+    {
+      "name": "go-service",
+      "description": "Go services \u2014 net/http, database/sql, exec",
+      "file_types": "*.go",
+      "min_priority": 3,
+      "test_command": "go test ./...",
+      "notes": [],
+      "extra_keywords_by_tier": {
+        "3": [
+          "net/http",
+          "sql.Query",
+          "exec.Command",
+          "unsafe."
+        ],
+        "4": [
+          "ParseForm",
+          "Unmarshal"
+        ]
+      }
+    },
+    {
+      "name": "node-api",
+      "description": "Express / Fastify / Koa \u2014 JWT, body parsing, eval surfaces",
+      "file_types": "*.js,*.ts",
+      "min_priority": 3,
+      "test_command": "npm test",
+      "notes": [],
+      "extra_keywords_by_tier": {
+        "5": [
+          "jsonwebtoken",
+          "bcrypt",
+          "session",
+          "cookie-parser"
+        ],
+        "4": [
+          "body-parser",
+          "req.body",
+          "eval",
+          "new Function"
+        ]
+      }
+    },
+    {
+      "name": "python-cli",
+      "description": "argparse / click CLIs \u2014 subprocess + shell focus",
+      "file_types": "*.py",
+      "min_priority": 3,
+      "test_command": "pytest -q",
+      "notes": [],
+      "extra_keywords_by_tier": {
+        "3": [
+          "subprocess",
+          "shell=True",
+          "os.system"
+        ]
+      }
+    },
+    {
+      "name": "python-web",
+      "description": "Flask / Django / FastAPI \u2014 auth + request handling focus",
+      "file_types": "*.py",
+      "min_priority": 3,
+      "test_command": "pytest -q",
+      "notes": [
+        "pairs well with `--since origin/main` for PR reviews"
+      ],
+      "extra_keywords_by_tier": {
+        "5": [
+          "csrf",
+          "session",
+          "login_required",
+          "jwt",
+          "oauth"
+        ],
+        "4": [
+          "request.form",
+          "request.json",
+          "deserialize",
+          "pickle.loads"
+        ]
+      }
+    },
+    {
+      "name": "rust-crate",
+      "description": "Rust libraries / crates \u2014 unsafe and unwinding",
+      "file_types": "*.rs",
+      "min_priority": 3,
+      "test_command": "cargo test",
+      "notes": [
+        "`unwrap()` is flagged P4 \u2014 expected in tests, suspicious in prod"
+      ],
+      "extra_keywords_by_tier": {
+        "3": [
+          "unsafe",
+          "transmute",
+          "from_raw",
+          "catch_unwind"
+        ],
+        "4": [
+          "unwrap()"
+        ]
+      }
+    },
+    {
+      "name": "typescript-react",
+      "description": "React + TypeScript \u2014 DOM sinks and storage",
+      "file_types": "*.ts,*.tsx",
+      "min_priority": 3,
+      "test_command": "npm test",
+      "notes": [],
+      "extra_keywords_by_tier": {
+        "4": [
+          "dangerouslySetInnerHTML",
+          "innerHTML",
+          "href={",
+          "localStorage"
+        ]
+      }
+    }
+  ]
+}

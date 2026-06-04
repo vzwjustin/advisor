@@ -1,0 +1,37 @@
+[package]
+name = "advisor-rs"
+version = "0.8.4"
+edition = "2021"
+rust-version = "1.74"
+description = "Rust port of advisor — an Opus-led code-review-and-fix pipeline for Claude Code (in progress)."
+license = "MIT"
+repository = "https://github.com/vzwjustin/advisor"
+# The migration plan lives in RUST_PORT_PLAN.md; progress in PORT_NOTES.md.
+
+# One library + one binary, mirroring the Python package (`advisor`) and its
+# `advisor` console script. A workspace is intentionally avoided for now — see
+# RUST_PORT_PLAN.md §3 (one binary + one library == no workspace ceremony).
+[lib]
+name = "advisor"
+path = "src/lib.rs"
+
+[[bin]]
+name = "advisor"
+path = "src/main.rs"
+
+[dependencies]
+# Every dependency below is justified against a stdlib facility the Python
+# implementation relies on (see RUST_PORT_PLAN.md §4 Dependency Mapping).
+serde = { version = "1", features = ["derive"] }   # dataclass -> struct serialization
+serde_json = "1"                                    # json / jsonl payloads
+regex = "1"                                         # re module (model id, ansi, glob engine)
+once_cell = "1"                                      # module-level compiled regex (lazy)
+sha1 = "0.10"                                        # sarif rule-id + baseline description hash
+clap = { version = "4", features = ["derive"] }     # argparse CLI
+
+[dev-dependencies]
+# Reserved for upcoming CLI integration + property parity tests
+# (assert_cmd / predicates / proptest) per RUST_PORT_PLAN.md §3.
+
+[profile.release]
+opt-level = 3
