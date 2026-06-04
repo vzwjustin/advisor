@@ -12,7 +12,8 @@ changes the picture. Opus is the strategist that never goes idle until the
 final report ships. Optional fix wave applies edits the same way.
 
 No external API calls. Runs entirely through Claude Code's native
-`TeamCreate` / `Agent` / `SendMessage` tools.
+`TeamCreate` / `Agent` / `SendMessage` tools. Ships as a single
+self-contained Rust binary — no interpreter, no runtime dependencies.
 
 ## Team
 
@@ -23,10 +24,12 @@ No external API calls. Runs entirely through Claude Code's native
 
 Priority scale: **P5** auth/secrets · **P4** user input/parsing · **P3** handlers/DB/exec · **P2** config/crypto/logging · **P1** utils/tests.
 
-## Install (30 seconds)
+## Install
 
 ```bash
-pipx install advisor-agent
+# Requires the Rust toolchain (rustup). Builds one self-contained binary.
+git clone https://github.com/vzwjustin/advisor && cd advisor
+cargo install --path .
 advisor status
 ```
 
@@ -39,23 +42,20 @@ landed where, and every upgrade prints a "What's new" digest from
 `CHANGELOG.md` so you see what changed without leaving the terminal.
 
 <details>
-<summary>Other install methods</summary>
+<summary>Other build / install methods</summary>
 
 ```bash
-# Zero-install one-shot (uv)
-uvx advisor-agent pipeline src/
+# Build a release binary without installing it to ~/.cargo/bin
+cargo build --release          # -> target/release/advisor
 
-# Plain pip
-pip install advisor-agent
+# Run straight from a checkout without installing
+cargo run -- pipeline src/
 
-# From source
-git clone https://github.com/vzwjustin/advisor && cd advisor && pip install -e .
-
-# Local dev with uv tool (reinstall after edits)
-uv tool install --reinstall .
+# Force-reinstall after pulling new changes
+cargo install --path . --force
 ```
 
-Requires Python ≥ 3.10. Package name: `advisor-agent`. Import: `advisor`. CLI: `advisor`.
+Requires Rust ≥ 1.74 (see `Cargo.toml`). Crate (package): `advisor-rs`. Library: `advisor`. Binary / CLI: `advisor`.
 
 </details>
 
@@ -101,9 +101,9 @@ advisor prompt runner src/ --runner-id 1   # a runner's bootstrap prompt
 advisor prompt verify src/ < findings  # verify-pass prompt
 advisor status                         # install health check
 advisor status --json                  # JSON-formatted health for scripting
-advisor doctor                         # extended diagnostic: git/claude/python/env checks
+advisor doctor                         # extended diagnostic: git/claude/env checks
 advisor install                        # install nudge + /advisor skill (prints What's new on upgrade)
-advisor update                         # self-upgrade via uv tool / pipx, then re-runs install
+advisor update                         # self-upgrade in place, then re-runs install
 advisor changelog [VERSION]            # print bundled CHANGELOG section(s); --since X.Y.Z for a digest
 advisor uninstall                      # remove nudge + /advisor skill
 advisor ui                             # launch local web dashboard on 127.0.0.1:8765 (Findings · Live · Plan · Run config · Cost)
@@ -153,72 +153,58 @@ Patterns follow ``fnmatch`` semantics for filename matches, and use
 ``PurePath.match`` when ``**`` is present. Bare words match any path
 component (``docs`` matches both ``docs/`` and ``foo/docs/bar.py``).
 
-## Python API
+## Library API (Rust crate)
 
-```python
-from advisor import (
-    default_team_config,
-    build_advisor_agent,
-    build_advisor_prompt,
-    build_runner_pool_agents,
-    build_runner_pool_prompt,
-    build_runner_dispatch_messages,
-    build_runner_handoff_message,
-    build_fix_assignment_message,   # stamped fix-count header per assignment
-    check_batch_fix_budget,         # pre-flight cap validator
-    build_verify_dispatch_prompt,
-    build_verify_message,
-    rank_files,
-    load_advisorignore,
-    create_focus_tasks,
-    create_focus_batches,
-    parse_findings_from_text,
-    format_findings_block,
-    render_pipeline,
-)
+The crate ships a library (`advisor`) alongside the `advisor` binary,
+re-exporting the curated surface at the crate root — ranking, focus/batch
+planning, the prompt + dispatch builders, and the findings parsers:
 
-config = default_team_config(
-    target_dir="src/",
-    team_name="review",
-    file_types="*.py",
-    max_runners=5,
-    min_priority=3,
-)
+```rust
+use advisor::{default_team_config, rank_files, TeamConfigInput};
+use advisor::orchestrate::advisor_prompt::build_advisor_prompt;
+use advisor::orchestrate::runner_prompts::build_runner_dispatch_messages;
 
-print(render_pipeline(config))
-advisor_spec = build_advisor_agent(config)
-# After Opus produces its dispatch plan, spawn each runner with the
-# verbatim per-runner prompt from that plan — not a generic builder.
+let mut input = TeamConfigInput::new("src/");
+input.file_types = "*.rs".into();
+input.max_runners = Some(5);
+input.min_priority = 3;
+
+let config = default_team_config(input);
+
+// After Opus produces its dispatch plan, spawn each runner with the
+// verbatim per-runner prompt from that plan — not a generic builder.
+let advisor_prompt = build_advisor_prompt(&config, /* history_block */ "");
 ```
 
-The builder functions return plain dicts — drop each one into a Claude
-Code `Agent(...)` or `SendMessage(...)` call.
+The builder functions are pure strings-in / values-out — feed the rendered
+prompts and dispatch messages straight into Claude Code's `Agent(...)` and
+`SendMessage(...)` tool calls.
 
 ## Modules
 
-- `advisor/orchestrate/` — `TeamConfig`, advisor + runner prompt builders,
-  dispatch helpers, pipeline renderer (package: `config`, `advisor_prompt`,
-  `runner_prompts`, `verify_dispatch`, `pipeline`)
-- `advisor/rank.py` — `rank_files`, `RankedFile` (keyword-signal priority ranking)
-- `advisor/focus.py` — `create_focus_tasks` / `create_focus_batches`, plan formatters
-- `advisor/verify.py` — `Finding`, `parse_findings_from_text`, verify-pass builders
-- `advisor/runner_budget.py` — `RunnerBudget`, scope-anchor parsing, per-runner output-char budget and rotation logic
-- `advisor/install.py` — idempotent CLAUDE.md nudge + `/advisor` skill install/uninstall
-- `advisor/doctor.py` — `DoctorReport`, extended git/claude/python/env diagnostics
-- `advisor/audit.py` — `audit_transcript`, `format_audit_report`, post-hoc run diagnostics
-- `advisor/baseline.py` — `read_baseline`, `write_baseline`, `diff_against_baseline`
-- `advisor/checkpoint.py` — `Checkpoint`, save/load/list plan checkpoints for `--resume`
-- `advisor/cost.py` — `CostEstimate`, rough token and cost range estimator
-- `advisor/git_scope.py` — `resolve_git_scope`, git-incremental scoping (`--since`/`--staged`/`--branch`)
-- `advisor/history.py` — `HistoryEntry`, confirmed findings log at `.advisor/history.jsonl`
-- `advisor/pr_comment.py` — `format_pr_comment`, PR-body markdown formatter
-- `advisor/presets.py` — `PRESETS`, `RulePack`, curated rule-pack bundles
-- `advisor/sarif.py` — `findings_to_sarif`, SARIF 2.1.0 serializer
-- `advisor/suppressions.py` — `Suppression`, per-rule false-positive suppressions
-- `advisor/skill_asset.py` — `SKILL_MD`, bundled `/advisor` skill content
-- `advisor/web/` — local web dashboard served by `advisor ui` (Findings · Live · Plan · Run config · Cost)
-- `advisor/live.py` — ephemeral event stream (`<target>/.advisor/live/events.jsonl`) the dashboard's **Live** tab subscribes to
-- `advisor/_style.py` — zero-dep ANSI styling (colors on by default)
+- `src/orchestrate/` — `TeamConfig`, advisor + runner prompt builders,
+  dispatch helpers (modules: `advisor_prompt`, `runner_prompts`,
+  `verify_dispatch`)
+- `src/rank.rs` — `rank_files`, `RankedFile` (keyword-signal priority ranking)
+- `src/focus.rs` — `create_focus_tasks` / `create_focus_batches`, plan formatters
+- `src/verify.rs` — `Finding`, `parse_findings_from_text`, verify-pass builders
+- `src/runner_budget.rs` — `RunnerBudget`, scope-anchor parsing, per-runner output-char budget and rotation logic
+- `src/install.rs` — idempotent CLAUDE.md nudge + `/advisor` skill install/uninstall
+- `src/doctor.rs` — `DoctorReport`, extended git/claude/env diagnostics
+- `src/audit.rs` — `audit_transcript`, `format_audit_report`, post-hoc run diagnostics
+- `src/baseline.rs` — `read_baseline`, `write_baseline`, `diff_against_baseline`
+- `src/checkpoint.rs` — `Checkpoint`, save/load/list plan checkpoints for `--resume`
+- `src/cost.rs` — `CostEstimate`, rough token and cost range estimator
+- `src/git_scope.rs` — `resolve_git_scope`, git-incremental scoping (`--since`/`--staged`/`--branch`)
+- `src/history.rs` — `HistoryEntry`, confirmed findings log at `.advisor/history.jsonl`
+- `src/pr_comment.rs` — `format_pr_comment`, PR-body markdown formatter
+- `src/presets.rs` — `list_presets`, `RulePack`, curated rule-pack bundles
+- `src/sarif.rs` — `findings_to_sarif`, SARIF 2.1.0 serializer
+- `src/suppressions.rs` — `Suppression`, per-rule false-positive suppressions
+- `src/skill_asset.rs` — `skill_md`, bundled `/advisor` skill content
+- `src/web.rs` — local web dashboard served by `advisor ui` (Findings · Live · Plan · Run config · Cost)
+- `src/live.rs` — ephemeral event stream (`<target>/.advisor/live/events.jsonl`) the dashboard's **Live** tab subscribes to
+- `src/style.rs` — zero-dep ANSI styling (colors on by default)
 
 ## Live dashboard (new in 0.8.0)
 
@@ -263,9 +249,8 @@ See `CLAUDE.md` for the full protocol.
 ## Tests
 
 ```bash
-pip install -e ".[dev]"
-make check        # ruff + mypy + pytest
-pytest --cov=advisor --cov-report=term-missing
+cargo test        # unit + golden-parity + prompt-snapshot tests
+make check        # cargo clippy + cargo fmt --check + cargo test
 ```
 
 ## GitHub Action
