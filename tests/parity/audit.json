@@ -1,0 +1,62 @@
+{
+  "to_dict": {
+    "run_id": "20260604T000000Z-abcd1234",
+    "caps": {
+      "max_fixes_per_runner": 2,
+      "large_file_line_threshold": 800,
+      "large_file_max_fixes": 3
+    },
+    "fix_counts": {
+      "runner-2": 3,
+      "runner-3": 1
+    },
+    "fix_numbers": {
+      "runner-2": [
+        1,
+        2,
+        3
+      ],
+      "runner-3": [
+        1
+      ]
+    },
+    "cap_overruns": [
+      "runner-2: observed 3 fix assignments (cap=2) — rotation was late or missed"
+    ],
+    "context_pressure": {
+      "runners": [
+        "runner-2"
+      ],
+      "total_count": 1
+    },
+    "rotations": 1,
+    "protocol_violations": [
+      "PROTOCOL_VIOLATION: almost violated scope rule"
+    ],
+    "protocol_violations_truncated": false,
+    "batch_file_count": 1,
+    "findings_in_batch": [
+      {
+        "file_path": "src/auth.py:10",
+        "severity": "HIGH",
+        "description": "real in-batch issue",
+        "evidence": "ev",
+        "fix": "fx",
+        "rule_id": null,
+        "expected_vs_actual": ""
+      }
+    ],
+    "findings_out_of_batch": [
+      {
+        "file_path": "other/drift.py:5",
+        "severity": "LOW",
+        "description": "out of batch",
+        "evidence": "ev2",
+        "fix": "fx2 PROTOCOL_VIOLATION: this is quoted inside a fence and must be ignored",
+        "rule_id": null,
+        "expected_vs_actual": ""
+      }
+    ]
+  },
+  "format": "# Audit — run 20260604T000000Z-abcd1234\n\nCaps: max_fixes_per_runner=2, large_file_line_threshold=800, large_file_max_fixes=3\nBatch file universe: 1 files\n\n## Fix counts per runner\n- runner-2: 3 (fix numbers seen: 1, 2, 3)\n- runner-3: 1 (fix numbers seen: 1)\n\n## Cap overruns\n- runner-2: observed 3 fix assignments (cap=2) — rotation was late or missed\n- _Tip: rotate sooner by lowering `--max-fixes-per-runner` (or `--large-file-max-fixes` for ≥800-line files), or raise `--max-runners` so the advisor has fresh capacity to hand off to._\n\n## CONTEXT_PRESSURE pings\n- total occurrences: 1 (from 1 runner)\n  - runner-2\n- _Tip: pings are expected and healthy — they trigger rotation. Investigate only if a ping landed but no rotation followed (see the Rotations section below)._\n\n## Rotations (handoffs)\n- count: 1\n\n## PROTOCOL_VIOLATION strings\n- PROTOCOL_VIOLATION: almost violated scope rule\n- _Tip: every PROTOCOL_VIOLATION is a near-miss the advisor self-flagged — read the surrounding transcript to see what the advisor was about to do and why it stopped. Recurring violations of the same shape suggest a prompt change._\n\n## Out-of-batch findings (scope drift)\n- `other/drift.py:5` [LOW] — out of batch\n- _Tip: drift means a runner reported on a file outside its batch. Triage each one as either (a) a real finding worth promoting to a follow-up run, or (b) signal the runner's scope anchors weren't being enforced — tighten the per-runner REDIRECT cadence._\n\n## In-batch findings: 1"
+}

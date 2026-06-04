@@ -1,0 +1,33 @@
+## Presets (7)
+
+- **`general-python`** — Generic Python codebase — no stack-specific keyword boosting
+  - defaults: `file-types=*.py`, `min-priority=3`, `test-cmd=pytest -q`
+  - _use when no python-web / python-cli preset fits — the ranker still uses its language-aware baseline keywords_
+
+- **`go-service`** — Go services — net/http, database/sql, exec
+  - defaults: `file-types=*.go`, `min-priority=3`, `test-cmd=go test ./...`
+  - extra keywords: P4:2, P3:4
+
+- **`node-api`** — Express / Fastify / Koa — JWT, body parsing, eval surfaces
+  - defaults: `file-types=*.js,*.ts`, `min-priority=3`, `test-cmd=npm test`
+  - extra keywords: P5:4, P4:4
+
+- **`python-cli`** — argparse / click CLIs — subprocess + shell focus
+  - defaults: `file-types=*.py`, `min-priority=3`, `test-cmd=pytest -q`
+  - extra keywords: P3:3
+
+- **`python-web`** — Flask / Django / FastAPI — auth + request handling focus
+  - defaults: `file-types=*.py`, `min-priority=3`, `test-cmd=pytest -q`
+  - extra keywords: P5:5, P4:4
+  - _pairs well with `--since origin/main` for PR reviews_
+
+- **`rust-crate`** — Rust libraries / crates — unsafe and unwinding
+  - defaults: `file-types=*.rs`, `min-priority=3`, `test-cmd=cargo test`
+  - extra keywords: P4:1, P3:4
+  - _`unwrap()` is flagged P4 — expected in tests, suspicious in prod_
+
+- **`typescript-react`** — React + TypeScript — DOM sinks and storage
+  - defaults: `file-types=*.ts,*.tsx`, `min-priority=3`, `test-cmd=npm test`
+  - extra keywords: P4:4
+
+  > use  advisor plan . --preset <name>

@@ -1,0 +1,52 @@
+{
+  "severity_from_rule_id": {
+    "advisor/high/abc": 3,
+    "HIGH/x": 3,
+    "LOW": 1,
+    "foreign/thing": 2
+  },
+  "matches": {
+    "exact_hit": true,
+    "exact_miss_path": false,
+    "rule_case_insensitive": true,
+    "glob_hit": true,
+    "glob_miss_shallow": true,
+    "glob_miss_outside": false
+  },
+  "apply_kept": [
+    "src/keep.py:1"
+  ],
+  "apply_dropped": [
+    "src/auth.py:1"
+  ],
+  "load_valid": [
+    {
+      "rule_id": "advisor/low/a",
+      "file": "src/auth.py",
+      "file_glob": null,
+      "until": null,
+      "expired": false,
+      "reason": "ok"
+    },
+    {
+      "rule_id": "advisor/high/b",
+      "file": null,
+      "file_glob": "legacy/**",
+      "until": "2999-01-01",
+      "expired": false,
+      "reason": "rewrite"
+    },
+    {
+      "rule_id": "advisor/critical/c",
+      "file": "x.py",
+      "file_glob": null,
+      "until": "2000-01-01",
+      "expired": true,
+      "reason": "old"
+    }
+  ],
+  "err_missing_rule": "missing required 'rule_id'",
+  "err_both": "'file' and 'file_glob' are mutually exclusive",
+  "err_no_target": "one of 'file' or 'file_glob' is required",
+  "err_high_no_until": "rule 'advisor/high/a' is above MEDIUM — 'until' date is required"
+}
