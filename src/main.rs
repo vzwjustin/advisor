@@ -2610,7 +2610,27 @@ fn cmd_install(
         );
     }
 
-    ExitCode::SUCCESS
+    let failed = nudge_result.is_err()
+        || skill_result.as_ref().is_some_and(Result::is_err)
+        || update_result.as_ref().is_some_and(Result::is_err)
+        || codex_result.as_ref().is_some_and(Result::is_err);
+    let is_unchanged = |res: &Result<advisor::install::InstallResult, std::io::Error>| {
+        res.as_ref()
+            .map(|r| r.action == InstallAction::Unchanged)
+            .unwrap_or(false)
+    };
+    let strict_noop = strict
+        && is_unchanged(&nudge_result)
+        && skill_result.as_ref().map_or(true, is_unchanged)
+        && update_result.as_ref().map_or(true, is_unchanged)
+        && codex_result.as_ref().map_or(true, is_unchanged);
+    if failed {
+        ExitCode::FAILURE
+    } else if strict_noop {
+        ExitCode::from(STRICT_NOOP_EXIT)
+    } else {
+        ExitCode::SUCCESS
+    }
 }
 
 fn cmd_uninstall(
@@ -2626,6 +2646,7 @@ fn cmd_uninstall(
     let nudge_result = uninstall_nudge(nudge_path);
     let skill_result = uninstall_skill(sp);
     let update_result = uninstall_update_skill(Some(&up));
+    let failed = nudge_result.is_err() || skill_result.is_err() || update_result.is_err();
 
     if json {
         let to_json = |res: &Result<advisor::install::InstallResult, std::io::Error>| match res {
@@ -2645,7 +2666,11 @@ fn cmd_uninstall(
             "{}",
             ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
         );
-        return ExitCode::SUCCESS;
+        return if failed {
+            ExitCode::FAILURE
+        } else {
+            ExitCode::SUCCESS
+        };
     }
 
     let emit =
@@ -2660,7 +2685,11 @@ fn cmd_uninstall(
     emit("nudge (CLAUDE.md)", &nudge_result);
     emit("skill (SKILL.md)", &skill_result);
     emit("update-skill", &update_result);
-    ExitCode::SUCCESS
+    if failed {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
 }
 
 fn cmd_status(
@@ -3278,4 +3307,64 @@ fn csv_quote_row(fields: &[&str]) -> String {
         .map(|f| format!("\"{}\"", f.replace('"', "\"\"")))
         .collect::<Vec<_>>()
         .join(",")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn install_returns_failure_when_component_write_fails() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let not_dir = tmp.path().join("not-dir");
+        std::fs::write(&not_dir, "").unwrap();
+
+        let rc = cmd_install(
+            Some(not_dir.join("CLAUDE.md").to_string_lossy().to_string()),
+            None,
+            false,
+            false,
+            true,
+            false,
+            true,
+        );
+
+        assert_eq!(rc, ExitCode::FAILURE);
+    }
+
+    #[test]
+    fn install_strict_returns_noop_exit_when_nothing_changed() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let nudge_path = tmp.path().join("CLAUDE.md").to_string_lossy().to_string();
+
+        let first = cmd_install(
+            Some(nudge_path.clone()),
+            None,
+            false,
+            false,
+            true,
+            false,
+            true,
+        );
+        let second = cmd_install(Some(nudge_path), None, false, false, true, true, true);
+
+        assert_eq!(first, ExitCode::SUCCESS);
+        assert_eq!(second, ExitCode::from(STRICT_NOOP_EXIT));
+    }
+
+    #[test]
+    fn uninstall_json_returns_failure_when_component_remove_fails() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let not_dir = tmp.path().join("not-dir");
+        std::fs::write(&not_dir, "").unwrap();
+
+        let rc = cmd_uninstall(
+            Some(not_dir.join("CLAUDE.md").to_string_lossy().to_string()),
+            Some(not_dir.join("SKILL.md").to_string_lossy().to_string()),
+            true,
+            true,
+        );
+
+        assert_eq!(rc, ExitCode::FAILURE);
+    }
 }

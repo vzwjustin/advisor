@@ -1017,8 +1017,12 @@ fn fnmatch_translate(pattern: &str) -> String {
                 } else {
                     let mut stuff: String = chars[i..j].iter().collect();
                     stuff = stuff.replace('\\', "\\\\");
+                    // Mirror CPython fnmatch.translate: '!' negates; a leading
+                    // '^' or '[' is a literal and must be backslash-escaped.
                     let rendered = if let Some(rest) = stuff.strip_prefix('!') {
                         format!("^{rest}")
+                    } else if stuff.starts_with('^') || stuff.starts_with('[') {
+                        format!("\\{stuff}")
                     } else {
                         stuff
                     };
@@ -1197,6 +1201,19 @@ mod tests {
 
     fn golden() -> Value {
         serde_json::from_str(include_str!("../tests/parity/rank.json")).expect("valid golden json")
+    }
+
+    #[test]
+    fn fnmatch_char_class_matches_cpython() {
+        // A leading '^' inside a class is a literal in Python fnmatch, NOT a
+        // negation: fnmatch.translate('[^py]') -> '[\^py]'. Regression for a
+        // port bug that rendered it as a negated class.
+        assert!(fnmatch_match("^", "[^py]"));
+        assert!(fnmatch_match("p", "[^py]"));
+        assert!(!fnmatch_match("a", "[^py]"));
+        // '!' still negates, as in fnmatch.
+        assert!(!fnmatch_match("p", "[!py]"));
+        assert!(fnmatch_match("a", "[!py]"));
     }
 
     #[test]
