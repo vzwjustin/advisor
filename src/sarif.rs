@@ -160,19 +160,37 @@ fn url_quote(s: &str) -> String {
     out
 }
 
+/// POSIX-style absolute path (`/repo`) is not [`Path::is_absolute`] on Windows
+/// but must stay lexical for SARIF parity goldens and Python `Path.as_uri()`.
+#[cfg(windows)]
+fn is_posix_absolute(path: &Path) -> bool {
+    let s = path.to_string_lossy();
+    s.starts_with('/') && !s.starts_with("//")
+}
+
+#[cfg(not(windows))]
+fn is_posix_absolute(_path: &Path) -> bool {
+    false
+}
+
+/// Resolve `target_dir` for SARIF without anchoring POSIX `/…` paths to cwd on
+/// Windows. Mirrors `target_dir.resolve()` for absolute inputs.
+fn sarif_abs_path(path: &Path) -> std::path::PathBuf {
+    if path.is_absolute() || is_posix_absolute(path) {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|c| c.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    }
+}
+
 /// Build the `%SRCROOT%` `file://` URI with a trailing slash. Mirrors
 /// `_srcroot_uri` over `target_dir.resolve()` for an already-absolute path.
 fn srcroot_uri(target_dir: &Path) -> String {
-    // Mirror Path.resolve()'s no-fail behavior: use the path lexically when
-    // absolute (the live caller passes a resolved/absolute target).
-    let abs = if target_dir.is_absolute() {
-        target_dir.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .map(|c| c.join(target_dir))
-            .unwrap_or_else(|_| target_dir.to_path_buf())
-    };
-    let uri = format!("file://{}", url_quote(&abs.to_string_lossy()));
+    let abs = sarif_abs_path(target_dir);
+    let posix = abs.to_string_lossy().replace('\\', "/");
+    let uri = format!("file://{}", url_quote(&posix));
     if uri.ends_with('/') {
         uri
     } else {
@@ -186,13 +204,7 @@ fn srcroot_uri(target_dir: &Path) -> String {
 fn resolve_relative(path: &str, target_dir: &Path) -> Result<String, String> {
     let p = Path::new(path);
     if p.is_absolute() {
-        let target_abs = if target_dir.is_absolute() {
-            target_dir.to_path_buf()
-        } else {
-            std::env::current_dir()
-                .map(|c| c.join(target_dir))
-                .unwrap_or_else(|_| target_dir.to_path_buf())
-        };
+        let target_abs = sarif_abs_path(target_dir);
         return match p.strip_prefix(&target_abs) {
             Ok(rel) => Ok(rel.to_string_lossy().replace('\\', "/")),
             Err(_) => Err(format!(

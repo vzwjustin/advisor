@@ -208,8 +208,8 @@ pub fn estimate_cost(
             + content_tokens
             + explorer_count * PER_MESSAGE_OVERHEAD_TOKENS;
         let explorer_out = explorer_count * 600;
-        let runner_in = runner_count * RUNNER_SYSTEM_TOKENS
-            + runner_count * PER_MESSAGE_OVERHEAD_TOKENS;
+        let runner_in =
+            runner_count * RUNNER_SYSTEM_TOKENS + runner_count * PER_MESSAGE_OVERHEAD_TOKENS;
         (explorer_in, explorer_out, runner_in, runner_count * 800)
     } else {
         let runner_in = runner_count * RUNNER_SYSTEM_TOKENS
@@ -227,9 +227,14 @@ pub fn estimate_cost(
     let advisor_in_max = advisor_in_min + fix_rounds * PER_MESSAGE_OVERHEAD_TOKENS * 2;
     let avg_file_tokens = content_tokens / file_count.max(1);
     let (explorer_in_max, explorer_out_max, runner_in_max, runner_out_max) = if three_tier {
-        let runner_in = runner_in_min
-            + fix_rounds * (avg_file_tokens / 2 + PER_MESSAGE_OVERHEAD_TOKENS);
-        (explorer_in_min, explorer_out_min, runner_in, runner_out_min + fix_rounds * 600)
+        let runner_in =
+            runner_in_min + fix_rounds * (avg_file_tokens / 2 + PER_MESSAGE_OVERHEAD_TOKENS);
+        (
+            explorer_in_min,
+            explorer_out_min,
+            runner_in,
+            runner_out_min + fix_rounds * 600,
+        )
     } else {
         let runner_in =
             runner_in_min + fix_rounds * (avg_file_tokens + PER_MESSAGE_OVERHEAD_TOKENS);

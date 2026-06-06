@@ -450,22 +450,25 @@ mod tests {
             include_str!("../../tests/snapshots/fix_assignment_normal.txt")
         );
 
-        let penult = build_fix_assignment_message(1, "src/auth.py", "x", "y", "z", 4, 5, 3, false, None)
-            .unwrap();
+        let penult =
+            build_fix_assignment_message(1, "src/auth.py", "x", "y", "z", 4, 5, 3, false, None)
+                .unwrap();
         assert_eq!(
             spec(&penult),
             include_str!("../../tests/snapshots/fix_assignment_penultimate.txt")
         );
 
         let last =
-            build_fix_assignment_message(1, "src/auth.py", "x", "y", "z", 5, 5, 3, false, None).unwrap();
+            build_fix_assignment_message(1, "src/auth.py", "x", "y", "z", 5, 5, 3, false, None)
+                .unwrap();
         assert_eq!(
             spec(&last),
             include_str!("../../tests/snapshots/fix_assignment_last.txt")
         );
 
         let large =
-            build_fix_assignment_message(2, "src/giant.py", "x", "y", "z", 3, 5, 3, true, None).unwrap();
+            build_fix_assignment_message(2, "src/giant.py", "x", "y", "z", 3, 5, 3, true, None)
+                .unwrap();
         assert_eq!(
             spec(&large),
             include_str!("../../tests/snapshots/fix_assignment_large_file_last.txt")
