@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-06-06
+
+Three-tier agent architecture (Advisor → Explorer → Coder) in the Rust
+port, with legacy two-tier mode when `max_explorers=0`.
+
+### Added
+
+- **Explorer tier** — `explorer_model`, `max_explorers`, and
+  `ADVISOR_EXPLORER_*` env vars on `TeamConfig`; explorer prompt builders
+  and pipeline rendering for the explore wave.
+- **Coder tier** — runner prompts carry `exploration_context` on fix
+  assignments; advisor prompt documents the three-tier dispatch loop.
+- **Cost estimates** — per-tier token ceilings in `CostEstimate::to_dict`.
+
+### Fixed
+
+- **Windows SARIF parity** — POSIX `/repo` source roots no longer anchor to
+  the process cwd on Windows (`file:///repo/` goldens).
+
 ## [0.8.3] - 2026-05-27
 
 Fixes the long-standing empty-Findings-tab bug. The dashboard read from

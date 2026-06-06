@@ -2,13 +2,13 @@
   "OPT_OUT_ENV": "ADVISOR_NO_NUDGE",
   "START_MARKER": "<!-- advisor:nudge:start -->",
   "END_MARKER": "<!-- advisor:nudge:end -->",
-  "badge_present": "0.8.4",
+  "badge_present": "0.9.0",
   "badge_absent": null,
   "badge_spaced": null,
   "semver_basic": [
     0,
-    8,
-    4
+    9,
+    0
   ],
   "semver_rc": [
     0,

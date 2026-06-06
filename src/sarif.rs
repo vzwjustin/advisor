@@ -490,7 +490,13 @@ mod tests {
                 "",
             ),
         ];
-        let doc = findings_to_sarif(&findings, "0.8.4", Path::new("/repo"), "advisor").unwrap();
+        let doc = findings_to_sarif(
+            &findings,
+            env!("CARGO_PKG_VERSION"),
+            Path::new("/repo"),
+            "advisor",
+        )
+        .unwrap();
         assert_eq!(to_pretty_json(&doc), g["doc"].as_str().unwrap());
     }
 }
