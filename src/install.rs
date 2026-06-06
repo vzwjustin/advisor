@@ -140,6 +140,25 @@ pub fn is_semver_newer(installed: &str, bundled: &str) -> bool {
 
 // ── file helpers ──────────────────────────────────────────────────────────
 
+/// Fail when an existing parent path is a regular file. Windows often reports
+/// ``child`` under a file-parent as missing; Unix returns ``NotADirectory``.
+/// Rejecting the file-parent up front keeps install/uninstall errors consistent.
+fn reject_parent_file(target: &Path) -> Result<(), std::io::Error> {
+    let Some(parent) = target.parent() else {
+        return Ok(());
+    };
+    if parent.as_os_str().is_empty() {
+        return Ok(());
+    }
+    if parent.exists() && !parent.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotADirectory,
+            format!("{} is not a directory", parent.display()),
+        ));
+    }
+    Ok(())
+}
+
 fn read_text_capped(path: &Path, max_bytes: usize) -> Result<String, std::io::Error> {
     let data = std::fs::read(path)?;
     let data = if data.len() > max_bytes {
@@ -336,6 +355,7 @@ pub fn uninstall_nudge(path: Option<&Path>) -> Result<InstallResult, std::io::Er
     let target = path
         .map(|p| p.to_path_buf())
         .unwrap_or_else(default_claude_md);
+    reject_parent_file(&target)?;
     let current = match read_text_capped(&target, CLAUDE_MD_MAX_BYTES) {
         Ok(s) => s,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -417,6 +437,7 @@ pub fn uninstall_skill(path: Option<&Path>) -> Result<InstallResult, std::io::Er
     let target = path
         .map(|p| p.to_path_buf())
         .unwrap_or_else(default_skill_path);
+    reject_parent_file(&target)?;
     if !target.exists() {
         return Ok(InstallResult {
             path: target,
@@ -436,6 +457,7 @@ pub fn uninstall_update_skill(path: Option<&Path>) -> Result<InstallResult, std:
     let target = path
         .map(|p| p.to_path_buf())
         .unwrap_or_else(default_update_skill_path);
+    reject_parent_file(&target)?;
     if !target.exists() {
         return Ok(InstallResult {
             path: target,
@@ -792,6 +814,25 @@ mod tests {
     fn parse_badge_basic() {
         assert_eq!(parse_badge("<!-- advisor:0.8.4 -->"), Some("0.8.4".into()));
         assert_eq!(parse_badge("no badge here"), None);
+    }
+
+    #[test]
+    fn reject_parent_file_errors_when_parent_is_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let not_dir = tmp.path().join("not-dir");
+        std::fs::write(&not_dir, "").unwrap();
+        let child = not_dir.join("CLAUDE.md");
+        let err = reject_parent_file(&child).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotADirectory);
+    }
+
+    #[test]
+    fn uninstall_errors_when_parent_is_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let not_dir = tmp.path().join("not-dir");
+        std::fs::write(&not_dir, "").unwrap();
+        assert!(uninstall_nudge(Some(&not_dir.join("CLAUDE.md"))).is_err());
+        assert!(uninstall_skill(Some(&not_dir.join("SKILL.md"))).is_err());
     }
 
     #[test]
