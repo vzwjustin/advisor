@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.9.0] - 2026-06-06
+## [0.8.5] - 2026-06-06
 
 Three-tier agent architecture (Advisor → Explorer → Coder) in the Rust
 port, with legacy two-tier mode when `max_explorers=0`.
