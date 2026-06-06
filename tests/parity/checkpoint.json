@@ -1,0 +1,9 @@
+{
+  "RUN_ID_RE_pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$",
+  "run_id_valid": true,
+  "run_id_invalid_bang": false,
+  "run_id_invalid_empty": false,
+  "run_id_valid_simple": true,
+  "checkpoint_path_suffix": "run-run-abc.json",
+  "checkpoint_path_dir": ".advisor"
+}

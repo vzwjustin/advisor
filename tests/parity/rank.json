@@ -1,0 +1,308 @@
+{
+  "language_for_path": {
+    "a.py": "python",
+    "a.pyi": "python",
+    "foo.d.ts": "javascript",
+    "x.JS": "javascript",
+    "y.go": "go",
+    "z.rs": "rust",
+    "w.java": "java",
+    "k.kt": "java",
+    "r.rb": "ruby",
+    "p.php": "php",
+    "none": null,
+    "x.txt": null,
+    "x.tsx": "javascript",
+    "x.mjs": "javascript"
+  },
+  "shebang": {
+    "#!/usr/bin/python3": "python",
+    "#!/usr/bin/env python3": "python",
+    "#!/usr/bin/env -S python3 -u": "python",
+    "#!/usr/bin/node": "javascript",
+    "#!/bin/sh": null,
+    "not a shebang": null,
+    "#!/usr/bin/env ruby3": "ruby",
+    "#!/usr/bin/php8": "php",
+    "#!  /usr/bin/env   bun  ": "javascript"
+  },
+  "score_file": [
+    {
+      "path": "src/auth.py",
+      "content": "import os\ndef login(password, token): pass",
+      "priority": 5,
+      "reasons": [
+        "auth",
+        "login",
+        "password",
+        "token"
+      ]
+    },
+    {
+      "path": "src/util.py",
+      "content": "def helper(): return 1",
+      "priority": 1,
+      "reasons": [
+        "util",
+        "helper"
+      ]
+    },
+    {
+      "path": "x.php",
+      "content": "echo $_GET['x']; unserialize($data);",
+      "priority": 4,
+      "reasons": [
+        "$_get",
+        "unserialize"
+      ]
+    },
+    {
+      "path": "wp/plugin.php",
+      "content": "function wp_query(){}",
+      "priority": 3,
+      "reasons": [
+        "wp_"
+      ]
+    },
+    {
+      "path": "d.py",
+      "content": "import pickle\nyaml.load(x)",
+      "priority": 4,
+      "reasons": [
+        "pickle",
+        "yaml.load"
+      ]
+    },
+    {
+      "path": "o.py",
+      "content": "os.environ['X']",
+      "priority": 2,
+      "reasons": [
+        "os.environ"
+      ]
+    },
+    {
+      "path": "noext",
+      "content": "#!/usr/bin/env python3\nimport secrets",
+      "priority": 2,
+      "reasons": [
+        "env",
+        "secrets"
+      ]
+    },
+    {
+      "path": "e.go",
+      "content": "import \"net/http\"\nimport \"crypto/tls\"",
+      "priority": 5,
+      "reasons": [
+        "crypto/tls"
+      ]
+    },
+    {
+      "path": "empty.py",
+      "content": "",
+      "priority": 1,
+      "reasons": []
+    },
+    {
+      "path": "multi.py",
+      "content": "token auth session",
+      "priority": 5,
+      "reasons": [
+        "token",
+        "auth",
+        "session"
+      ]
+    },
+    {
+      "path": "rev.py",
+      "content": "session\nauth\ntoken",
+      "priority": 5,
+      "reasons": [
+        "session",
+        "auth",
+        "token"
+      ]
+    },
+    {
+      "path": "deser.py",
+      "content": "deserialize(x)",
+      "priority": 4,
+      "reasons": [
+        "deserialize"
+      ]
+    },
+    {
+      "path": "oauth.py",
+      "content": "oauth flow",
+      "priority": 5,
+      "reasons": [
+        "oauth"
+      ]
+    },
+    {
+      "path": "mix.py",
+      "content": "# config and error\ndef route(): query(sql)",
+      "priority": 3,
+      "reasons": [
+        "route",
+        "query",
+        "sql"
+      ]
+    }
+  ],
+  "score_file_extra": {
+    "priority": 5,
+    "reasons": [
+      "csrf"
+    ]
+  },
+  "is_test_path": {
+    "tests/x.py": true,
+    "src/test_foo.py": true,
+    "foo_test.py": true,
+    "a.test.js": true,
+    "b.spec.ts": true,
+    "src/app.py": false,
+    "__tests__/x.js": true
+  },
+  "rank_files": [
+    {
+      "path": "src/auth.py",
+      "priority": 5,
+      "reasons": [
+        "auth",
+        "login",
+        "password",
+        "token"
+      ]
+    },
+    {
+      "path": "api/routes.py",
+      "priority": 3,
+      "reasons": [
+        "api",
+        "route",
+        "handler",
+        "query",
+        "sql"
+      ]
+    },
+    {
+      "path": "src/util.py",
+      "priority": 1,
+      "reasons": [
+        "util",
+        "helper"
+      ]
+    },
+    {
+      "path": "tests/test_auth.py",
+      "priority": 1,
+      "reasons": [
+        "test file"
+      ]
+    }
+  ],
+  "rank_to_prompt": "## File Priority Ranking\n_P5 = highest risk · P1 = lowest. Reasons are the keywords that drove the score._\n\n1. **P5** `src/auth.py` — auth, login, password, token\n2. **P3** `api/routes.py` — api, route, handler, query, sql\n3. **P1** `src/util.py` — util, helper\n\n_(Showing top 3 of 4 ranked files)_",
+  "rank_files_history": [
+    {
+      "path": "src/auth.py",
+      "priority": 5,
+      "reasons": [
+        "auth",
+        "login",
+        "password",
+        "token"
+      ]
+    },
+    {
+      "path": "src/util.py",
+      "priority": 2,
+      "reasons": [
+        "util",
+        "helper",
+        "repeat offender: 3 findings in last 90d"
+      ]
+    }
+  ],
+  "ignore": [
+    {
+      "path": "src/foo.py",
+      "patterns": [
+        "*.py"
+      ],
+      "match": true
+    },
+    {
+      "path": "src/foo.py",
+      "patterns": [
+        "src/*.py"
+      ],
+      "match": true
+    },
+    {
+      "path": "src/deep/foo.py",
+      "patterns": [
+        "src/*.py"
+      ],
+      "match": false
+    },
+    {
+      "path": "src/deep/foo.py",
+      "patterns": [
+        "src/**/*.py"
+      ],
+      "match": true
+    },
+    {
+      "path": "a/b/c.py",
+      "patterns": [
+        "**/*.py"
+      ],
+      "match": true
+    },
+    {
+      "path": "tests/x.py",
+      "patterns": [
+        "tests/"
+      ],
+      "match": true
+    },
+    {
+      "path": "node_modules/x.js",
+      "patterns": [
+        "node_modules"
+      ],
+      "match": true
+    },
+    {
+      "path": "foo.py",
+      "patterns": [
+        "bar.py"
+      ],
+      "match": false
+    },
+    {
+      "path": "vendor/lib/x.go",
+      "patterns": [
+        "vendor"
+      ],
+      "match": true
+    },
+    {
+      "path": "src/a.py",
+      "patterns": [
+        "src/[!_]*.py"
+      ],
+      "match": true
+    },
+    {
+      "path": "src/_a.py",
+      "patterns": [
+        "src/[!_]*.py"
+      ],
+      "match": false
+    }
+  ]
+}

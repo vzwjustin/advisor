@@ -1,0 +1,47 @@
+{
+  "default_task_prompt": "You are reviewing a single file for issues. Focus exclusively on:\n  `{file_path}` (priority {priority})\n\nRelevant signals: {reasons}\n\nInstructions:\n1. Read the file thoroughly.\n2. Hypothesize potential issues (bugs, security flaws, logic errors).\n3. Trace call paths to confirm or reject each hypothesis.\n4. For each confirmed issue, output:\n   - **File**: path and line number\n   - **Severity**: CRITICAL / HIGH / MEDIUM / LOW\n   - **Description**: what the issue is\n   - **Evidence**: the code path or proof\n   - **Fix**: suggested remediation\n5. If no issues found, state that explicitly.\n\nDo NOT review other files. Stay focused on this one.",
+  "tasks": [
+    {
+      "file_path": "src/auth.py",
+      "priority": 5,
+      "prompt": "You are reviewing a single file for issues. Focus exclusively on:\n  `src/auth.py` (priority 5)\n\nRelevant signals: auth, login\n\nInstructions:\n1. Read the file thoroughly.\n2. Hypothesize potential issues (bugs, security flaws, logic errors).\n3. Trace call paths to confirm or reject each hypothesis.\n4. For each confirmed issue, output:\n   - **File**: path and line number\n   - **Severity**: CRITICAL / HIGH / MEDIUM / LOW\n   - **Description**: what the issue is\n   - **Evidence**: the code path or proof\n   - **Fix**: suggested remediation\n5. If no issues found, state that explicitly.\n\nDo NOT review other files. Stay focused on this one."
+    },
+    {
+      "file_path": "api/routes.py",
+      "priority": 3,
+      "prompt": "You are reviewing a single file for issues. Focus exclusively on:\n  `api/routes.py` (priority 3)\n\nRelevant signals: route, query\n\nInstructions:\n1. Read the file thoroughly.\n2. Hypothesize potential issues (bugs, security flaws, logic errors).\n3. Trace call paths to confirm or reject each hypothesis.\n4. For each confirmed issue, output:\n   - **File**: path and line number\n   - **Severity**: CRITICAL / HIGH / MEDIUM / LOW\n   - **Description**: what the issue is\n   - **Evidence**: the code path or proof\n   - **Fix**: suggested remediation\n5. If no issues found, state that explicitly.\n\nDo NOT review other files. Stay focused on this one."
+    },
+    {
+      "file_path": "src/util.py",
+      "priority": 2,
+      "prompt": "You are reviewing a single file for issues. Focus exclusively on:\n  `src/util.py` (priority 2)\n\nRelevant signals: general review\n\nInstructions:\n1. Read the file thoroughly.\n2. Hypothesize potential issues (bugs, security flaws, logic errors).\n3. Trace call paths to confirm or reject each hypothesis.\n4. For each confirmed issue, output:\n   - **File**: path and line number\n   - **Severity**: CRITICAL / HIGH / MEDIUM / LOW\n   - **Description**: what the issue is\n   - **Evidence**: the code path or proof\n   - **Fix**: suggested remediation\n5. If no issues found, state that explicitly.\n\nDo NOT review other files. Stay focused on this one."
+    }
+  ],
+  "batches": [
+    {
+      "batch_id": 1,
+      "complexity": "high",
+      "top_priority": 5,
+      "file_paths": [
+        "src/auth.py",
+        "api/routes.py"
+      ]
+    },
+    {
+      "batch_id": 2,
+      "complexity": "low",
+      "top_priority": 2,
+      "file_paths": [
+        "src/util.py"
+      ]
+    }
+  ],
+  "dispatch_plan": "## Dispatch Plan\nDispatching 3 focused agents in parallel (P5 ×1  P3 ×1  P2 ×1):\n\n1. **P5** `src/auth.py`\n2. **P3** `api/routes.py`\n3. **P2** `src/util.py`\n",
+  "batch_plan": "## Batch Dispatch Plan\nDispatching 2 runners across 3 files (P5 ×1  P3 ×1  P2 ×1):\n\n**Batch 1** (complexity: high, top P5) — 2 files:\n  - **P5** `src/auth.py`\n  - **P3** `api/routes.py`\n\n**Batch 2** (complexity: low, top P2) — 1 file:\n  - **P2** `src/util.py`\n",
+  "dispatch_plan_empty": "## Dispatch Plan\nNo files matched — nothing to dispatch.\n",
+  "batch_plan_empty": "## Batch Dispatch Plan\nNo files matched — nothing to dispatch.\n",
+  "batches_forced_low": [
+    "low"
+  ],
+  "dispatch_single": "## Dispatch Plan\nDispatching 1 focused agent in parallel (P5 ×1):\n\n1. **P5** `a.py`\n"
+}

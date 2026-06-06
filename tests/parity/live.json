@@ -1,0 +1,49 @@
+{
+  "LIVE_DIR_NAME": ".advisor",
+  "LIVE_SUBDIR": "live",
+  "LIVE_FILE_NAME": "events.jsonl",
+  "LIVE_SCHEMA_VERSION": "1.0",
+  "_MAX_LINE": 65536,
+  "_MAX_TAIL": 5000,
+  "_TAIL_READ_BYTES": 65537,
+  "EVENT_KINDS_CORE": [
+    "fix_dispatch",
+    "report_relay",
+    "run_end",
+    "run_start",
+    "runner_spawn"
+  ],
+  "live_dir": "<target>/.advisor/live",
+  "live_events_path": "<target>/.advisor/live/events.jsonl",
+  "last_seq_empty": 0,
+  "last_seq_single": 5,
+  "last_seq_multi": 7,
+  "last_seq_corrupt_last": 4,
+  "last_seq_no_seq_field": 0,
+  "last_seq_negative": 0,
+  "append_returns_events_jsonl": "events.jsonl",
+  "load_all_count": 3,
+  "load_all_seqs": [
+    1,
+    2,
+    3
+  ],
+  "load_all_kinds": [
+    "run_start",
+    "runner_spawn",
+    "run_end"
+  ],
+  "load_since_1": [
+    "runner_spawn",
+    "run_end"
+  ],
+  "load_since_2": [
+    "run_end"
+  ],
+  "load_limit_1": [
+    "run_end"
+  ],
+  "latest_seq_val": 3,
+  "load_missing": [],
+  "latest_seq_missing": 0
+}

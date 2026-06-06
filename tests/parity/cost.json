@@ -1,0 +1,78 @@
+{
+  "to_dict": {
+    "runner_count": 2,
+    "file_count": 2,
+    "advisor_model": "claude-opus-4-7",
+    "runner_model": "claude-sonnet-4-6",
+    "explorer_model": "",
+    "explorer_input_tokens_min": 0,
+    "explorer_input_tokens_max": 0,
+    "explorer_output_tokens_min": 0,
+    "explorer_output_tokens_max": 0,
+    "explorer_cost_usd_min": 0.0,
+    "explorer_cost_usd_max": 0.0,
+    "advisor_cost_usd_min": 0.1455,
+    "advisor_cost_usd_max": 0.2415,
+    "coder_cost_usd_min": 0.0378,
+    "coder_cost_usd_max": 0.0774,
+    "input_tokens_min": 10300,
+    "input_tokens_max": 13900,
+    "output_tokens_min": 2400,
+    "output_tokens_max": 5600,
+    "cost_usd_min": 0.1833,
+    "cost_usd_max": 0.3189
+  },
+  "format": "## Cost estimate\n\n- Files: 2\n- Runners: 2\n- Models: advisor=claude-opus-4-7, runners=claude-sonnet-4-6\n- Input tokens: 10,300 – 13,900\n- Output tokens: 2,400 – 5,600\n- **Est. cost: $0.18 – $0.32**\n\n_Range covers review-only (min) to full fix waves (max). Actual cost depends on dialogue depth and fix count. Pricing as of 2026-05-22 — verify at https://www.anthropic.com/pricing._",
+  "to_dict_batches": {
+    "runner_count": 2,
+    "file_count": 2,
+    "advisor_model": "opus",
+    "runner_model": "haiku",
+    "explorer_model": "",
+    "explorer_input_tokens_min": 0,
+    "explorer_input_tokens_max": 0,
+    "explorer_output_tokens_min": 0,
+    "explorer_output_tokens_max": 0,
+    "explorer_cost_usd_min": 0.0,
+    "explorer_cost_usd_max": 0.0,
+    "advisor_cost_usd_min": 0.1455,
+    "advisor_cost_usd_max": 0.2895,
+    "coder_cost_usd_min": 0.0032,
+    "coder_cost_usd_max": 0.0081,
+    "input_tokens_min": 10300,
+    "input_tokens_max": 15700,
+    "output_tokens_min": 2400,
+    "output_tokens_max": 7200,
+    "cost_usd_min": 0.1487,
+    "cost_usd_max": 0.2976
+  },
+  "load_obj": {
+    "opus": [
+      1500,
+      7500
+    ],
+    "sonnet": [
+      300,
+      1500
+    ],
+    "haiku": [
+      25,
+      125
+    ]
+  },
+  "load_arr": {
+    "opus": [
+      1500,
+      7500
+    ],
+    "sonnet": [
+      300,
+      1500
+    ],
+    "haiku": [
+      25,
+      125
+    ]
+  },
+  "err_missing": "pricing file <P> is missing family 'haiku'; all three of opus/sonnet/haiku must be present"
+}

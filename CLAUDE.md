@@ -1,5 +1,41 @@
 # Advisor — Opus-led Agent Team (Claude Code Native)
 
+## Environment & Commands
+
+### Running tests
+`uv run pytest` fails with "Failed to spawn: pytest" unless dev extras are installed.
+Always use: `uv sync --extra dev && uv run pytest -x -q`
+
+After editing `advisor/orchestrate/_prompts/advisor.txt` or any prompt builder, regenerate snapshots:
+`ADVISOR_UPDATE_SNAPSHOTS=1 uv run pytest tests/test_prompt_snapshots.py`
+
+### Local install (two-step)
+```bash
+uv tool install --reinstall --from /Users/justinadams/Downloads/advisor advisor-agent
+advisor install   # refreshes SKILL.md + CLAUDE.md nudge
+```
+Registry install (post-PyPI publish): `UV_NO_CACHE=1 uv tool install --force advisor-agent`
+
+### Git workflow
+Uncommitted changes block rebase/merge every time — always stash first:
+`git stash && git pull --rebase origin main && git stash pop`
+
+### Advisor pipeline gotchas
+- `SendMessage` with a string `message` **requires** a `summary` param or it errors: `summary is required when message is a string`
+- Agent `model` field: only bare aliases (`opus`, `sonnet`, `haiku`) or full IDs (`claude-opus-4-7`) — mid-form strings error
+- `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` must be set in env for TeamCreate/TeamDelete/SendMessage
+
+### Large files (>800 LOC → 3-fix cap in advisor pipeline)
+- `advisor/__main__.py` ~3400–3600 LOC
+- `advisor/rank.py` ~1186 LOC
+- `advisor/install.py` ~890 LOC
+- `advisor/orchestrate/runner_prompts.py` ~813 LOC
+
+### Rust port
+`cargo test` accepts only one test-name pattern; `cargo test foo bar` errors — use single name or no filter.
+
+
+
 Two-model team using Claude Code's TeamCreate/Agent/SendMessage. No external API calls.
 Models configurable via `TeamConfig(advisor_model=, runner_model=)` — defaults: `claude-opus-4-7` / `claude-sonnet-4-6`. Claude Code's Agent() tool accepts bare aliases (`opus`, `sonnet`, `haiku`) for "always-latest" or full `claude-<family>-<version>` IDs to pin a specific version; mid-form strings like `opus-4-5` are not accepted.
 

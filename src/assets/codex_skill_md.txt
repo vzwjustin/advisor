@@ -1,0 +1,133 @@
+__VERSION_BADGE__
+
+# Advisor — Codex batch review
+
+A read-only, parallel bug-hunt review driven by ``advisor`` and Codex's
+``spawn_agents_on_csv``. Use this when the user invokes ``$advisor`` or
+``$advisor <path>``. The pipeline is fire-and-forget by design — Codex
+spawns one subagent per ranked file batch, each emits findings via
+``report_agent_job_result``, and the consolidated results are rendered
+back to the user as a single report.
+
+This is the **Codex variant** of the advisor pipeline. The Claude Code
+variant (``/advisor`` in Claude Code) keeps a live mailbox between the
+advisor and runners; Codex's subagent model does not expose mid-run
+messaging, so this skill ships review-only and asks the user to request
+fixes in a follow-up turn.
+
+## ACTIVATION SEQUENCE — strict order
+
+**Step 1 (text only):** Write ``**Advisor mode (Codex)**``.
+
+**Step 2:** Run the advisor CLI to produce a per-runner dispatch CSV:
+
+```bash
+advisor codex-plan-csv TARGET
+```
+
+Where ``TARGET`` is the directory the user named, or the current working
+directory if they did not. The command prints the absolute path of the
+CSV to stdout — capture it and use it in Step 3.
+
+**Step 3:** Spawn parallel runners. Read the CSV path from Step 2, then
+invoke ``spawn_agents_on_csv`` with the dispatch CSV. Each row is one
+runner batch; the ``prompt`` column contains the complete per-runner
+brief that the advisor already tailored to the files in that batch.
+
+```
+spawn_agents_on_csv({
+  csv_path:        "<path from Step 2>",
+  instruction:     "{prompt}",
+  id_column:       "runner_id",
+  output_schema:   { ... see schema below ... },
+  max_concurrency: 5
+})
+```
+
+The ``instruction`` is the literal string ``"{prompt}"`` — Codex
+substitutes the ``prompt`` column from the CSV per row. Do not edit it.
+
+**Step 4:** Wait for all subagents to report. Codex blocks until every
+row has either emitted a result via ``report_agent_job_result`` or hit
+the per-row timeout. No mid-run intervention is possible — that is the
+Codex subagent contract.
+
+**Step 5:** Render the consolidated report. Collect each subagent's
+``findings`` array and format the aggregate as Markdown:
+
+```
+## Summary
+N findings (X HIGH, Y MEDIUM, Z LOW).
+
+## Top 3 Actions
+…
+
+## Findings by severity
+…
+```
+
+Group findings by severity (HIGH first), then by file path within each
+severity bucket. Quote each finding's ``file``, ``description``,
+``evidence``, and ``fix`` fields verbatim — the runner already validated
+shape; this layer is presentation only.
+
+**Step 6 (closing line):** Tell the user how to ask for fixes:
+
+> Want me to apply remediation? Reply describing which findings to address
+> (e.g. "fix the two HIGHs", "fix #3 and #5", "fix everything in
+> auth.py") and I will queue the changes in a follow-up turn. The first
+> pass was review-only — there is no separate ``$advisor fix`` command.
+
+## Output schema for each runner
+
+Each ``report_agent_job_result`` call MUST emit JSON matching this
+schema. The runner prompt in the CSV already instructs the worker to
+produce this shape — do not modify the schema or the workers will fail
+validation.
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "runner_id": { "type": "string" },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "file":        { "type": "string" },
+          "severity":    { "type": "string", "enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW"] },
+          "description": { "type": "string" },
+          "evidence":    { "type": "string" },
+          "fix":         { "type": "string" }
+        },
+        "required": ["file", "severity", "description"]
+      }
+    }
+  },
+  "required": ["runner_id", "findings"]
+}
+```
+
+## Failure modes
+
+- **No CSV produced (empty target).** ``advisor codex-plan-csv`` exits
+  with code ``1`` and prints the reason to stderr. Surface the message
+  verbatim to the user and stop — there is nothing to dispatch.
+- **Codex CLI does not have ``spawn_agents_on_csv``.** The user's Codex
+  installation is too old. Tell them to upgrade Codex; do NOT fall back
+  to a sequential loop that pretends to be parallel.
+- **A subagent times out.** Its row is marked with an error in the
+  exported CSV. Include the error in the consolidated report under a
+  ``## Incomplete batches`` section so the user knows what was skipped.
+
+## Why not Claude Code's pipeline here
+
+The advisor's Claude Code pipeline relies on ``TeamCreate`` /
+``TeamDelete`` / ``Agent`` / ``SendMessage`` for live two-way dialogue
+between the Opus advisor and Sonnet runners. Codex exposes none of
+those — its subagents are batch workers that emit a single result and
+exit. Trying to invoke the Claude Code skill from Codex fails with an
+unknown-tool error. This skill is what the user gets when they run
+``$advisor`` in Codex; the Claude Code variant remains the canonical
+review-and-fix loop for the Claude Code runtime.

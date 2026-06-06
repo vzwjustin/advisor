@@ -1,0 +1,46 @@
+{
+  "entries": [
+    {
+      "file_path": "src/auth.py:42",
+      "rule_id": "advisor/high/caf67d31578e84fc",
+      "description_hash": "caf67d31578e84fc",
+      "severity": "HIGH",
+      "description": "SQL injection in login"
+    },
+    {
+      "file_path": "lib/x.py",
+      "rule_id": "advisor/custom/1",
+      "description_hash": "3be890aca49ad67b",
+      "severity": "LOW",
+      "description": "weak md5 hash used"
+    }
+  ],
+  "written": "{\"__advisor_baseline__\": true, \"schema_version\": \"1.0\", \"count\": 2}\n{\"file_path\": \"lib/x.py\", \"rule_id\": \"advisor/custom/1\", \"description_hash\": \"3be890aca49ad67b\", \"severity\": \"LOW\", \"description\": \"weak md5 hash used\"}\n{\"file_path\": \"src/auth.py:42\", \"rule_id\": \"advisor/high/caf67d31578e84fc\", \"description_hash\": \"caf67d31578e84fc\", \"severity\": \"HIGH\", \"description\": \"SQL injection in login\"}\n",
+  "roundtrip_count": 2,
+  "description_hash": {
+    "a": "caf67d31578e84fc",
+    "ws": "caf67d31578e84fc"
+  },
+  "normalize_identity_path": {
+    "src/../src/auth.py": "src/auth.py",
+    "./foo.py:42": "foo.py:42",
+    ".//foo.py": "foo.py",
+    "a.py:42:5": "a.py:42:5",
+    "\\\\win\\\\path": "/win/path"
+  },
+  "filter_new": [
+    "new.py:1"
+  ],
+  "filter_suppressed": [
+    "src/auth.py:42",
+    "lib/x.py"
+  ],
+  "diff_new": [
+    "new.py:1"
+  ],
+  "diff_persisting": [
+    "src/auth.py:42",
+    "lib/x.py"
+  ],
+  "diff_fixed": []
+}
