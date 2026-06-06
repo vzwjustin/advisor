@@ -4,8 +4,8 @@
 
 A one-command, Opus-led code review-and-fix pipeline for Claude Code. Opus
 goes first — does its own Glob+Grep discovery, ranks files P1–P5, and
-**writes a unique, file-aware prompt for every runner** based on what it
-just learned. Then it stays online and **actively steers the runners
+**writes a unique, file-aware prompt for every agent** based on what it
+just learned. Then it stays online and **actively steers the team
 throughout**: redirecting drift, answering questions in real time, verifying
 each output the moment it lands, and adjusting the plan when a finding
 changes the picture. Opus is the strategist that never goes idle until the
@@ -14,50 +14,76 @@ final report ships. Optional fix wave applies edits the same way.
 No external API calls. Runs entirely through Claude Code's native
 `TeamCreate` / `Agent` / `SendMessage` tools.
 
-## Team
+**Implementation:** Rust (`advisor-rs` crate, `advisor` CLI). The Python
+package has been superseded on `main`; see [`RUST_PORT_PLAN.md`](RUST_PORT_PLAN.md)
+and [`PORT_NOTES.md`](PORT_NOTES.md) for migration status.
+
+## Team (three-tier, default)
 
 | Role | Model | Agent type | Job |
 |------|-------|------------|-----|
-| Advisor | Opus 4.7 (`claude-opus-4-7`) | `advisor-executor` | Glob+Grep discovery, P1–P5 ranking, sizes the pool, writes per-runner prompts, dispatches explore + fix waves — then stays live: redirects runner drift, answers questions in real time, verifies each output as it lands, adjusts plan mid-wave |
-| Runner pool | Sonnet 4.6 (`claude-sonnet-4-6`) × N | `code-review` | Long-lived workers; each gets a custom prompt from the advisor; reports findings + diffs to team-lead, who relays to the advisor in live dialogue |
+| **Advisor** | Opus 4.7 (`claude-opus-4-7`) | `advisor-executor` | Glob+Grep discovery, P1–P5 ranking, sizes explorer + coder pools, writes per-agent prompts, dispatches explore + fix waves — stays live: redirects drift, answers questions, verifies each output, adjusts plan mid-wave |
+| **Explorer pool** | Haiku 4.5 (`claude-haiku-4-5`) × N | `explore` | Read-only structural discovery on advisor-assigned file batches; reports findings to team-lead → advisor |
+| **Coder pool** | Sonnet 4.6 (`claude-sonnet-4-6`) × N | `code-review` | Long-lived fix workers; each gets a domain-specific prompt (with exploration context on fix assignments); reports findings + diffs to team-lead → advisor |
 
 Priority scale: **P5** auth/secrets · **P4** user input/parsing · **P3** handlers/DB/exec · **P2** config/crypto/logging · **P1** utils/tests.
 
-## Install (30 seconds)
+Loop: **Explorer discovers → Advisor reasons → Coder fixes.**
+
+<details>
+<summary>Legacy two-tier mode</summary>
+
+Set `max_explorers=0` or `ADVISOR_MAX_EXPLORERS=0` to skip the explorer
+wave and run the original advisor + Sonnet-runner pipeline.
+
+</details>
+
+## Install
+
+### From source (recommended)
+
+Requires [Rust](https://rustup.rs/) **1.74+**. The binary has **zero runtime
+dependencies** — only the Rust toolchain is needed to build.
 
 ```bash
-pipx install advisor-agent
-advisor status
+git clone https://github.com/vzwjustin/advisor && cd advisor
+cargo install --path .
+advisor install          # wire SKILL.md + CLAUDE.md nudge (idempotent)
+advisor status           # confirm what landed where
 ```
 
-That's it. The first run wires up `~/.claude/CLAUDE.md` and the `/advisor`
-slash command automatically. The CLAUDE.md block also embeds a 4-rule
-**Behavioral Guidelines** section (Think Before · Simplicity First ·
-Surgical Changes · Goal-Driven Execution) that nudges Claude away from
-the most common LLM coding mistakes. `advisor status` confirms what
-landed where, and every upgrade prints a "What's new" digest from
-`CHANGELOG.md` so you see what changed without leaving the terminal.
+After edits, reinstall with `cargo install --path . --force`.
 
 <details>
 <summary>Other install methods</summary>
 
 ```bash
-# Zero-install one-shot (uv)
-uvx advisor-agent pipeline src/
+# Install a tagged release without cloning (needs Rust + git)
+cargo install --git https://github.com/vzwjustin/advisor --tag v0.8.5
 
-# Plain pip
+# Run without installing
+cargo run -- version
+cargo run -- pipeline src/
+
+# PyPI (published releases — package name advisor-agent)
+pipx install advisor-agent
+pipx upgrade advisor-agent
+
+# Plain pip / uv
 pip install advisor-agent
-
-# From source
-git clone https://github.com/vzwjustin/advisor && cd advisor && pip install -e .
-
-# Local dev with uv tool (reinstall after edits)
-uv tool install --reinstall .
+uv tool install advisor-agent
 ```
 
-Requires Python ≥ 3.10. Package name: `advisor-agent`. Import: `advisor`. CLI: `advisor`.
+PyPI releases may trail `main` during the Rust migration. For the latest
+features (three-tier architecture, Rust port), build from source.
 
 </details>
+
+The first `advisor install` wires `~/.claude/CLAUDE.md` and the `/advisor`
+slash command automatically. The CLAUDE.md block also embeds a 4-rule
+**Behavioral Guidelines** section (Think Before · Simplicity First ·
+Surgical Changes · Goal-Driven Execution). Every upgrade prints a "What's
+new" digest from `CHANGELOG.md`.
 
 <details>
 <summary>Manage the nudge / skill manually</summary>
@@ -89,7 +115,7 @@ Invoke from inside Claude Code:
 Or use the standalone CLI to inspect the prompts and plans:
 
 ```bash
-advisor pipeline src/                  # full pipeline reference
+advisor pipeline src/                  # full pipeline reference (three-tier by default)
 advisor protocol                       # print the strict team-lifecycle protocol
 advisor plan src/                      # rank local files, print dispatch plan
 advisor plan src/ --json               # same, machine-readable for `jq` etc.
@@ -97,13 +123,13 @@ advisor plan src/ --format json        # explicit selector (alias of --json; pre
 advisor plan src/ --sarif out.sarif    # SARIF 2.1.0 output for Code Scanning
 advisor audit RUN_ID [TARGET]          # post-hoc diagnostic for a completed run
 advisor prompt advisor src/            # the advisor's prompt body
-advisor prompt runner src/ --runner-id 1   # a runner's bootstrap prompt
+advisor prompt runner src/ --runner-id 1   # a coder's bootstrap prompt
 advisor prompt verify src/ < findings  # verify-pass prompt
 advisor status                         # install health check
 advisor status --json                  # JSON-formatted health for scripting
-advisor doctor                         # extended diagnostic: git/claude/python/env checks
+advisor doctor                         # extended diagnostic: git/claude/codex/env checks
 advisor install                        # install nudge + /advisor skill (prints What's new on upgrade)
-advisor update                         # self-upgrade via uv tool / pipx, then re-runs install
+advisor update                         # self-upgrade via PyPI, then re-runs install
 advisor changelog [VERSION]            # print bundled CHANGELOG section(s); --since X.Y.Z for a digest
 advisor uninstall                      # remove nudge + /advisor skill
 advisor ui                             # launch local web dashboard on 127.0.0.1:8765 (Findings · Live · Plan · Run config · Cost)
@@ -125,9 +151,23 @@ long scope description is supported via `--context -` (reads stdin).
 
 Flags: `--team`, `--file-types`, `--max-runners` (advisory — Opus may
 exceed for large repos), `--min-priority`, `--context`, `--advisor-model`,
-`--runner-model`. Default models: `claude-opus-4-7` / `claude-sonnet-4-6` (full IDs pin the version; bare aliases `opus`/`sonnet`/`haiku` resolve to the latest at spawn time).
+`--runner-model`. Default models: `claude-opus-4-7` / `claude-sonnet-4-6` / `claude-haiku-4-5` (full IDs pin the version; bare aliases `opus`/`sonnet`/`haiku` resolve to the latest at spawn time).
 
-Context-pressure knobs (reduce runner context exhaustion):
+Environment overrides (also read by `default_team_config`):
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `ADVISOR_MODEL` | `claude-opus-4-7` | Advisor model |
+| `ADVISOR_RUNNER_MODEL` | `claude-sonnet-4-6` | Coder model |
+| `ADVISOR_EXPLORER_MODEL` | `claude-haiku-4-5` | Explorer model |
+| `ADVISOR_MAX_RUNNERS` | `5` | Suggested coder pool size |
+| `ADVISOR_MAX_EXPLORERS` | same as max runners | Explorer pool size (`0` = legacy two-tier) |
+| `ADVISOR_MIN_PRIORITY` | `3` | Minimum P-rank to include |
+| `ADVISOR_FILE_TYPES` | `*.*` | Glob filter for `advisor plan` |
+| `ADVISOR_EXPLORER_OUTPUT_CHAR_CEILING` | `40000` | Explorer output budget |
+| `ADVISOR_EXPLORER_FILE_READ_CEILING` | `40` | Explorer distinct-file-read cap |
+
+Context-pressure knobs (reduce coder context exhaustion):
 `--max-fixes-per-runner N` · `--large-file-line-threshold N` · `--large-file-max-fixes M` · `--runner-output-char-ceiling K` · `--runner-file-read-ceiling L`.
 
 Automation flags: `--json` on `status`/`plan`/`install --check`,
@@ -149,76 +189,57 @@ vendor/
 generated/**/*.py # ** recursive globs are supported
 ```
 
-Patterns follow ``fnmatch`` semantics for filename matches, and use
-``PurePath.match`` when ``**`` is present. Bare words match any path
-component (``docs`` matches both ``docs/`` and ``foo/docs/bar.py``).
+Patterns follow `fnmatch` semantics for filename matches, and use
+`PurePath.match` when `**` is present. Bare words match any path
+component (`docs` matches both `docs/` and `foo/docs/bar.py`).
 
-## Python API
+## Rust library
 
-```python
-from advisor import (
-    default_team_config,
-    build_advisor_agent,
-    build_advisor_prompt,
-    build_runner_pool_agents,
-    build_runner_pool_prompt,
-    build_runner_dispatch_messages,
-    build_runner_handoff_message,
-    build_fix_assignment_message,   # stamped fix-count header per assignment
-    check_batch_fix_budget,         # pre-flight cap validator
-    build_verify_dispatch_prompt,
-    build_verify_message,
-    rank_files,
-    load_advisorignore,
-    create_focus_tasks,
-    create_focus_batches,
-    parse_findings_from_text,
-    format_findings_block,
-    render_pipeline,
-)
+The crate root re-exports the same surface the Python package exposed:
 
-config = default_team_config(
-    target_dir="src/",
-    team_name="review",
-    file_types="*.py",
-    max_runners=5,
-    min_priority=3,
-)
+```rust
+use advisor::{
+    default_team_config, TeamConfig, TeamConfigInput,
+    build_advisor_prompt, build_explorer_prompt, build_explorer_pool_agents,
+    build_coder_prompt, build_runner_pool_prompt, build_runner_dispatch_messages,
+    build_fix_assignment_message, build_verify_dispatch_prompt, build_verify_message,
+    render_pipeline, rank_files, create_focus_tasks, parse_findings_from_text,
+    estimate_cost, findings_to_sarif, resolve_version,
+};
 
-print(render_pipeline(config))
-advisor_spec = build_advisor_agent(config)
-# After Opus produces its dispatch plan, spawn each runner with the
-# verbatim per-runner prompt from that plan — not a generic builder.
+let config = default_team_config(TeamConfigInput::new("src/"));
+println!("{}", render_pipeline(&config));
 ```
 
-The builder functions return plain dicts — drop each one into a Claude
-Code `Agent(...)` or `SendMessage(...)` call.
+Builder functions return plain strings or JSON-friendly structs — drop them
+into Claude Code `Agent(...)` or `SendMessage(...)` calls. See `src/lib.rs`
+for the full export list.
 
-## Modules
+## Modules (`src/`)
 
-- `advisor/orchestrate/` — `TeamConfig`, advisor + runner prompt builders,
-  dispatch helpers, pipeline renderer (package: `config`, `advisor_prompt`,
-  `runner_prompts`, `verify_dispatch`, `pipeline`)
-- `advisor/rank.py` — `rank_files`, `RankedFile` (keyword-signal priority ranking)
-- `advisor/focus.py` — `create_focus_tasks` / `create_focus_batches`, plan formatters
-- `advisor/verify.py` — `Finding`, `parse_findings_from_text`, verify-pass builders
-- `advisor/runner_budget.py` — `RunnerBudget`, scope-anchor parsing, per-runner output-char budget and rotation logic
-- `advisor/install.py` — idempotent CLAUDE.md nudge + `/advisor` skill install/uninstall
-- `advisor/doctor.py` — `DoctorReport`, extended git/claude/python/env diagnostics
-- `advisor/audit.py` — `audit_transcript`, `format_audit_report`, post-hoc run diagnostics
-- `advisor/baseline.py` — `read_baseline`, `write_baseline`, `diff_against_baseline`
-- `advisor/checkpoint.py` — `Checkpoint`, save/load/list plan checkpoints for `--resume`
-- `advisor/cost.py` — `CostEstimate`, rough token and cost range estimator
-- `advisor/git_scope.py` — `resolve_git_scope`, git-incremental scoping (`--since`/`--staged`/`--branch`)
-- `advisor/history.py` — `HistoryEntry`, confirmed findings log at `.advisor/history.jsonl`
-- `advisor/pr_comment.py` — `format_pr_comment`, PR-body markdown formatter
-- `advisor/presets.py` — `PRESETS`, `RulePack`, curated rule-pack bundles
-- `advisor/sarif.py` — `findings_to_sarif`, SARIF 2.1.0 serializer
-- `advisor/suppressions.py` — `Suppression`, per-rule false-positive suppressions
-- `advisor/skill_asset.py` — `SKILL_MD`, bundled `/advisor` skill content
-- `advisor/web/` — local web dashboard served by `advisor ui` (Findings · Live · Plan · Run config · Cost)
-- `advisor/live.py` — ephemeral event stream (`<target>/.advisor/live/events.jsonl`) the dashboard's **Live** tab subscribes to
-- `advisor/_style.py` — zero-dep ANSI styling (colors on by default)
+| Module | Role |
+|--------|------|
+| `config.rs` | `TeamConfig`, env-var assembly, model validation |
+| `orchestrate/` | Advisor, explorer, and coder prompt builders; `render_pipeline` |
+| `rank.rs` | `rank_files`, keyword-signal P1–P5 ranking |
+| `focus.rs` | `create_focus_tasks` / `create_focus_batches`, plan formatters |
+| `verify.rs` | `Finding`, `parse_findings_from_text`, verify-pass builders |
+| `runner_budget.rs` | Per-coder output-char budget and rotation |
+| `install.rs` | Idempotent CLAUDE.md nudge + `/advisor` skill install |
+| `doctor.rs` | Git / Claude / Codex / install health checks |
+| `audit.rs` | Post-hoc run transcript diagnostics |
+| `baseline.rs` | Finding baselines for drift detection |
+| `checkpoint.rs` | Plan checkpoints for `--resume` |
+| `cost.rs` | Per-tier token and cost range estimates |
+| `git_scope.rs` | `--since` / `--staged` / `--branch` scoping |
+| `history.rs` | Confirmed findings log (`.advisor/history.jsonl`) |
+| `sarif.rs` | SARIF 2.1.0 serializer |
+| `suppressions.rs` | Per-rule false-positive suppressions |
+| `skill_asset.rs` | Bundled `/advisor` skill content |
+| `web.rs` | Local dashboard (`advisor ui`) |
+| `live.rs` | Ephemeral event stream for the Live tab |
+
+Prompt templates live under `src/assets/` (`advisor.txt`, `explorer.txt`, …).
 
 ## Live dashboard (new in 0.8.0)
 
@@ -249,10 +270,10 @@ cursor preserves cleanly so the next run resumes the stream.
 ## Orchestration rules
 
 - `TeamCreate` before any agent spawn; `TeamDelete` before creating a new team.
-- Opus goes first — no runners until Opus's first pass produces a pool size.
-- Each runner is spawned with the **verbatim per-runner prompt** from
+- Opus goes first — no explorers or coders until Opus's first pass produces pool sizes.
+- Each agent is spawned with the **verbatim per-agent prompt** from
   Opus's dispatch plan. Don't substitute a generic template.
-- Dispatch runners in a **single message** with `run_in_background=true`
+- Dispatch agents in a **single message** with `run_in_background=true`
   so they come up in parallel.
 - Every agent prompt must end with a `SendMessage(...)` — agents go idle
   silently otherwise.
@@ -260,13 +281,20 @@ cursor preserves cleanly so the next run resumes the stream.
 
 See `CLAUDE.md` for the full protocol.
 
-## Tests
+## Development
 
 ```bash
-pip install -e ".[dev]"
-make check        # ruff + mypy + pytest
-pytest --cov=advisor --cov-report=term-missing
+git clone https://github.com/vzwjustin/advisor && cd advisor
+cargo build
+make check        # clippy + fmt --check + test
+cargo test        # 125+ parity tests (Linux, macOS, Windows in CI)
+cargo fmt         # format
+cargo clippy --all-targets
 ```
+
+Release checklist: `make release-check` (prints version + tag commands).
+
+Version lives in `Cargo.toml`; tag with `git tag vX.Y.Z && git push origin vX.Y.Z`.
 
 ## GitHub Action
 
@@ -284,7 +312,7 @@ on:
 
 jobs:
   advisor:
-    uses: vzwjustin/advisor/.github/workflows/advisor.yml@v0.8.0
+    uses: vzwjustin/advisor/.github/workflows/advisor.yml@v0.8.5
     with:
       target: "."
       min-priority: 3
@@ -353,6 +381,8 @@ no-op or unhealthy install · `2` argparse / user error · `1` unexpected.
   runtime flow, data contract, design invariants
 - [`docs/prompts.md`](docs/prompts.md) — prompt engineering notes for
   contributors modifying prompt templates
+- [`RUST_PORT_PLAN.md`](RUST_PORT_PLAN.md) — Rust migration plan
+- [`PORT_NOTES.md`](PORT_NOTES.md) — Python parity status
 
 ## License
 
