@@ -59,6 +59,7 @@ _PRICING_STALE_DAYS = 180
 # message framing). Empirically ~3-6k tokens each; use a conservative middle.
 ADVISOR_SYSTEM_TOKENS = 4_500
 RUNNER_SYSTEM_TOKENS = 2_000
+EXPLORER_SYSTEM_TOKENS = 1_500
 PER_MESSAGE_OVERHEAD_TOKENS = 300
 
 # Very rough character → token ratio for the content being read.
@@ -184,6 +185,17 @@ class CostEstimate:
     file_count: int
     advisor_model: str
     runner_model: str
+    explorer_model: str = ""
+    explorer_input_tokens_min: int = 0
+    explorer_input_tokens_max: int = 0
+    explorer_output_tokens_min: int = 0
+    explorer_output_tokens_max: int = 0
+    explorer_cost_usd_min: float = 0.0
+    explorer_cost_usd_max: float = 0.0
+    advisor_cost_usd_min: float = 0.0
+    advisor_cost_usd_max: float = 0.0
+    coder_cost_usd_min: float = 0.0
+    coder_cost_usd_max: float = 0.0
 
     def to_dict(self) -> dict[str, object]:
         """Round-trippable dict for JSON output."""
@@ -192,6 +204,17 @@ class CostEstimate:
             "file_count": self.file_count,
             "advisor_model": self.advisor_model,
             "runner_model": self.runner_model,
+            "explorer_model": self.explorer_model,
+            "explorer_input_tokens_min": self.explorer_input_tokens_min,
+            "explorer_input_tokens_max": self.explorer_input_tokens_max,
+            "explorer_output_tokens_min": self.explorer_output_tokens_min,
+            "explorer_output_tokens_max": self.explorer_output_tokens_max,
+            "explorer_cost_usd_min": round(self.explorer_cost_usd_min, 4),
+            "explorer_cost_usd_max": round(self.explorer_cost_usd_max, 4),
+            "advisor_cost_usd_min": round(self.advisor_cost_usd_min, 4),
+            "advisor_cost_usd_max": round(self.advisor_cost_usd_max, 4),
+            "coder_cost_usd_min": round(self.coder_cost_usd_min, 4),
+            "coder_cost_usd_max": round(self.coder_cost_usd_max, 4),
             "input_tokens_min": self.input_tokens_min,
             "input_tokens_max": self.input_tokens_max,
             "output_tokens_min": self.output_tokens_min,
@@ -209,6 +232,8 @@ def estimate_cost(
     runner_model: str,
     max_fixes_per_runner: int,
     max_runners: int | None = None,
+    explorer_model: str = "claude-haiku-4-5",
+    max_explorers: int = 0,
     pricing: dict[str, tuple[int, int]] | None = None,
     target: Path | None = None,
 ) -> CostEstimate:
@@ -286,7 +311,7 @@ def estimate_cost(
         runner_count = min(runner_limit, len(tasks))
     file_count = len(tasks)
 
-    # Sum of per-file read tokens (runners read every file once during explore).
+    # Sum of per-file read tokens (explorers or runners read every file once).
     # De-dupe within an estimate so duplicated focus tasks don't repeat stats.
     token_cache: dict[str, int] = {}
     content_tokens = 0
@@ -295,52 +320,104 @@ def estimate_cost(
             token_cache[task.file_path] = _tokens_for_file(task.file_path, target)
         content_tokens += token_cache[task.file_path]
 
+    explorer_limit = max(0, max_explorers)
+    if explorer_limit > 0 and file_count > 0:
+        explorer_count = min(explorer_limit, file_count)
+    else:
+        explorer_count = 0
+
+    three_tier = explorer_count > 0
+
     # ---- MIN: one explore pass, no fixes ----
     advisor_in_min = ADVISOR_SYSTEM_TOKENS + (PER_MESSAGE_OVERHEAD_TOKENS * runner_count * 2)
-    runner_in_min = (
-        runner_count * RUNNER_SYSTEM_TOKENS
-        + content_tokens
-        + runner_count * PER_MESSAGE_OVERHEAD_TOKENS
-    )
+    if three_tier:
+        advisor_in_min += PER_MESSAGE_OVERHEAD_TOKENS * explorer_count * 2
+        explorer_in_min = (
+            explorer_count * EXPLORER_SYSTEM_TOKENS
+            + content_tokens
+            + explorer_count * PER_MESSAGE_OVERHEAD_TOKENS
+        )
+        explorer_out_min = explorer_count * 600
+        runner_in_min = (
+            runner_count * RUNNER_SYSTEM_TOKENS + runner_count * PER_MESSAGE_OVERHEAD_TOKENS
+        )
+    else:
+        explorer_in_min = 0
+        explorer_out_min = 0
+        runner_in_min = (
+            runner_count * RUNNER_SYSTEM_TOKENS
+            + content_tokens
+            + runner_count * PER_MESSAGE_OVERHEAD_TOKENS
+        )
     advisor_out_min = runner_count * 400  # short dispatches + final report
-    runner_out_min = runner_count * 800  # findings block per runner
+    if three_tier:
+        advisor_out_min += explorer_count * 300
+    runner_out_min = runner_count * 800  # findings block per runner (legacy explore)
 
     # ---- MAX: max_fixes_per_runner full edit rounds per runner ----
     fix_rounds = max(0, max_fixes_per_runner) * runner_count
     advisor_in_max = advisor_in_min + fix_rounds * PER_MESSAGE_OVERHEAD_TOKENS * 2
-    # Each fix round: runner re-reads file (~2k avg) + writes back a patch
     avg_file_tokens = content_tokens // max(1, file_count)
-    runner_in_max = runner_in_min + fix_rounds * (avg_file_tokens + PER_MESSAGE_OVERHEAD_TOKENS)
+    if three_tier:
+        explorer_in_max = explorer_in_min
+        explorer_out_max = explorer_out_min
+        runner_in_max = runner_in_min + fix_rounds * (
+            avg_file_tokens // 2 + PER_MESSAGE_OVERHEAD_TOKENS
+        )
+    else:
+        explorer_in_max = 0
+        explorer_out_max = 0
+        runner_in_max = runner_in_min + fix_rounds * (avg_file_tokens + PER_MESSAGE_OVERHEAD_TOKENS)
     advisor_out_max = advisor_out_min + fix_rounds * 200
     runner_out_max = runner_out_min + fix_rounds * 600
 
     # ---- Pricing ----
     adv_fam = _family_of(advisor_model)
     run_fam = _family_of(runner_model)
+    exp_fam = _family_of(explorer_model) if three_tier else "haiku"
     adv_in_c, adv_out_c = pricing.get(adv_fam, pricing["sonnet"])
     run_in_c, run_out_c = pricing.get(run_fam, pricing["sonnet"])
+    exp_in_c, exp_out_c = pricing.get(exp_fam, pricing["haiku"])
 
     def _dollars(input_tokens: int, output_tokens: int, in_c: int, out_c: int) -> float:
         return (input_tokens * in_c + output_tokens * out_c) / 1_000_000 / 100
 
-    cost_min = _dollars(advisor_in_min, advisor_out_min, adv_in_c, adv_out_c) + _dollars(
-        runner_in_min, runner_out_min, run_in_c, run_out_c
+    adv_cost_min = _dollars(advisor_in_min, advisor_out_min, adv_in_c, adv_out_c)
+    adv_cost_max = _dollars(advisor_in_max, advisor_out_max, adv_in_c, adv_out_c)
+    run_cost_min = _dollars(runner_in_min, runner_out_min, run_in_c, run_out_c)
+    run_cost_max = _dollars(runner_in_max, runner_out_max, run_in_c, run_out_c)
+    exp_cost_min = (
+        _dollars(explorer_in_min, explorer_out_min, exp_in_c, exp_out_c) if three_tier else 0.0
     )
-    cost_max = _dollars(advisor_in_max, advisor_out_max, adv_in_c, adv_out_c) + _dollars(
-        runner_in_max, runner_out_max, run_in_c, run_out_c
+    exp_cost_max = (
+        _dollars(explorer_in_max, explorer_out_max, exp_in_c, exp_out_c) if three_tier else 0.0
     )
 
+    cost_min = adv_cost_min + run_cost_min + exp_cost_min
+    cost_max = adv_cost_max + run_cost_max + exp_cost_max
+
     return CostEstimate(
-        input_tokens_min=advisor_in_min + runner_in_min,
-        input_tokens_max=advisor_in_max + runner_in_max,
-        output_tokens_min=advisor_out_min + runner_out_min,
-        output_tokens_max=advisor_out_max + runner_out_max,
+        input_tokens_min=advisor_in_min + runner_in_min + explorer_in_min,
+        input_tokens_max=advisor_in_max + runner_in_max + explorer_in_max,
+        output_tokens_min=advisor_out_min + runner_out_min + explorer_out_min,
+        output_tokens_max=advisor_out_max + runner_out_max + explorer_out_max,
         cost_usd_min=cost_min,
         cost_usd_max=cost_max,
         runner_count=runner_count,
         file_count=file_count,
         advisor_model=advisor_model,
         runner_model=runner_model,
+        explorer_model=explorer_model if three_tier else "",
+        explorer_input_tokens_min=explorer_in_min,
+        explorer_input_tokens_max=explorer_in_max,
+        explorer_output_tokens_min=explorer_out_min,
+        explorer_output_tokens_max=explorer_out_max,
+        explorer_cost_usd_min=exp_cost_min,
+        explorer_cost_usd_max=exp_cost_max,
+        advisor_cost_usd_min=adv_cost_min,
+        advisor_cost_usd_max=adv_cost_max,
+        coder_cost_usd_min=run_cost_min,
+        coder_cost_usd_max=run_cost_max,
     )
 
 
@@ -436,16 +513,32 @@ def load_pricing(path: str | Path) -> dict[str, tuple[int, int]]:
 
 def format_estimate(est: CostEstimate) -> str:
     """Human-readable summary of a :class:`CostEstimate`."""
-    return (
-        f"## Cost estimate\n\n"
-        f"- Files: {est.file_count}\n"
-        f"- Runners: {est.runner_count}\n"
-        f"- Models: advisor={est.advisor_model}, runners={est.runner_model}\n"
-        f"- Input tokens: {est.input_tokens_min:,} – {est.input_tokens_max:,}\n"
-        f"- Output tokens: {est.output_tokens_min:,} – {est.output_tokens_max:,}\n"
-        f"- **Est. cost: ${est.cost_usd_min:.2f} – ${est.cost_usd_max:.2f}**\n"
-        f"\n_Range covers review-only (min) to full fix waves (max). "
-        f"Actual cost depends on dialogue depth and fix count. "
-        f"Pricing as of {PRICING_AS_OF.isoformat()} — "
-        f"verify at https://www.anthropic.com/pricing._"
+    lines = [
+        "## Cost estimate",
+        "",
+        f"- Files: {est.file_count}",
+        f"- Coders: {est.runner_count}",
+        f"- Models: advisor={est.advisor_model}, coders={est.runner_model}",
+        f"- Input tokens: {est.input_tokens_min:,} – {est.input_tokens_max:,}",
+        f"- Output tokens: {est.output_tokens_min:,} – {est.output_tokens_max:,}",
+        "",
+        "_Per-tier USD:_",
+        f"- Advisor (Opus): ${est.advisor_cost_usd_min:.2f} – ${est.advisor_cost_usd_max:.2f}",
+    ]
+    if est.explorer_cost_usd_max > 0 or est.explorer_input_tokens_max > 0:
+        lines.append(
+            f"- Explorers (Haiku): ${est.explorer_cost_usd_min:.2f} – "
+            f"${est.explorer_cost_usd_max:.2f}"
+        )
+    lines.extend(
+        [
+            f"- Coders (Sonnet): ${est.coder_cost_usd_min:.2f} – ${est.coder_cost_usd_max:.2f}",
+            f"- **Total: ${est.cost_usd_min:.2f} – ${est.cost_usd_max:.2f}**",
+            "",
+            "_Range covers review-only (min) to full fix waves (max). "
+            "Actual cost depends on dialogue depth and fix count. "
+            f"Pricing as of {PRICING_AS_OF.isoformat()} — "
+            "verify at https://www.anthropic.com/pricing._",
+        ]
     )
+    return "\n".join(lines)

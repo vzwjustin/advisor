@@ -215,14 +215,14 @@ class TestRunnerPool:
         assert "5 min" in prompt or "5 minutes" in prompt.lower()
         assert "heartbeat" in prompt.lower()
 
-    def test_pool_prompt_requires_pre_finding_verification(self):
+    def test_pool_prompt_prefers_embedded_exploration_context(self):
         config = default_team_config("/src")
         prompt = build_runner_pool_prompt(1, config)
 
-        assert "grep" in prompt.lower()
         lowered = prompt.lower()
-        assert "missing" in lowered or "undefined" in lowered
-        assert "pre-finding" in lowered or "unverified" in lowered
+        assert "embedded exploration context" in lowered
+        assert "## explore assignment" not in lowered
+        assert "code modification" in lowered or "implement fixes" in lowered
 
     def test_advisor_prompt_has_stall_pivot_clause(self):
         config = default_team_config("/src")
@@ -387,7 +387,9 @@ class TestRenderPipeline:
         assert "review" in output
         assert "opus" in output
         assert "sonnet" in output
-        assert "haiku" not in output
+        assert "haiku" in output
+        assert "explorer-N" in output
+        assert "Explorer discovers" in output
 
     def test_starts_with_team_delete_before_create(self):
         config = default_team_config("/src")

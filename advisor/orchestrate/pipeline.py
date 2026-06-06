@@ -41,24 +41,116 @@ def _safe_str(value: str) -> str:
     return value
 
 
-def render_pipeline(config: TeamConfig) -> str:
-    """Render the full pipeline as Claude Code tool calls for reference."""
-    team = _safe_str(config.team_name)
-    target = _safe_str(config.target_dir)
-    file_types = _safe_str(config.file_types)
-    advisor_model = _safe_str(config.advisor_model)
-    runner_model = _safe_str(config.runner_model)
+def _three_tier_pipeline(
+    team: str,
+    target: str,
+    file_types: str,
+    advisor_model: str,
+    explorer_model: str,
+    runner_model: str,
+    config: TeamConfig,
+) -> str:
+    return f"""## Advisor Review Pipeline — {team}
+Target: {target} ({file_types})
+Models: advisor={advisor_model}, explorers={explorer_model}, coders={runner_model}
+Suggested explorers: ~{config.max_explorers} | Suggested coders: ~{config.max_runners} | Min priority: P{config.min_priority}
+
+> **TL;DR** — Spawn the advisor first; it sizes explorer and coder pools from
+> its own Glob+Grep pass and authors per-agent prompts. Spawn Haiku explorers
+> for the explore wave, then Sonnet coders for fixes. Loop:
+> **Explorer discovers → Advisor reasons → Coder fixes.** Runners report to
+> team-lead; team-lead relays each report verbatim to the advisor. End by
+> shutting down each teammate individually, then `TeamDelete()`.
+
+### Step 1: Reset and create team
+TeamDelete()
+TeamCreate(name="{team}")
+
+### Step 2: Spawn advisor FIRST (no explorers or coders yet)
+Agent(
+  name="advisor",
+  description="Investigate, rank, and dispatch explorers + coders",
+  model="{advisor_model}",
+  subagent_type="advisor-executor",
+  team_name="{team}",
+  prompt=<build_advisor_prompt(config)>
+)
+→ Advisor does Glob+Grep structural discovery itself, ranks P1–P5,
+  decides explorer + coder pool sizes, and produces a dispatch plan.
+
+### Step 3: Spawn explorer pool (Haiku, read-only)
+Agent(
+  name="explorer-N",
+  description="Pool explorer N — read-only file exploration",
+  model="{explorer_model}",
+  subagent_type="explorer",
+  team_name="{team}",
+  run_in_background=true,
+  prompt=<build_explorer_prompt(config, target_files, guidance)>
+)
+
+Use per-explorer prompts from the advisor's dispatch plan. Explorers are
+read-only (Read, Glob, Grep). They send `Exploration_Report` blocks to
+team-lead; team-lead relays each to the advisor verbatim.
+
+### Step 4: Spawn coder pool (Sonnet, fix implementation)
+Agent(
+  name="runner-N",
+  description="Pool coder N — fix implementation",
+  model="{runner_model}",
+  subagent_type="code-review",
+  team_name="{team}",
+  run_in_background=true,
+  prompt=<verbatim text from Opus's per-coder prompt block, or build_coder_prompt>
+)
+
+Coders receive fix assignments with embedded exploration context via
+`build_fix_assignment_message(exploration_context=...)`. ``build_coder_prompt``
+/ ``build_runner_pool_prompt`` (alias) are fallbacks for spawning without an
+advisor-authored prompt.
+
+### Step 5: Run the explore → reason → fix loop
+Explorers discover → Advisor synthesizes Exploration_Reports → Advisor
+dispatches fixes with exploration context → Coders implement. Team-lead
+relays every report verbatim. The advisor verifies each output as it lands.
+
+### Step 6: Final report
+Advisor's final message to team-lead is a structured summary:
+- Top-N actions (highest impact first)
+- Findings list with status (CONFIRMED / REJECTED / FIXED)
+- Test results (if a fix wave ran)
+- Follow-ups
+
+### Step 7: Shutdown + clean up
+Shut down each teammate individually (broadcast `"*"` with structured
+messages fails), then delete the team:
+
+  SendMessage({{"to": "advisor",    "message": {{"type": "shutdown_request"}}}})
+  SendMessage({{"to": "explorer-1", "message": {{"type": "shutdown_request"}}}})
+  SendMessage({{"to": "runner-1",   "message": {{"type": "shutdown_request"}}}})
+  ...
+  TeamDelete()
+"""
+
+
+def _legacy_pipeline(
+    team: str,
+    target: str,
+    file_types: str,
+    advisor_model: str,
+    runner_model: str,
+    config: TeamConfig,
+) -> str:
     return f"""## Advisor Review Pipeline — {team}
 Target: {target} ({file_types})
 Models: advisor={advisor_model}, runners={runner_model}
 Suggested runners: ~{config.max_runners} | Min priority: P{config.min_priority}
 
-> **TL;DR** — Spawn the advisor first; it sizes the runner pool from
-> its own Glob+Grep pass and authors per-runner prompts. Spawn that many
-> runners using Opus's per-runner prompts verbatim — never the generic
-> ``build_runner_pool_prompt`` fallback. Runners report to team-lead;
-> team-lead relays each report verbatim to the advisor. End by shutting
-> down each teammate individually, then `TeamDelete()`.
+> **TL;DR** — Legacy two-tier mode (`max_explorers=0`). Spawn the advisor first;
+> it sizes the runner pool from its own Glob+Grep pass and authors per-runner
+> prompts. Spawn that many runners using Opus's per-runner prompts verbatim.
+> Runners report to team-lead; team-lead relays each report verbatim to the
+> advisor. End by shutting down each teammate individually, then `TeamDelete()`.
 
 ### Step 1: Reset and create team
 TeamDelete()
@@ -88,20 +180,14 @@ Agent(
   prompt=<verbatim text from Opus's "### runner-N / #### Prompt" block>
 )
 
-Use Opus's per-runner prompts verbatim from its dispatch plan — each is
-tailored to the files in that runner's batch. ``build_runner_pool_prompt``
-in the Python API is a *fallback* for spawning runners without an
-advisor; the live pipeline never uses it. Runners are long-lived — reused
-across assignments for context accumulation. Live two-way dialogue with
-the advisor (via team-lead relay) throughout. Runners work ONLY on what
-the advisor hands them.
+Use Opus's per-runner prompts verbatim from its dispatch plan. Runners are
+long-lived — reused across assignments for context accumulation.
 
 ### Step 4: Run the explore → reason → fix loop
 Runners send reports to team-lead; team-lead relays each to the advisor
 verbatim the moment it arrives. The advisor verifies each output as it
-lands (not in bulk), reasons over aggregated findings, optionally
-dispatches fix assignments, then sends the final structured report
-back to team-lead.
+lands, reasons over aggregated findings, optionally dispatches fix
+assignments, then sends the final structured report back to team-lead.
 
 ### Step 5: Final report
 Advisor's final message to team-lead is a structured summary:
@@ -111,11 +197,30 @@ Advisor's final message to team-lead is a structured summary:
 - Follow-ups
 
 ### Step 6: Shutdown + clean up
-Shut down each teammate individually (broadcast `"*"` with structured
-messages fails), then delete the team:
+Shut down each teammate individually, then delete the team:
 
   SendMessage({{"to": "advisor",  "message": {{"type": "shutdown_request"}}}})
   SendMessage({{"to": "runner-1", "message": {{"type": "shutdown_request"}}}})
   ...
   TeamDelete()
 """
+
+
+def render_pipeline(config: TeamConfig) -> str:
+    """Render the full pipeline as Claude Code tool calls for reference."""
+    team = _safe_str(config.team_name)
+    target = _safe_str(config.target_dir)
+    file_types = _safe_str(config.file_types)
+    advisor_model = _safe_str(config.advisor_model)
+    runner_model = _safe_str(config.runner_model)
+    if config.max_explorers > 0:
+        return _three_tier_pipeline(
+            team,
+            target,
+            file_types,
+            advisor_model,
+            _safe_str(config.explorer_model),
+            runner_model,
+            config,
+        )
+    return _legacy_pipeline(team, target, file_types, advisor_model, runner_model, config)

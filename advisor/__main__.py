@@ -1362,6 +1362,8 @@ def _emit_plan(
                 runner_model=cfg.runner_model,
                 max_fixes_per_runner=cfg.max_fixes_per_runner,
                 max_runners=cfg.max_runners,
+                explorer_model=cfg.explorer_model,
+                max_explorers=cfg.max_explorers,
                 pricing=pricing_override,
             )
         payload = _plan_to_dict(target, tasks, batches, estimate=estimate, run_id=run_id)
@@ -1429,6 +1431,8 @@ def _emit_plan(
             runner_model=cfg.runner_model,
             max_fixes_per_runner=cfg.max_fixes_per_runner,
             max_runners=cfg.max_runners,
+            explorer_model=cfg.explorer_model,
+            max_explorers=cfg.max_explorers,
             pricing=pricing_override,
             target=target,
         )

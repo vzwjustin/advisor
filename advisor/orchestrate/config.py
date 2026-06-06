@@ -51,6 +51,9 @@ _LONG_FORM_MODEL_RE = re.compile(
 
 DEFAULT_ADVISOR_MODEL = "claude-opus-4-7"
 DEFAULT_RUNNER_MODEL = "claude-sonnet-4-6"
+DEFAULT_EXPLORER_MODEL = "claude-haiku-4-5"
+DEFAULT_EXPLORER_OUTPUT_CHAR_CEILING = 40_000
+DEFAULT_EXPLORER_FILE_READ_CEILING = 40
 
 
 def is_known_model(name: str) -> bool:
@@ -103,6 +106,11 @@ class TeamConfig:
     # faster than fix-count suggests; this is the secondary proxy from
     # the runner prompt, now enforced on the advisor side too.
     runner_file_read_ceiling: int = 20
+    # Three-tier architecture: Haiku explorers read files; Sonnet coders fix.
+    explorer_model: str = DEFAULT_EXPLORER_MODEL
+    max_explorers: int = 5
+    explorer_output_char_ceiling: int = DEFAULT_EXPLORER_OUTPUT_CHAR_CEILING
+    explorer_file_read_ceiling: int = DEFAULT_EXPLORER_FILE_READ_CEILING
 
 
 def _env_or(env_key: str, default: str) -> str:
@@ -151,6 +159,10 @@ def default_team_config(
     preset: str | None = None,
     runner_output_char_ceiling: int = 80_000,
     runner_file_read_ceiling: int = 20,
+    explorer_model: str = DEFAULT_EXPLORER_MODEL,
+    max_explorers: int | None = None,
+    explorer_output_char_ceiling: int = DEFAULT_EXPLORER_OUTPUT_CHAR_CEILING,
+    explorer_file_read_ceiling: int = DEFAULT_EXPLORER_FILE_READ_CEILING,
 ) -> TeamConfig:
     """Create a default team configuration.
 
@@ -162,6 +174,12 @@ def default_team_config(
     * ``ADVISOR_FILE_TYPES`` → ``file_types``
     * ``ADVISOR_MIN_PRIORITY`` → ``min_priority``
     * ``ADVISOR_TEST_COMMAND`` → ``test_command``
+    * ``ADVISOR_EXPLORER_MODEL`` → ``explorer_model``
+    * ``ADVISOR_MAX_EXPLORERS`` → ``max_explorers`` (defaults to
+      post-clamp ``max_runners`` when unset)
+    * ``ADVISOR_EXPLORER_OUTPUT_CHAR_CEILING`` →
+      ``explorer_output_char_ceiling``
+    * ``ADVISOR_EXPLORER_FILE_READ_CEILING`` → ``explorer_file_read_ceiling``
 
     .. warning::
 
@@ -201,6 +219,13 @@ def default_team_config(
     test_command_is_default = test_command == ""
     runner_output_char_ceiling_is_default = runner_output_char_ceiling == 80_000
     runner_file_read_ceiling_is_default = runner_file_read_ceiling == 20
+    explorer_model_is_default = explorer_model == DEFAULT_EXPLORER_MODEL
+    explorer_output_char_ceiling_is_default = (
+        explorer_output_char_ceiling == DEFAULT_EXPLORER_OUTPUT_CHAR_CEILING
+    )
+    explorer_file_read_ceiling_is_default = (
+        explorer_file_read_ceiling == DEFAULT_EXPLORER_FILE_READ_CEILING
+    )
 
     # NOTE: ``advisor_model="claude-opus-4-7"`` and
     # ``runner_model="claude-sonnet-4-6"`` are the documented default
@@ -283,6 +308,33 @@ def default_team_config(
         runner_file_read_ceiling = _env_int_or(
             "ADVISOR_RUNNER_FILE_READ_CEILING", runner_file_read_ceiling
         )
+    if explorer_model_is_default:
+        explorer_model = _env_or("ADVISOR_EXPLORER_MODEL", explorer_model)
+    if max_explorers is None:
+        max_explorers = _env_int_or("ADVISOR_MAX_EXPLORERS", max_runners)
+    if explorer_output_char_ceiling_is_default:
+        explorer_output_char_ceiling = _env_int_or(
+            "ADVISOR_EXPLORER_OUTPUT_CHAR_CEILING", explorer_output_char_ceiling
+        )
+    if explorer_file_read_ceiling_is_default:
+        explorer_file_read_ceiling = _env_int_or(
+            "ADVISOR_EXPLORER_FILE_READ_CEILING", explorer_file_read_ceiling
+        )
+    if max_explorers < 0:
+        print(
+            _style.warning_box(f"max_explorers={max_explorers} is < 0; using 0"),
+            file=sys.stderr,
+        )
+        max_explorers = 0
+    elif max_explorers > POOL_SIZE_CEILING:
+        print(
+            _style.warning_box(
+                f"max_explorers={max_explorers} exceeds ceiling of "
+                f"{POOL_SIZE_CEILING}; using {POOL_SIZE_CEILING}"
+            ),
+            file=sys.stderr,
+        )
+        max_explorers = POOL_SIZE_CEILING
 
     # Preset merge — only fills in fields the caller left at their
     # documented default sentinels. Explicit overrides always win. The
@@ -301,13 +353,19 @@ def default_team_config(
             min_priority = pack.min_priority
         if test_command_is_default and test_command == "" and pack.test_command:
             test_command = pack.test_command
+        if explorer_model_is_default and pack.explorer_model is not None:
+            explorer_model = pack.explorer_model
         # Re-clamp after the preset merge — a preset that ships an
         # out-of-range ``min_priority`` would otherwise land in
         # :class:`TeamConfig` unclamped.
         min_priority = max(1, min(5, min_priority))
 
     if warn_unknown_model:
-        for label, model in (("advisor_model", advisor_model), ("runner_model", runner_model)):
+        for label, model in (
+            ("advisor_model", advisor_model),
+            ("runner_model", runner_model),
+            ("explorer_model", explorer_model),
+        ):
             if not is_known_model(model):
                 msg = (
                     f"{label}={model!r} does not look like a known native agent model "
@@ -324,6 +382,8 @@ def default_team_config(
     large_file_line_threshold = max(1, large_file_line_threshold)
     runner_output_char_ceiling = max(1, runner_output_char_ceiling)
     runner_file_read_ceiling = max(1, runner_file_read_ceiling)
+    explorer_output_char_ceiling = max(1, explorer_output_char_ceiling)
+    explorer_file_read_ceiling = max(1, explorer_file_read_ceiling)
 
     return TeamConfig(
         team_name=team_name,
@@ -341,4 +401,8 @@ def default_team_config(
         preset=preset,
         runner_output_char_ceiling=runner_output_char_ceiling,
         runner_file_read_ceiling=runner_file_read_ceiling,
+        explorer_model=explorer_model,
+        max_explorers=max_explorers,
+        explorer_output_char_ceiling=explorer_output_char_ceiling,
+        explorer_file_read_ceiling=explorer_file_read_ceiling,
     )

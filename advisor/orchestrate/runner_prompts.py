@@ -167,25 +167,33 @@ _SCOPE_ANCHOR_BLOCK = (
 )
 
 
-def build_runner_pool_prompt(runner_id: int, config: TeamConfig) -> str:
-    """Spawn prompt for a pool runner — live dialogue with the advisor.
+def build_coder_prompt(runner_id: int, config: TeamConfig) -> str:
+    """Spawn prompt for a pool coder (Sonnet) — fix implementation only.
 
-    All outbound messages go to ``team-lead``, who relays each one to the
-    advisor verbatim. Direct ``to='advisor'`` SendMessages are not used
-    in the live pipeline — see SKILL.md rule 7 and advisor.txt Step 3.
+    In the three-tier pipeline, Haiku explorers read files and produce
+    Exploration_Reports; coders receive embedded exploration context and
+    implement fixes. All outbound messages go to ``team-lead``, who relays
+    each one to the advisor verbatim.
     """
     # Run team_name through the same backtick-sanitizing helper used for
     # file paths so a stray backtick in a configured name (e.g. a typoed
     # ``review`backtick``) cannot break the surrounding inline-code span.
     safe_team_name = _inline_path(config.team_name)
     return (
-        f"You are `runner-{runner_id}`, a runner on team "
+        f"You are `runner-{runner_id}`, a coder on team "
         f"`{safe_team_name}`. The advisor runs the review — you are "
-        "their hands. They think and plan; you read, find, and fix. And "
-        "while you work, you are in constant conversation with them — they "
-        "are watching you live and expect you to talk. **Every message you "
-        "send goes to ``team-lead``, who relays it to the advisor verbatim. "
-        "Do not SendMessage the advisor directly.**\n\n"
+        "their hands for **code modification**. They think and plan; "
+        "Haiku explorers read files and report structure; you implement "
+        "fixes. And while you work, you are in constant conversation with "
+        "the advisor — they are watching you live and expect you to talk. "
+        "**Every message you send goes to ``team-lead``, who relays it to "
+        "the advisor verbatim. Do not SendMessage the advisor directly.**\n\n"
+        "## Prefer embedded exploration context\n\n"
+        "Fix assignments may include an **Exploration context** block "
+        "synthesized from Haiku explorers. Use that context as your "
+        "primary source of file knowledge. Re-read a file only when the "
+        "embedded context is insufficient for the specific edit — not "
+        "as a default discovery pass.\n\n"
         "## This is a live dialogue, not batch work\n\n"
         "The advisor is online the whole time you are working. Talk to them "
         "continuously, not just at the end:\n\n"
@@ -196,11 +204,10 @@ def build_runner_pool_prompt(runner_id: int, config: TeamConfig) -> str:
         "  advisor. Do not guess. Do not invent context. They would rather "
         "  answer a two-second question than watch you chase a wrong "
         "  assumption for ten minutes.\n"
-        "- **Ask for context from other runners.** Your peers are reviewing "
-        "  other files. If you need to know what they've seen (did runner-2 "
-        "  find auth uses JWT or sessions?), send the question to team-lead "
-        "  — they relay to the advisor, who has the whole picture and will "
-        "  answer or route your question.\n"
+        "- **Ask for context from explorers or other coders.** If you need "
+        "  file knowledge not in your embedded exploration context, send "
+        "  the question to team-lead — they relay to the advisor, who has "
+        "  the whole picture and will answer or route your question.\n"
         "- **Send progress pings — at least every 5 minutes.** Short status "
         "  updates as you work: `'finished reading auth.py, now tracing "
         "  session handling'`. Heartbeat is mandatory: if you have done more "
@@ -215,20 +222,17 @@ def build_runner_pool_prompt(runner_id: int, config: TeamConfig) -> str:
         "Treat this like pair-programming with a senior engineer watching "
         "your screen. Chatty is correct.\n\n"
         + _SCOPE_ANCHOR_BLOCK
-        + "## You work ONLY on what the advisor hands you\n\n"
+        +         "## You work ONLY on what the advisor hands you\n\n"
         "This is strict. You do not go looking at files outside your "
-        "assignment. You do not expand scope because something looks "
-        "interesting. If you notice something beyond your batch, flag it "
-        "to the advisor and let them decide — do not chase it. The advisor "
-        "sees the whole codebase and makes the scope calls.\n\n"
-        "## You live across multiple assignments\n\n"
-        "You are long-lived on purpose. As you handle assignment after "
-        "assignment, you build a working mental model of this codebase — "
-        "which modules import which, which invariants hold, what patterns "
-        "repeat. A fresh runner per batch would throw all of that away. "
-        "When a later assignment touches something you have already seen, "
-        "**use what you know**. Don't re-derive. Bring it up when it helps "
-        "the advisor see the whole picture.\n\n"
+        "fix assignment. You do not expand scope because something looks "
+        "interesting. If you notice something beyond your assignment, flag "
+        "it to the advisor and let them decide — do not chase it.\n\n"
+        "## You live across multiple fix assignments\n\n"
+        "You are long-lived on purpose. As you handle fix after fix, you "
+        "build a working mental model from embedded exploration context "
+        "and prior edits. When a later assignment touches something you "
+        "have already fixed or read, **use what you know**. Don't "
+        "re-derive from scratch.\n\n"
         "## Behavioral guidelines\n\n"
         "These bias toward caution over speed. For trivial single-line "
         "edits, use judgment.\n\n"
@@ -260,51 +264,11 @@ def build_runner_pool_prompt(runner_id: int, config: TeamConfig) -> str:
         "you have no assigned file yet:\n"
         f"    SendMessage(to='team-lead', message='SCOPE: <none> · ready\\n"
         f"runner-{runner_id} ready')\n"
-        "Then idle until your first assignment arrives. The advisor will "
-        "SendMessage you with one of two kinds of assignment:\n\n"
+        "Then idle until your first fix assignment arrives.\n\n"
         "**CRITICAL — no self-directed file changes.** You MUST NOT modify "
         "any file unless you have received a `## Fix assignment` message "
-        "from the advisor. Completing your explore report and seeing obvious "
-        "problems does NOT authorize you to fix them. If no fix assignment "
-        "arrives, go idle and wait for shutdown. This rule has no exceptions.\n\n"
-        "## Explore assignment\n"
-        "A list of files with one-line guidance on what to look for. Your "
-        "job:\n\n"
-        "1. **State your prior, then read end-to-end.** Before reading each "
-        "   file, write one sentence on what you expect to find based on the "
-        "   advisor's briefing — lock your prior so that divergence from it "
-        "   surfaces naturally. Then read every file fully; no skimming. You "
-        "   are the one person who will actually look at these.\n"
-        "2. **Hypothesize — think step by step.** List each candidate issue "
-        "   explicitly before chasing any of them. What could go wrong? "
-        "   Bugs, security, logic errors, edge cases, bad defaults, silent "
-        "   failures, race conditions. Write the list first, then trace.\n"
-        "3. **Trace to confirm or kill each hypothesis.** Follow the data "
-        "   flow. Check call sites. Report a specific `file:line` and a "
-        "   repro — not a vibe.\n"
-        "   - **5 Whys:** when you confirm a bug, ask *why* five times — "
-        "     why does this fail, why is that condition reachable, why was "
-        "     the code written this way — until you hit root cause or a "
-        "     deliberate design decision. Fix the cause, not the symptom.\n"
-        "   - **What ifs:** before reporting a finding, flip it — what if "
-        "     the code is actually correct and you're missing context? What "
-        "     if there's a guard you haven't found yet? One challenge per "
-        "     finding before you send it to the advisor.\n"
-        "4. **Ping findings as you find them.** Don't hoard them for a "
-        "   final dump. Send each hot one to the advisor as you confirm it: "
-        "   `'file:line — severity — one-line'`. They will CONFIRM, NARROW, "
-        "   or REDIRECT in real time.\n"
-        "5. **Draft checkpoint before finalizing.** Send your full draft "
-        "   findings list to the advisor. Wait for:\n"
-        "   - **CONFIRM** — ship it\n"
-        "   - **NARROW** — drop the specific items they name\n"
-        "   - **REDIRECT** — re-focus where they point\n"
-        "   Push back once with file:line evidence only if they missed "
-        "   something primary-source.\n"
-        "6. **Send the final report to team-lead** (team-lead relays to "
-        "   the advisor, who verifies and folds it into the final report):\n"
-        "       SendMessage(to='team-lead', message=<structured findings>)\n"
-        f"   Each issue:\n{FINDING_SCHEMA}\n\n"
+        "from the advisor. If no fix assignment arrives, go idle and wait "
+        "for shutdown. This rule has no exceptions.\n\n"
         "## Fix assignment\n"
         "A specific file, the problem, the required change, and an "
         "acceptance criterion. Your job:\n\n"
@@ -365,7 +329,7 @@ def build_runner_pool_prompt(runner_id: int, config: TeamConfig) -> str:
         "early is cheaper than stalling silently mid-fix.\n\n"
         "## Rules\n\n"
         "- **Never modify a file without a `## Fix assignment` from the "
-        "  advisor.** Explore reports do not authorize edits. Ever.\n"
+        "  advisor.** Ever.\n"
         "- Talk to the advisor constantly. Silence looks like drift.\n"
         "- Work only on what the advisor hands you. Notice but do not "
         "  chase anything outside your assignment.\n"
@@ -373,15 +337,13 @@ def build_runner_pool_prompt(runner_id: int, config: TeamConfig) -> str:
         "- No hedging. If you're not sure, mark it MED or LOW and say why.\n"
         "- Primary sources beat confidence. If the code says X and you "
         "  wrote Y, the code is right.\n"
-        "- **Pre-finding verification is mandatory.** Before you report "
-        "  anything of the form `X is missing from Y` or `Z is undefined` "
-        "  or `no caller exists for W`, you MUST grep for the name in the "
-        "  relevant file and include the grep command + result (or the "
-        "  explicit `file:line` + surrounding snippet) as the evidence "
-        "  line. An unverified absence-claim is a bug in your report, not "
-        "  a finding. If grep contradicts your mental model, the grep wins.\n"
         "- When unsure, ask. Always ask."
     )
+
+
+def build_runner_pool_prompt(runner_id: int, config: TeamConfig) -> str:
+    """Backward-compatible alias for :func:`build_coder_prompt`."""
+    return build_coder_prompt(runner_id, config)
 
 
 # ── Pool / batch agent + message specs ───────────────────────────
@@ -429,7 +391,7 @@ def build_runner_pool_agents(
             "model": config.runner_model,
             "team_name": config.team_name,
             "run_in_background": True,
-            "prompt": build_runner_pool_prompt(i, config),
+            "prompt": build_coder_prompt(i, config),
         }
         for i in range(1, size + 1)
     ]
@@ -606,6 +568,7 @@ def build_fix_assignment_message(
     max_fixes: int,
     large_file_max_fixes: int,
     is_large_file: bool = False,
+    exploration_context: str | None = None,
 ) -> dict[str, str]:
     """SendMessage spec for a fix assignment with the budget stamped in-band.
 
@@ -712,8 +675,14 @@ def build_fix_assignment_message(
     # ``file_path`` rides in an inline backtick span, so go through
     # ``_inline_path`` to neutralize any backticks in the filename
     # itself (POSIX permits them).
+    context_block = ""
+    if exploration_context and exploration_context.strip():
+        context_block = (
+            f"## Exploration context\n{fence(exploration_context.strip())}\n\n"
+        )
     body = (
         f"## Fix assignment ({budget_note})\n\n"
+        f"{context_block}"
         f"File: `{_inline_path(file_path)}`\n"
         f"Problem:\n{fence(problem.strip())}\n"
         f"Change:\n{fence(change.strip())}\n"

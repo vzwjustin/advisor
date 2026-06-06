@@ -36,6 +36,16 @@ _PLACEHOLDERS = (
     "test_block",
     "history_block",
     "finding_schema",
+    "tier_role_description",
+    "tier_loop_diagram",
+    "tier_pool_sizing_block",
+    "tier_pool_report_extra",
+    "tier_explore_dispatch_block",
+    "tier_synthesis_block",
+    "tier_reason_step_num",
+    "tier_fix_step_num",
+    "tier_final_step_num",
+    "tier_fix_wave_preamble",
 )
 _PLACEHOLDER_RE = re.compile(r"\{(" + "|".join(_PLACEHOLDERS) + r")\}")
 
@@ -62,6 +72,127 @@ def _render(template: str, mapping: dict[str, str]) -> str:
 # — both helpers were byte-identical and have been collapsed into the single
 # canonical :func:`advisor.orchestrate._fence.sanitize_inline`.
 _sanitize_inline = sanitize_inline
+
+
+def _tier_blocks(config: TeamConfig) -> dict[str, str]:
+    """Render three-tier vs legacy two-tier sections from ``max_explorers``."""
+    if config.max_explorers > 0:
+        return {
+            "tier_role_description": (
+                "Opus reasons, Haiku explorers read files, Sonnet coders "
+                "implement fixes — you orchestrate all three tiers."
+            ),
+            "tier_loop_diagram": (
+                "```\n"
+                "   [you — Opus]           [explorers — Haiku]    [coders — Sonnet]\n"
+                "  Glob + Grep      →  (structural map)\n"
+                "  rank + size pools →  team-lead spawns E explorers + N coders\n"
+                "  dispatch explore  →  explorers read files (read-only)\n"
+                "       ↑                        ↓\n"
+                "       └── Exploration_Reports ←┘\n"
+                "  synthesize + reason →\n"
+                "  dispatch fixes      →  coders implement\n"
+                "       ↑                        ↓\n"
+                "       └── diffs ←──────────────┘\n"
+                "  verify              →  final report to team-lead\n"
+                "```"
+            ),
+            "tier_pool_sizing_block": (
+                f"Size **two** pools: up to `{config.max_explorers}` Haiku "
+                f"explorers (`{config.explorer_model}`) for the explore wave, "
+                f"and up to `{config.max_runners}` Sonnet coders "
+                f"(`{config.runner_model}`) for the fix wave. Explorer "
+                f"budget: `{config.explorer_output_char_ceiling}` output "
+                f"chars, `{config.explorer_file_read_ceiling}` file reads "
+                f"per explorer."
+            ),
+            "tier_pool_report_extra": (
+                "\n## Explorer pool: E — <one-line rationale>\n"
+                "(Haiku read-only explorers; use `build_explorer_prompt` per "
+                "explorer with file batches and per-file guidance.)"
+            ),
+            "tier_explore_dispatch_block": (
+                "## Step 3 — Dispatch explore wave to Haiku explorers\n"
+                "Once team-lead confirms the explorer pool is up, SendMessage "
+                "each explorer its file batch using prompts from "
+                "`build_explorer_prompt`. Explorers are read-only — Read, Glob, "
+                "Grep only. They report `Exploration_Report` blocks to team-lead; "
+                "team-lead relays each report verbatim as it arrives.\n\n"
+                "## Step 3.5 — Synthesize Exploration_Reports\n"
+                "Before building fix assignments, merge explorer reports into "
+                "per-file exploration context. Embed that synthesized context "
+                "in each fix assignment via `build_fix_assignment_message` "
+                "(`exploration_context=` parameter) so coders prefer embedded "
+                "context over re-reading files.\n\n"
+                "## Step 4 — Watch for coder reports (fix wave only)\n"
+                "Coders receive fix assignments with embedded exploration "
+                "context. Team-lead relays every coder diff report verbatim."
+            ),
+            "tier_synthesis_block": (
+                "Synthesize `Exploration_Report` blocks into per-file context "
+                "before dispatching fixes. "
+            ),
+            "tier_reason_step_num": "5",
+            "tier_fix_step_num": "6",
+            "tier_final_step_num": "7",
+            "tier_fix_wave_preamble": (
+                "Before dispatching fixes to coders, shut down all current "
+                "explorers via `shutdown_request`. Spawn (or reuse) the Sonnet "
+                "coder pool for the fix wave. Use `build_runner_handoff_message` "
+                "when rotating saturated coders."
+            ),
+        }
+    return {
+        "tier_role_description": (
+            "The runners are your hands: they read files, they write fixes, "
+            "you think. **Legacy two-tier mode** (`max_explorers=0`) — no "
+            "Haiku explorer tier; runners handle both exploration and fixes."
+        ),
+        "tier_loop_diagram": (
+            "```\n"
+            "   [you]                [runners]\n"
+            "  Glob + Grep    →  (structural map, in your head)\n"
+            "  rank + size pool  →  team-lead spawns N runners\n"
+            "  dispatch explore  →  runners read files\n"
+            "       ↑                     ↓\n"
+            "       └── findings ←────────┘\n"
+            "  reason + plan     →\n"
+            "  dispatch fixes    →  runners implement\n"
+            "       ↑                     ↓\n"
+            "       └──  diffs  ←─────────┘\n"
+            "  verify            →  final report to team-lead\n"
+            "```"
+        ),
+        "tier_pool_sizing_block": (
+            "Scale the **runner** pool to the codebase (legacy mode — runners "
+            "handle explore + fix)."
+        ),
+        "tier_pool_report_extra": "",
+        "tier_explore_dispatch_block": (
+            "## Step 3 — Watch for runner reports\n"
+            "Runners receive their batch assignments inside their initial "
+            "prompts and begin reading immediately on spawn — **do NOT send a "
+            "separate explore dispatch**. Once team-lead confirms the pool is "
+            "up, just watch your inbox. Team-lead relays every runner report "
+            "to you verbatim as it arrives. Keep related files on the same "
+            "runner; their accumulated context is why you picked that runner."
+        ),
+        "tier_synthesis_block": "",
+        "tier_reason_step_num": "4",
+        "tier_fix_step_num": "5",
+        "tier_final_step_num": "6",
+        "tier_fix_wave_preamble": (
+            "Before dispatching fixes to runners, shut down all current runners "
+            "via `shutdown_request` and spawn a fresh pool of the same size for "
+            "the fix wave. Use `build_runner_handoff_message` to generate a "
+            "compact handoff brief for each incoming runner: which files the "
+            "outgoing runner touched, the invariants to preserve, and the "
+            "remaining fixes queued. Fresh runners start with clean context; "
+            "the handoff brief is their only prior state. This eliminates "
+            "cumulative-read context blowup from the explore wave bleeding "
+            "into the fix wave."
+        ),
+    }
 
 
 def build_advisor_prompt(config: TeamConfig, *, history_block: str = "") -> str:
@@ -117,24 +248,23 @@ def build_advisor_prompt(config: TeamConfig, *, history_block: str = "") -> str:
         if history_block.strip()
         else ""
     )
-    return _render(
-        _load_template(),
-        {
-            "team_name": _sanitize_inline(config.team_name),
-            "target_dir": safe_target_dir,
-            "file_types": safe_file_types,
-            "goal_block": goal_block,
-            "min_priority": str(config.min_priority),
-            "max_fixes_per_runner": str(config.max_fixes_per_runner),
-            "large_file_line_threshold": str(config.large_file_line_threshold),
-            "large_file_max_fixes": str(config.large_file_max_fixes),
-            "runner_output_char_ceiling": str(config.runner_output_char_ceiling),
-            "runner_file_read_ceiling": str(config.runner_file_read_ceiling),
-            "test_block": test_block,
-            "history_block": safe_history_block,
-            "finding_schema": FINDING_SCHEMA,
-        },
-    )
+    mapping = {
+        "team_name": _sanitize_inline(config.team_name),
+        "target_dir": safe_target_dir,
+        "file_types": safe_file_types,
+        "goal_block": goal_block,
+        "min_priority": str(config.min_priority),
+        "max_fixes_per_runner": str(config.max_fixes_per_runner),
+        "large_file_line_threshold": str(config.large_file_line_threshold),
+        "large_file_max_fixes": str(config.large_file_max_fixes),
+        "runner_output_char_ceiling": str(config.runner_output_char_ceiling),
+        "runner_file_read_ceiling": str(config.runner_file_read_ceiling),
+        "test_block": test_block,
+        "history_block": safe_history_block,
+        "finding_schema": FINDING_SCHEMA,
+    }
+    mapping.update(_tier_blocks(config))
+    return _render(_load_template(), mapping)
 
 
 def build_advisor_agent(config: TeamConfig) -> dict[str, str]:

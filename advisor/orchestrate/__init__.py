@@ -21,8 +21,10 @@ from __future__ import annotations
 
 from .advisor_prompt import build_advisor_agent, build_advisor_prompt
 from .config import KNOWN_MODEL_SHORTCUTS, TeamConfig, default_team_config, is_known_model
+from .explorer_prompts import build_explorer_pool_agents, build_explorer_prompt
 from .pipeline import render_pipeline
 from .runner_prompts import (
+    build_coder_prompt,
     build_fix_assignment_message,
     build_runner_agents,
     build_runner_batch_message,
@@ -44,7 +46,11 @@ __all__ = [
     # advisor
     "build_advisor_agent",
     "build_advisor_prompt",
-    # runners
+    # explorers
+    "build_explorer_pool_agents",
+    "build_explorer_prompt",
+    # coders / runners
+    "build_coder_prompt",
     "build_fix_assignment_message",
     "build_runner_agents",
     "build_runner_batch_message",

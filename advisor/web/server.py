@@ -42,7 +42,7 @@ from ..cost import estimate_cost
 from ..focus import FocusTask, create_focus_tasks
 from ..history import HISTORY_SCHEMA_VERSION, history_path, load_recent
 from ..live import LIVE_SCHEMA_VERSION, latest_seq, live_events_path, load_recent_events
-from ..orchestrate.config import POOL_SIZE_CEILING
+from ..orchestrate.config import DEFAULT_EXPLORER_MODEL, POOL_SIZE_CEILING
 from ..rank import load_advisorignore, rank_files
 from .assets import APP_CSS, APP_JS, INDEX_HTML
 
@@ -234,6 +234,8 @@ def _cost_payload(state: AppState, qs: dict[str, list[str]]) -> dict[str, Any]:
         runner_model=runner_model,
         max_fixes_per_runner=max_fixes,
         max_runners=max_runners,
+        explorer_model=DEFAULT_EXPLORER_MODEL,
+        max_explorers=max_runners,
         target=state.target,
     )
     return {

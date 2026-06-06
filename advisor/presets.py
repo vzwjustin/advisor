@@ -36,6 +36,9 @@ class RulePack:
             disables test orchestration.
         notes: Arbitrary human notes (e.g. caveats, recommended
             companion flags). Printed below the preset's entry.
+        explorer_model: Optional override for the Haiku explorer tier.
+            ``None`` leaves the :class:`~advisor.orchestrate.TeamConfig`
+            default (``claude-haiku-4-5``).
     """
 
     name: str
@@ -45,6 +48,7 @@ class RulePack:
     extra_keywords_by_tier: dict[int, tuple[str, ...]]
     test_command: str | None
     notes: tuple[str, ...]
+    explorer_model: str | None = None
 
 
 # ── Preset definitions ──────────────────────────────────────────
