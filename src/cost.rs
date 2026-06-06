@@ -90,88 +90,29 @@ fn round4(x: f64) -> f64 {
 impl CostEstimate {
     /// Round-trippable dict for JSON output (key order matches Python `to_dict`).
     pub fn to_dict(&self) -> serde_json::Value {
-        let mut obj = serde_json::Map::new();
-        obj.insert("runner_count".to_string(), serde_json::json!(self.runner_count));
-        obj.insert("file_count".to_string(), serde_json::json!(self.file_count));
-        obj.insert(
-            "advisor_model".to_string(),
-            serde_json::json!(self.advisor_model),
-        );
-        obj.insert(
-            "runner_model".to_string(),
-            serde_json::json!(self.runner_model),
-        );
-        if !self.explorer_model.is_empty() {
-            obj.insert(
-                "explorer_model".to_string(),
-                serde_json::json!(self.explorer_model),
-            );
-            obj.insert(
-                "explorer_input_tokens_min".to_string(),
-                serde_json::json!(self.explorer_input_tokens_min),
-            );
-            obj.insert(
-                "explorer_input_tokens_max".to_string(),
-                serde_json::json!(self.explorer_input_tokens_max),
-            );
-            obj.insert(
-                "explorer_output_tokens_min".to_string(),
-                serde_json::json!(self.explorer_output_tokens_min),
-            );
-            obj.insert(
-                "explorer_output_tokens_max".to_string(),
-                serde_json::json!(self.explorer_output_tokens_max),
-            );
-            obj.insert(
-                "explorer_cost_usd_min".to_string(),
-                serde_json::json!(round4(self.explorer_cost_usd_min)),
-            );
-            obj.insert(
-                "explorer_cost_usd_max".to_string(),
-                serde_json::json!(round4(self.explorer_cost_usd_max)),
-            );
-            obj.insert(
-                "advisor_cost_usd_min".to_string(),
-                serde_json::json!(round4(self.advisor_cost_usd_min)),
-            );
-            obj.insert(
-                "advisor_cost_usd_max".to_string(),
-                serde_json::json!(round4(self.advisor_cost_usd_max)),
-            );
-            obj.insert(
-                "coder_cost_usd_min".to_string(),
-                serde_json::json!(round4(self.coder_cost_usd_min)),
-            );
-            obj.insert(
-                "coder_cost_usd_max".to_string(),
-                serde_json::json!(round4(self.coder_cost_usd_max)),
-            );
-        }
-        obj.insert(
-            "input_tokens_min".to_string(),
-            serde_json::json!(self.input_tokens_min),
-        );
-        obj.insert(
-            "input_tokens_max".to_string(),
-            serde_json::json!(self.input_tokens_max),
-        );
-        obj.insert(
-            "output_tokens_min".to_string(),
-            serde_json::json!(self.output_tokens_min),
-        );
-        obj.insert(
-            "output_tokens_max".to_string(),
-            serde_json::json!(self.output_tokens_max),
-        );
-        obj.insert(
-            "cost_usd_min".to_string(),
-            serde_json::json!(round4(self.cost_usd_min)),
-        );
-        obj.insert(
-            "cost_usd_max".to_string(),
-            serde_json::json!(round4(self.cost_usd_max)),
-        );
-        serde_json::Value::Object(obj)
+        serde_json::json!({
+            "runner_count": self.runner_count,
+            "file_count": self.file_count,
+            "advisor_model": self.advisor_model,
+            "runner_model": self.runner_model,
+            "explorer_model": self.explorer_model,
+            "explorer_input_tokens_min": self.explorer_input_tokens_min,
+            "explorer_input_tokens_max": self.explorer_input_tokens_max,
+            "explorer_output_tokens_min": self.explorer_output_tokens_min,
+            "explorer_output_tokens_max": self.explorer_output_tokens_max,
+            "explorer_cost_usd_min": round4(self.explorer_cost_usd_min),
+            "explorer_cost_usd_max": round4(self.explorer_cost_usd_max),
+            "advisor_cost_usd_min": round4(self.advisor_cost_usd_min),
+            "advisor_cost_usd_max": round4(self.advisor_cost_usd_max),
+            "coder_cost_usd_min": round4(self.coder_cost_usd_min),
+            "coder_cost_usd_max": round4(self.coder_cost_usd_max),
+            "input_tokens_min": self.input_tokens_min,
+            "input_tokens_max": self.input_tokens_max,
+            "output_tokens_min": self.output_tokens_min,
+            "output_tokens_max": self.output_tokens_max,
+            "cost_usd_min": round4(self.cost_usd_min),
+            "cost_usd_max": round4(self.cost_usd_max),
+        })
     }
 }
 
