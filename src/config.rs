@@ -20,6 +20,15 @@ pub const DEFAULT_ADVISOR_MODEL: &str = "claude-opus-4-7";
 /// Default runner (Sonnet) model id.
 pub const DEFAULT_RUNNER_MODEL: &str = "claude-sonnet-4-6";
 
+/// Default explorer (Haiku) model id.
+pub const DEFAULT_EXPLORER_MODEL: &str = "claude-haiku-4-5";
+
+/// Default per-explorer output character ceiling.
+pub const DEFAULT_EXPLORER_OUTPUT_CHAR_CEILING: i64 = 40_000;
+
+/// Default per-explorer distinct-file-read ceiling.
+pub const DEFAULT_EXPLORER_FILE_READ_CEILING: i64 = 40;
+
 // Long-form model id matcher, identical to `_LONG_FORM_MODEL_RE`.
 static LONG_FORM_MODEL_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"^(?:Codex|claude)-(opus|sonnet|haiku)-\d+(?:[.-]\d+){0,3}(?:-\d{8})?$")
@@ -56,6 +65,10 @@ pub struct TeamConfig {
     pub preset: Option<String>,
     pub runner_output_char_ceiling: i64,
     pub runner_file_read_ceiling: i64,
+    pub explorer_model: String,
+    pub max_explorers: i64,
+    pub explorer_output_char_ceiling: i64,
+    pub explorer_file_read_ceiling: i64,
 }
 
 /// Inputs to [`default_team_config`], mirroring the Python keyword arguments and
@@ -80,6 +93,10 @@ pub struct TeamConfigInput {
     pub preset: Option<String>,
     pub runner_output_char_ceiling: i64,
     pub runner_file_read_ceiling: i64,
+    pub explorer_model: String,
+    pub max_explorers: Option<i64>,
+    pub explorer_output_char_ceiling: i64,
+    pub explorer_file_read_ceiling: i64,
 }
 
 impl TeamConfigInput {
@@ -102,6 +119,10 @@ impl TeamConfigInput {
             preset: None,
             runner_output_char_ceiling: 80_000,
             runner_file_read_ceiling: 20,
+            explorer_model: DEFAULT_EXPLORER_MODEL.to_string(),
+            max_explorers: None,
+            explorer_output_char_ceiling: DEFAULT_EXPLORER_OUTPUT_CHAR_CEILING,
+            explorer_file_read_ceiling: DEFAULT_EXPLORER_FILE_READ_CEILING,
         }
     }
 }
@@ -162,6 +183,10 @@ pub fn default_team_config(input: TeamConfigInput) -> TeamConfig {
         preset,
         mut runner_output_char_ceiling,
         mut runner_file_read_ceiling,
+        mut explorer_model,
+        max_explorers,
+        mut explorer_output_char_ceiling,
+        mut explorer_file_read_ceiling,
     } = input;
 
     // Capture "left at default sentinel" BEFORE any env mutation.
@@ -170,6 +195,11 @@ pub fn default_team_config(input: TeamConfigInput) -> TeamConfig {
     let test_command_is_default = test_command.is_empty();
     let runner_output_char_ceiling_is_default = runner_output_char_ceiling == 80_000;
     let runner_file_read_ceiling_is_default = runner_file_read_ceiling == 20;
+    let explorer_model_is_default = explorer_model == DEFAULT_EXPLORER_MODEL;
+    let explorer_output_char_ceiling_is_default =
+        explorer_output_char_ceiling == DEFAULT_EXPLORER_OUTPUT_CHAR_CEILING;
+    let explorer_file_read_ceiling_is_default =
+        explorer_file_read_ceiling == DEFAULT_EXPLORER_FILE_READ_CEILING;
 
     if advisor_model == DEFAULT_ADVISOR_MODEL {
         advisor_model = env_or("ADVISOR_MODEL", &advisor_model);
@@ -227,6 +257,34 @@ pub fn default_team_config(input: TeamConfigInput) -> TeamConfig {
         runner_file_read_ceiling =
             env_int_or("ADVISOR_RUNNER_FILE_READ_CEILING", runner_file_read_ceiling);
     }
+    if explorer_model_is_default {
+        explorer_model = env_or("ADVISOR_EXPLORER_MODEL", &explorer_model);
+    }
+    let mut max_explorers = match max_explorers {
+        None => env_int_or("ADVISOR_MAX_EXPLORERS", max_runners),
+        Some(m) => m,
+    };
+    if max_explorers < 0 {
+        warn(&format!("max_explorers={max_explorers} is < 0; using 0"));
+        max_explorers = 0;
+    } else if max_explorers > POOL_SIZE_CEILING {
+        warn(&format!(
+            "max_explorers={max_explorers} exceeds ceiling of {POOL_SIZE_CEILING}; using {POOL_SIZE_CEILING}"
+        ));
+        max_explorers = POOL_SIZE_CEILING;
+    }
+    if explorer_output_char_ceiling_is_default {
+        explorer_output_char_ceiling = env_int_or(
+            "ADVISOR_EXPLORER_OUTPUT_CHAR_CEILING",
+            explorer_output_char_ceiling,
+        );
+    }
+    if explorer_file_read_ceiling_is_default {
+        explorer_file_read_ceiling = env_int_or(
+            "ADVISOR_EXPLORER_FILE_READ_CEILING",
+            explorer_file_read_ceiling,
+        );
+    }
 
     // Preset merge — fills only fields the caller left at the documented default
     // sentinel (using the pre-env snapshots so env values aren't clobbered).
@@ -243,6 +301,11 @@ pub fn default_team_config(input: TeamConfigInput) -> TeamConfig {
                     test_command = tc.to_string();
                 }
             }
+            if explorer_model_is_default {
+                if let Some(em) = pack.explorer_model {
+                    explorer_model = em.to_string();
+                }
+            }
             min_priority = min_priority.clamp(1, 5);
         }
     }
@@ -251,6 +314,7 @@ pub fn default_team_config(input: TeamConfigInput) -> TeamConfig {
         for (label, model) in [
             ("advisor_model", &advisor_model),
             ("runner_model", &runner_model),
+            ("explorer_model", &explorer_model),
         ] {
             if !is_known_model(model) {
                 warn(&format!(
@@ -266,6 +330,8 @@ pub fn default_team_config(input: TeamConfigInput) -> TeamConfig {
     large_file_line_threshold = large_file_line_threshold.max(1);
     runner_output_char_ceiling = runner_output_char_ceiling.max(1);
     runner_file_read_ceiling = runner_file_read_ceiling.max(1);
+    explorer_output_char_ceiling = explorer_output_char_ceiling.max(1);
+    explorer_file_read_ceiling = explorer_file_read_ceiling.max(1);
 
     TeamConfig {
         team_name,
@@ -283,6 +349,10 @@ pub fn default_team_config(input: TeamConfigInput) -> TeamConfig {
         preset,
         runner_output_char_ceiling,
         runner_file_read_ceiling,
+        explorer_model,
+        max_explorers,
+        explorer_output_char_ceiling,
+        explorer_file_read_ceiling,
     }
 }
 
@@ -321,6 +391,10 @@ mod tests {
             "ADVISOR_TEST_COMMAND",
             "ADVISOR_RUNNER_OUTPUT_CHAR_CEILING",
             "ADVISOR_RUNNER_FILE_READ_CEILING",
+            "ADVISOR_EXPLORER_MODEL",
+            "ADVISOR_MAX_EXPLORERS",
+            "ADVISOR_EXPLORER_OUTPUT_CHAR_CEILING",
+            "ADVISOR_EXPLORER_FILE_READ_CEILING",
         ] {
             std::env::remove_var(k);
         }

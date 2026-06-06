@@ -14,7 +14,11 @@
     "test_command": "",
     "preset": null,
     "runner_output_char_ceiling": 80000,
-    "runner_file_read_ceiling": 20
+    "runner_file_read_ceiling": 20,
+    "explorer_model": "claude-haiku-4-5",
+    "max_explorers": 5,
+    "explorer_output_char_ceiling": 40000,
+    "explorer_file_read_ceiling": 40
   },
   "preset_python_web": {
     "team_name": "review",
@@ -31,7 +35,11 @@
     "test_command": "pytest -q",
     "preset": "python-web",
     "runner_output_char_ceiling": 80000,
-    "runner_file_read_ceiling": 20
+    "runner_file_read_ceiling": 20,
+    "explorer_model": "claude-haiku-4-5",
+    "max_explorers": 5,
+    "explorer_output_char_ceiling": 40000,
+    "explorer_file_read_ceiling": 40
   },
   "preset_node_api": {
     "team_name": "review",
@@ -48,7 +56,11 @@
     "test_command": "npm test",
     "preset": "node-api",
     "runner_output_char_ceiling": 80000,
-    "runner_file_read_ceiling": 20
+    "runner_file_read_ceiling": 20,
+    "explorer_model": "claude-haiku-4-5",
+    "max_explorers": 5,
+    "explorer_output_char_ceiling": 40000,
+    "explorer_file_read_ceiling": 40
   },
   "clamp_high": {
     "team_name": "review",
@@ -65,7 +77,11 @@
     "test_command": "",
     "preset": null,
     "runner_output_char_ceiling": 1,
-    "runner_file_read_ceiling": 1
+    "runner_file_read_ceiling": 1,
+    "explorer_model": "claude-haiku-4-5",
+    "max_explorers": 20,
+    "explorer_output_char_ceiling": 40000,
+    "explorer_file_read_ceiling": 40
   },
   "clamp_low": {
     "team_name": "review",
@@ -82,7 +98,11 @@
     "test_command": "",
     "preset": null,
     "runner_output_char_ceiling": 80000,
-    "runner_file_read_ceiling": 20
+    "runner_file_read_ceiling": 20,
+    "explorer_model": "claude-haiku-4-5",
+    "max_explorers": 1,
+    "explorer_output_char_ceiling": 40000,
+    "explorer_file_read_ceiling": 40
   },
   "explicit": {
     "team_name": "rev",
@@ -99,7 +119,11 @@
     "test_command": "cargo test",
     "preset": null,
     "runner_output_char_ceiling": 80000,
-    "runner_file_read_ceiling": 20
+    "runner_file_read_ceiling": 20,
+    "explorer_model": "claude-haiku-4-5",
+    "max_explorers": 4,
+    "explorer_output_char_ceiling": 40000,
+    "explorer_file_read_ceiling": 40
   },
   "preset_explicit_min": {
     "team_name": "review",
@@ -116,6 +140,10 @@
     "test_command": "pytest -q",
     "preset": "python-web",
     "runner_output_char_ceiling": 80000,
-    "runner_file_read_ceiling": 20
+    "runner_file_read_ceiling": 20,
+    "explorer_model": "claude-haiku-4-5",
+    "max_explorers": 5,
+    "explorer_output_char_ceiling": 40000,
+    "explorer_file_read_ceiling": 40
   }
 }

@@ -11,7 +11,7 @@ use super::FINDING_SCHEMA;
 /// `importlib.resources` load of `_prompts/advisor.txt`).
 const ADVISOR_TEMPLATE: &str = include_str!("../assets/advisor.txt");
 
-const PLACEHOLDERS: [&str; 13] = [
+const PLACEHOLDERS: [&str; 23] = [
     "team_name",
     "target_dir",
     "file_types",
@@ -25,7 +25,131 @@ const PLACEHOLDERS: [&str; 13] = [
     "test_block",
     "history_block",
     "finding_schema",
+    "tier_role_description",
+    "tier_loop_diagram",
+    "tier_pool_sizing_block",
+    "tier_pool_report_extra",
+    "tier_explore_dispatch_block",
+    "tier_synthesis_block",
+    "tier_reason_step_num",
+    "tier_fix_step_num",
+    "tier_final_step_num",
+    "tier_fix_wave_preamble",
 ];
+
+fn tier_blocks(config: &TeamConfig) -> Vec<(&'static str, String)> {
+    if config.max_explorers > 0 {
+        return vec![
+            (
+                "tier_role_description",
+                "Opus reasons, Haiku explorers read files, Sonnet coders \
+                 implement fixes — you orchestrate all three tiers."
+                    .to_string(),
+            ),
+            (
+                "tier_loop_diagram",
+                "```\n   [you — Opus]           [explorers — Haiku]    [coders — Sonnet]\n  Glob + Grep      →  (structural map)\n  rank + size pools →  team-lead spawns E explorers + N coders\n  dispatch explore  →  explorers read files (read-only)\n       ↑                        ↓\n       └── Exploration_Reports ←┘\n  synthesize + reason →\n  dispatch fixes      →  coders implement\n       ↑                        ↓\n       └── diffs ←──────────────┘\n  verify              →  final report to team-lead\n```"
+                    .to_string(),
+            ),
+            (
+                "tier_pool_sizing_block",
+                format!(
+                    "Size **two** pools: up to `{}` Haiku explorers (`{}`) for the explore wave, \
+                     and up to `{}` Sonnet coders (`{}`) for the fix wave. Explorer budget: \
+                     `{}` output chars, `{}` file reads per explorer.",
+                    config.max_explorers,
+                    config.explorer_model,
+                    config.max_runners,
+                    config.runner_model,
+                    config.explorer_output_char_ceiling,
+                    config.explorer_file_read_ceiling,
+                ),
+            ),
+            (
+                "tier_pool_report_extra",
+                "\n## Explorer pool: E — <one-line rationale>\n(Haiku read-only explorers; use \
+                 `build_explorer_prompt` per explorer with file batches and per-file guidance.)"
+                    .to_string(),
+            ),
+            (
+                "tier_explore_dispatch_block",
+                "## Step 3 — Dispatch explore wave to Haiku explorers\nOnce team-lead confirms \
+                 the explorer pool is up, SendMessage each explorer its file batch using prompts \
+                 from `build_explorer_prompt`. Explorers are read-only — Read, Glob, Grep only. \
+                 They report `Exploration_Report` blocks to team-lead; team-lead relays each \
+                 report verbatim as it arrives.\n\n## Step 3.5 — Synthesize Exploration_Reports\n\
+                 Before building fix assignments, merge explorer reports into per-file exploration \
+                 context. Embed that synthesized context in each fix assignment via \
+                 `build_fix_assignment_message` (`exploration_context=` parameter) so coders \
+                 prefer embedded context over re-reading files.\n\n## Step 4 — Watch for coder \
+                 reports (fix wave only)\nCoders receive fix assignments with embedded exploration \
+                 context. Team-lead relays every coder diff report verbatim."
+                    .to_string(),
+            ),
+            (
+                "tier_synthesis_block",
+                "Synthesize `Exploration_Report` blocks into per-file context before dispatching \
+                 fixes. "
+                    .to_string(),
+            ),
+            ("tier_reason_step_num", "5".to_string()),
+            ("tier_fix_step_num", "6".to_string()),
+            ("tier_final_step_num", "7".to_string()),
+            (
+                "tier_fix_wave_preamble",
+                "Before dispatching fixes to coders, shut down all current explorers via \
+                 `shutdown_request`. Spawn (or reuse) the Sonnet coder pool for the fix wave. \
+                 Use `build_runner_handoff_message` when rotating saturated coders."
+                    .to_string(),
+            ),
+        ];
+    }
+    vec![
+        (
+            "tier_role_description",
+            "The runners are your hands: they read files, they write fixes, you think. \
+             **Legacy two-tier mode** (`max_explorers=0`) — no Haiku explorer tier; runners \
+             handle both exploration and fixes."
+                .to_string(),
+        ),
+        (
+            "tier_loop_diagram",
+            "```\n   [you]                [runners]\n  Glob + Grep    →  (structural map, in your head)\n  rank + size pool  →  team-lead spawns N runners\n  dispatch explore  →  runners read files\n       ↑                     ↓\n       └── findings ←────────┘\n  reason + plan     →\n  dispatch fixes    →  runners implement\n       ↑                     ↓\n       └──  diffs  ←─────────┘\n  verify            →  final report to team-lead\n```"
+                .to_string(),
+        ),
+        (
+            "tier_pool_sizing_block",
+            "Scale the **runner** pool to the codebase (legacy mode — runners handle explore + fix)."
+                .to_string(),
+        ),
+        ("tier_pool_report_extra", String::new()),
+        (
+            "tier_explore_dispatch_block",
+            "## Step 3 — Watch for runner reports\nRunners receive their batch assignments inside \
+             their initial prompts and begin reading immediately on spawn — **do NOT send a \
+             separate explore dispatch**. Once team-lead confirms the pool is up, just watch your \
+             inbox. Team-lead relays every runner report to you verbatim as it arrives. Keep \
+             related files on the same runner; their accumulated context is why you picked that \
+             runner."
+                .to_string(),
+        ),
+        ("tier_synthesis_block", String::new()),
+        ("tier_reason_step_num", "4".to_string()),
+        ("tier_fix_step_num", "5".to_string()),
+        ("tier_final_step_num", "6".to_string()),
+        (
+            "tier_fix_wave_preamble",
+            "Before dispatching fixes to runners, shut down all current runners via \
+             `shutdown_request` and spawn a fresh pool of the same size for the fix wave. Use \
+             `build_runner_handoff_message` to generate a compact handoff brief for each incoming \
+             runner: which files the outgoing runner touched, the invariants to preserve, and the \
+             remaining fixes queued. Fresh runners start with clean context; the handoff brief \
+             is their only prior state. This eliminates cumulative-read context blowup from the \
+             explore wave bleeding into the fix wave."
+                .to_string(),
+        ),
+    ]
+}
 
 /// Single-pass placeholder substitution: replace each `{known}` exactly once,
 /// leaving unknown braces (and substituted-in braces) intact. Mirrors `_render`.
@@ -84,7 +208,7 @@ pub fn build_advisor_prompt(config: &TeamConfig, history_block: &str) -> String 
         )
     };
 
-    let mapping: Vec<(&str, String)> = vec![
+    let mut mapping: Vec<(&str, String)> = vec![
         ("team_name", sanitize_inline(&config.team_name)),
         ("target_dir", sanitize_inline(&config.target_dir)),
         ("file_types", sanitize_inline(&config.file_types)),
@@ -114,6 +238,7 @@ pub fn build_advisor_prompt(config: &TeamConfig, history_block: &str) -> String 
         ("history_block", safe_history_block),
         ("finding_schema", FINDING_SCHEMA.to_string()),
     ];
+    mapping.extend(tier_blocks(config));
     render(ADVISOR_TEMPLATE, &mapping)
 }
 

@@ -1313,6 +1313,8 @@ fn cmd_plan(args: PlanArgs) -> ExitCode {
                 &cfg.runner_model,
                 cfg.max_fixes_per_runner,
                 Some(cfg.max_runners),
+                &cfg.explorer_model,
+                cfg.max_explorers,
                 pricing_override.as_ref(),
                 None,
             ) {
@@ -2757,23 +2759,7 @@ fn cmd_doctor(
 // ── pipeline ─────────────────────────────────────────────────────────────────
 
 fn render_pipeline_text(cfg: &advisor::config::TeamConfig) -> String {
-    format!(
-        "## Pipeline reference\n\n\
-### Step 1: Reset and create the team\n\
-```\nTeamDelete()\nTeamCreate(name=\"{team}\")\n```\n\n\
-### Step 2: Spawn advisor FIRST (no runners yet)\n\
-```\nAgent(\n  name=\"advisor\",\n  description=\"Investigate, rank, and dispatch runners\",\n  model=\"{advisor_model}\",\n  subagent_type=\"advisor-executor\",\n  team_name=\"{team}\",\n  prompt=<build_advisor_prompt(config)>\n)\n```\n\n\
-### Step 3: Spawn the right-sized runner pool\n\
-Opus decides pool size. Spawn using Opus's verbatim per-runner prompts:\n\
-```\nAgent(\n  name=\"runner-N\",\n  model=\"{runner_model}\",\n  subagent_type=\"code-review\",\n  team_name=\"{team}\",\n  run_in_background=true,\n  prompt=<verbatim text from Opus's dispatch plan>\n)\n```\n\n\
-### Step 4: Live dialogue\n\
-Runners → team-lead → advisor. Advisor replies in real time.\n\n\
-### Step 5: Shutdown (individually)\n\
-```\nSendMessage({{\"to\": \"advisor\",  \"message\": {{\"type\": \"shutdown_request\"}}}})\nSendMessage({{\"to\": \"runner-1\", \"message\": {{\"type\": \"shutdown_request\"}}}})\n...\nTeamDelete()\n```\n",
-        team = cfg.team_name,
-        advisor_model = cfg.advisor_model,
-        runner_model = cfg.runner_model,
-    )
+    advisor::orchestrate::render_pipeline(cfg)
 }
 
 fn cmd_pipeline(

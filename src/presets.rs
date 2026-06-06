@@ -19,6 +19,7 @@ pub struct RulePack {
     pub extra_keywords_by_tier: Vec<(i64, Vec<&'static str>)>,
     pub test_command: Option<&'static str>,
     pub notes: Vec<&'static str>,
+    pub explorer_model: Option<&'static str>,
 }
 
 /// Return all presets, sorted by name. Mirrors Python `list_presets`.
@@ -181,6 +182,7 @@ fn all_presets() -> Vec<RulePack> {
             notes: vec![
                 "use when no python-web / python-cli preset fits \u{2014} the ranker still uses its language-aware baseline keywords",
             ],
+            explorer_model: None,
         },
         RulePack {
             name: "python-web",
@@ -193,6 +195,7 @@ fn all_presets() -> Vec<RulePack> {
             ],
             test_command: Some("pytest -q"),
             notes: vec!["pairs well with `--since origin/main` for PR reviews"],
+            explorer_model: None,
         },
         RulePack {
             name: "python-cli",
@@ -202,6 +205,7 @@ fn all_presets() -> Vec<RulePack> {
             extra_keywords_by_tier: vec![(3, vec!["subprocess", "shell=True", "os.system"])],
             test_command: Some("pytest -q"),
             notes: vec![],
+            explorer_model: None,
         },
         RulePack {
             name: "node-api",
@@ -214,6 +218,7 @@ fn all_presets() -> Vec<RulePack> {
             ],
             test_command: Some("npm test"),
             notes: vec![],
+            explorer_model: None,
         },
         RulePack {
             name: "typescript-react",
@@ -226,6 +231,7 @@ fn all_presets() -> Vec<RulePack> {
             )],
             test_command: Some("npm test"),
             notes: vec![],
+            explorer_model: None,
         },
         RulePack {
             name: "go-service",
@@ -238,6 +244,7 @@ fn all_presets() -> Vec<RulePack> {
             ],
             test_command: Some("go test ./..."),
             notes: vec![],
+            explorer_model: None,
         },
         RulePack {
             name: "rust-crate",
@@ -250,6 +257,7 @@ fn all_presets() -> Vec<RulePack> {
             ],
             test_command: Some("cargo test"),
             notes: vec!["`unwrap()` is flagged P4 \u{2014} expected in tests, suspicious in prod"],
+            explorer_model: None,
         },
     ]
 }

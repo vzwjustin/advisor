@@ -462,6 +462,8 @@ fn handle_get(state: &AppState, request: tiny_http::Request, bound_port: u16) {
                 runner_model,
                 max_fixes as i64,
                 Some(max_runners as i64),
+                crate::config::DEFAULT_EXPLORER_MODEL,
+                max_runners as i64,
                 None,
                 Some(&state.target),
             ) {

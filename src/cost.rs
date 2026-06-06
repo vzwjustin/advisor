@@ -14,6 +14,7 @@ pub const HAIKU_CENTS_PER_MTOK: (i64, i64) = (25, 125);
 /// Fixed token overheads used by the estimator.
 pub const ADVISOR_SYSTEM_TOKENS: i64 = 4_500;
 pub const RUNNER_SYSTEM_TOKENS: i64 = 2_000;
+pub const EXPLORER_SYSTEM_TOKENS: i64 = 1_500;
 pub const PER_MESSAGE_OVERHEAD_TOKENS: i64 = 300;
 
 /// Characters-per-token heuristic (English ~4, code ~3.5). Mirrors `CHARS_PER_TOKEN`.
@@ -69,6 +70,17 @@ pub struct CostEstimate {
     pub file_count: i64,
     pub advisor_model: String,
     pub runner_model: String,
+    pub explorer_model: String,
+    pub explorer_input_tokens_min: i64,
+    pub explorer_input_tokens_max: i64,
+    pub explorer_output_tokens_min: i64,
+    pub explorer_output_tokens_max: i64,
+    pub explorer_cost_usd_min: f64,
+    pub explorer_cost_usd_max: f64,
+    pub advisor_cost_usd_min: f64,
+    pub advisor_cost_usd_max: f64,
+    pub coder_cost_usd_min: f64,
+    pub coder_cost_usd_max: f64,
 }
 
 fn round4(x: f64) -> f64 {
@@ -83,6 +95,17 @@ impl CostEstimate {
             "file_count": self.file_count,
             "advisor_model": self.advisor_model,
             "runner_model": self.runner_model,
+            "explorer_model": self.explorer_model,
+            "explorer_input_tokens_min": self.explorer_input_tokens_min,
+            "explorer_input_tokens_max": self.explorer_input_tokens_max,
+            "explorer_output_tokens_min": self.explorer_output_tokens_min,
+            "explorer_output_tokens_max": self.explorer_output_tokens_max,
+            "explorer_cost_usd_min": round4(self.explorer_cost_usd_min),
+            "explorer_cost_usd_max": round4(self.explorer_cost_usd_max),
+            "advisor_cost_usd_min": round4(self.advisor_cost_usd_min),
+            "advisor_cost_usd_max": round4(self.advisor_cost_usd_max),
+            "coder_cost_usd_min": round4(self.coder_cost_usd_min),
+            "coder_cost_usd_max": round4(self.coder_cost_usd_max),
             "input_tokens_min": self.input_tokens_min,
             "input_tokens_max": self.input_tokens_max,
             "output_tokens_min": self.output_tokens_min,
@@ -117,6 +140,8 @@ pub fn estimate_cost(
     runner_model: &str,
     max_fixes_per_runner: i64,
     max_runners: Option<i64>,
+    explorer_model: &str,
+    max_explorers: i64,
     pricing: Option<&HashMap<String, (i64, i64)>>,
     target: Option<&Path>,
 ) -> Result<CostEstimate, String> {
@@ -167,22 +192,50 @@ pub fn estimate_cost(
         content_tokens += t;
     }
 
+    let explorer_limit = max_explorers.max(0);
+    let explorer_count = if explorer_limit > 0 && file_count > 0 {
+        explorer_limit.min(file_count)
+    } else {
+        0
+    };
+    let three_tier = explorer_count > 0;
+
     // MIN scenario.
-    let advisor_in_min = ADVISOR_SYSTEM_TOKENS + PER_MESSAGE_OVERHEAD_TOKENS * runner_count * 2;
-    let runner_in_min = runner_count * RUNNER_SYSTEM_TOKENS
-        + content_tokens
-        + runner_count * PER_MESSAGE_OVERHEAD_TOKENS;
-    let advisor_out_min = runner_count * 400;
-    let runner_out_min = runner_count * 800;
+    let mut advisor_in_min = ADVISOR_SYSTEM_TOKENS + PER_MESSAGE_OVERHEAD_TOKENS * runner_count * 2;
+    let (explorer_in_min, explorer_out_min, runner_in_min, runner_out_min) = if three_tier {
+        advisor_in_min += PER_MESSAGE_OVERHEAD_TOKENS * explorer_count * 2;
+        let explorer_in = explorer_count * EXPLORER_SYSTEM_TOKENS
+            + content_tokens
+            + explorer_count * PER_MESSAGE_OVERHEAD_TOKENS;
+        let explorer_out = explorer_count * 600;
+        let runner_in = runner_count * RUNNER_SYSTEM_TOKENS
+            + runner_count * PER_MESSAGE_OVERHEAD_TOKENS;
+        (explorer_in, explorer_out, runner_in, runner_count * 800)
+    } else {
+        let runner_in = runner_count * RUNNER_SYSTEM_TOKENS
+            + content_tokens
+            + runner_count * PER_MESSAGE_OVERHEAD_TOKENS;
+        (0, 0, runner_in, runner_count * 800)
+    };
+    let mut advisor_out_min = runner_count * 400;
+    if three_tier {
+        advisor_out_min += explorer_count * 300;
+    }
 
     // MAX scenario.
     let fix_rounds = max_fixes_per_runner.max(0) * runner_count;
     let advisor_in_max = advisor_in_min + fix_rounds * PER_MESSAGE_OVERHEAD_TOKENS * 2;
     let avg_file_tokens = content_tokens / file_count.max(1);
-    let runner_in_max =
-        runner_in_min + fix_rounds * (avg_file_tokens + PER_MESSAGE_OVERHEAD_TOKENS);
+    let (explorer_in_max, explorer_out_max, runner_in_max, runner_out_max) = if three_tier {
+        let runner_in = runner_in_min
+            + fix_rounds * (avg_file_tokens / 2 + PER_MESSAGE_OVERHEAD_TOKENS);
+        (explorer_in_min, explorer_out_min, runner_in, runner_out_min + fix_rounds * 600)
+    } else {
+        let runner_in =
+            runner_in_min + fix_rounds * (avg_file_tokens + PER_MESSAGE_OVERHEAD_TOKENS);
+        (0, 0, runner_in, runner_out_min + fix_rounds * 600)
+    };
     let advisor_out_max = advisor_out_min + fix_rounds * 200;
-    let runner_out_max = runner_out_min + fix_rounds * 600;
 
     let (adv_in_c, adv_out_c) = *pricing
         .get(family_of(advisor_model))
@@ -190,26 +243,59 @@ pub fn estimate_cost(
     let (run_in_c, run_out_c) = *pricing
         .get(family_of(runner_model))
         .unwrap_or(&pricing["sonnet"]);
+    let exp_fam = if three_tier {
+        family_of(explorer_model)
+    } else {
+        "haiku"
+    };
+    let (exp_in_c, exp_out_c) = *pricing.get(exp_fam).unwrap_or(&pricing["haiku"]);
 
     let dollars = |it: i64, ot: i64, ic: i64, oc: i64| -> f64 {
         (it * ic + ot * oc) as f64 / 1_000_000.0 / 100.0
     };
-    let cost_min = dollars(advisor_in_min, advisor_out_min, adv_in_c, adv_out_c)
-        + dollars(runner_in_min, runner_out_min, run_in_c, run_out_c);
-    let cost_max = dollars(advisor_in_max, advisor_out_max, adv_in_c, adv_out_c)
-        + dollars(runner_in_max, runner_out_max, run_in_c, run_out_c);
+    let adv_cost_min = dollars(advisor_in_min, advisor_out_min, adv_in_c, adv_out_c);
+    let adv_cost_max = dollars(advisor_in_max, advisor_out_max, adv_in_c, adv_out_c);
+    let run_cost_min = dollars(runner_in_min, runner_out_min, run_in_c, run_out_c);
+    let run_cost_max = dollars(runner_in_max, runner_out_max, run_in_c, run_out_c);
+    let exp_cost_min = if three_tier {
+        dollars(explorer_in_min, explorer_out_min, exp_in_c, exp_out_c)
+    } else {
+        0.0
+    };
+    let exp_cost_max = if three_tier {
+        dollars(explorer_in_max, explorer_out_max, exp_in_c, exp_out_c)
+    } else {
+        0.0
+    };
+    let cost_min = adv_cost_min + run_cost_min + exp_cost_min;
+    let cost_max = adv_cost_max + run_cost_max + exp_cost_max;
 
     Ok(CostEstimate {
-        input_tokens_min: advisor_in_min + runner_in_min,
-        input_tokens_max: advisor_in_max + runner_in_max,
-        output_tokens_min: advisor_out_min + runner_out_min,
-        output_tokens_max: advisor_out_max + runner_out_max,
+        input_tokens_min: advisor_in_min + runner_in_min + explorer_in_min,
+        input_tokens_max: advisor_in_max + runner_in_max + explorer_in_max,
+        output_tokens_min: advisor_out_min + runner_out_min + explorer_out_min,
+        output_tokens_max: advisor_out_max + runner_out_max + explorer_out_max,
         cost_usd_min: cost_min,
         cost_usd_max: cost_max,
         runner_count,
         file_count,
         advisor_model: advisor_model.to_string(),
         runner_model: runner_model.to_string(),
+        explorer_model: if three_tier {
+            explorer_model.to_string()
+        } else {
+            String::new()
+        },
+        explorer_input_tokens_min: explorer_in_min,
+        explorer_input_tokens_max: explorer_in_max,
+        explorer_output_tokens_min: explorer_out_min,
+        explorer_output_tokens_max: explorer_out_max,
+        explorer_cost_usd_min: exp_cost_min,
+        explorer_cost_usd_max: exp_cost_max,
+        advisor_cost_usd_min: adv_cost_min,
+        advisor_cost_usd_max: adv_cost_max,
+        coder_cost_usd_min: run_cost_min,
+        coder_cost_usd_max: run_cost_max,
     })
 }
 
@@ -237,20 +323,54 @@ pub fn format_estimate(est: &CostEstimate) -> String {
         "{:04}-{:02}-{:02}",
         PRICING_AS_OF.0, PRICING_AS_OF.1, PRICING_AS_OF.2
     );
-    format!(
-        "## Cost estimate\n\n- Files: {}\n- Runners: {}\n- Models: advisor={}, runners={}\n- Input tokens: {} – {}\n- Output tokens: {} – {}\n- **Est. cost: ${:.2} – ${:.2}**\n\n_Range covers review-only (min) to full fix waves (max). Actual cost depends on dialogue depth and fix count. Pricing as of {} — verify at https://www.anthropic.com/pricing._",
-        est.file_count,
-        est.runner_count,
-        est.advisor_model,
-        est.runner_model,
+    let mut lines = vec![
+        "## Cost estimate".to_string(),
+        String::new(),
+        format!("- Files: {}", est.file_count),
+        format!("- Runners: {}", est.runner_count),
+    ];
+    if !est.explorer_model.is_empty() {
+        lines.push(format!(
+            "- Models: advisor={}, explorers={}, coders={}",
+            est.advisor_model, est.explorer_model, est.runner_model
+        ));
+        lines.push(format!(
+            "- Explorer cost: ${:.2} – ${:.2}",
+            est.explorer_cost_usd_min, est.explorer_cost_usd_max
+        ));
+        lines.push(format!(
+            "- Advisor cost: ${:.2} – ${:.2}",
+            est.advisor_cost_usd_min, est.advisor_cost_usd_max
+        ));
+        lines.push(format!(
+            "- Coder cost: ${:.2} – ${:.2}",
+            est.coder_cost_usd_min, est.coder_cost_usd_max
+        ));
+    } else {
+        lines.push(format!(
+            "- Models: advisor={}, runners={}",
+            est.advisor_model, est.runner_model
+        ));
+    }
+    lines.push(format!(
+        "- Input tokens: {} – {}",
         group_thousands(est.input_tokens_min),
-        group_thousands(est.input_tokens_max),
+        group_thousands(est.input_tokens_max)
+    ));
+    lines.push(format!(
+        "- Output tokens: {} – {}",
         group_thousands(est.output_tokens_min),
-        group_thousands(est.output_tokens_max),
-        est.cost_usd_min,
-        est.cost_usd_max,
-        as_of,
-    )
+        group_thousands(est.output_tokens_max)
+    ));
+    lines.push(format!(
+        "- **Est. cost: ${:.2} – ${:.2}**",
+        est.cost_usd_min, est.cost_usd_max
+    ));
+    lines.push(String::new());
+    lines.push(format!(
+        "_Range covers review-only (min) to full fix waves (max). Actual cost depends on dialogue depth and fix count. Pricing as of {as_of} — verify at https://www.anthropic.com/pricing._"
+    ));
+    lines.join("\n")
 }
 
 /// Load a pricing override table from a JSON file. Mirrors `load_pricing`.
@@ -360,6 +480,8 @@ mod tests {
             "claude-sonnet-4-6",
             2,
             Some(5),
+            "claude-haiku-4-5",
+            0,
             None,
             None,
         )
@@ -386,6 +508,8 @@ mod tests {
             "haiku",
             3,
             Some(5),
+            "claude-haiku-4-5",
+            0,
             None,
             None,
         )
