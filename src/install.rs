@@ -151,10 +151,10 @@ fn reject_parent_file(target: &Path) -> Result<(), std::io::Error> {
         return Ok(());
     }
     if parent.exists() && !parent.is_dir() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::NotADirectory,
-            format!("{} is not a directory", parent.display()),
-        ));
+        return Err(std::io::Error::other(format!(
+            "{} is not a directory",
+            parent.display()
+        )));
     }
     Ok(())
 }
@@ -823,7 +823,7 @@ mod tests {
         std::fs::write(&not_dir, "").unwrap();
         let child = not_dir.join("CLAUDE.md");
         let err = reject_parent_file(&child).unwrap_err();
-        assert_eq!(err.kind(), std::io::ErrorKind::NotADirectory);
+        assert!(err.to_string().contains("is not a directory"));
     }
 
     #[test]
