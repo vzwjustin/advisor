@@ -161,12 +161,13 @@ fn reject_parent_file(target: &Path) -> Result<(), std::io::Error> {
 
 fn read_text_capped(path: &Path, max_bytes: usize) -> Result<String, std::io::Error> {
     let data = std::fs::read(path)?;
-    let data = if data.len() > max_bytes {
-        &data[..max_bytes]
-    } else {
-        &data
-    };
-    let s = String::from_utf8_lossy(data).into_owned();
+    if data.len() > max_bytes {
+        return Err(std::io::Error::other(format!(
+            "file {} exceeds {max_bytes} byte cap — refusing to load",
+            path.display()
+        )));
+    }
+    let s = String::from_utf8_lossy(&data).into_owned();
     Ok(s.replace("\r\n", "\n").replace('\r', "\n"))
 }
 
@@ -214,7 +215,18 @@ fn strip_all_blocks(text: &str) -> String {
 
 pub fn apply_nudge(existing: &str, body: &str) -> (String, InstallAction) {
     let block = render_block(body);
-    let has_block = existing.contains(START_MARKER) && existing.contains(END_MARKER);
+    let has_start = existing.contains(START_MARKER);
+    let has_end = existing.contains(END_MARKER);
+    if has_start && !has_end {
+        let stripped = existing.split(START_MARKER).next().unwrap_or(existing).trim();
+        let updated = if stripped.is_empty() {
+            block.clone()
+        } else {
+            format!("{stripped}\n\n{block}")
+        };
+        return (updated, InstallAction::Updated);
+    }
+    let has_block = has_start && has_end;
     if has_block {
         let stripped = strip_all_blocks(existing).trim().to_string();
         let updated = if stripped.is_empty() {
@@ -843,6 +855,14 @@ mod tests {
     }
 
     #[test]
+    fn apply_nudge_repairs_partial_start_marker() {
+        let partial = format!("preamble\n{START_MARKER}\norphaned");
+        let (contents, action) = apply_nudge(&partial, NUDGE_BODY);
+        assert_eq!(action, InstallAction::Updated);
+        assert!(contents.contains(END_MARKER));
+        assert_eq!(contents.matches(START_MARKER).count(), 1);
+    }
+
     fn apply_nudge_roundtrip() {
         let (contents, action) = apply_nudge("", NUDGE_BODY);
         assert_eq!(action, InstallAction::Installed);

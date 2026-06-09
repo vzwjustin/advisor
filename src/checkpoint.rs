@@ -138,8 +138,17 @@ pub fn load_checkpoint(target: &Path, run_id: &str) -> Result<Checkpoint, String
         })
     };
 
+    let loaded_run_id = req_str("run_id")?;
+    if loaded_run_id != run_id {
+        return Err(format!(
+            "checkpoint {}: run_id {:?} does not match filename id {:?}",
+            path.display(),
+            loaded_run_id,
+            run_id
+        ));
+    }
     Ok(Checkpoint {
-        run_id: req_str("run_id")?,
+        run_id: loaded_run_id,
         created_at: req_str("created_at")?,
         target: req_str("target")?,
         team_name: req_str("team_name")?,
@@ -259,6 +268,17 @@ mod tests {
             p.parent().unwrap().file_name().unwrap().to_str().unwrap(),
             v["checkpoint_path_dir"].as_str().unwrap()
         );
+    }
+
+    #[test]
+    fn load_rejects_run_id_mismatch() {
+        let dir = std::env::temp_dir().join(format!("advisor_cp_mismatch_{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(".advisor")).unwrap();
+        let cp_json = r#"{"run_id":"inner","created_at":"2026-06-04T00:00:00+00:00","target":"/repo","team_name":"review","file_types":"*.py","min_priority":3,"max_runners":5,"advisor_model":"claude-opus-4-7","runner_model":"claude-sonnet-4-6","tasks":[],"batches":[],"schema_version":"1.0"}"#;
+        std::fs::write(dir.join(".advisor").join("run-outer.json"), cp_json).unwrap();
+        let err = load_checkpoint(&dir, "outer").unwrap_err();
+        assert!(err.contains("does not match filename"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

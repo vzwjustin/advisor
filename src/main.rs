@@ -35,7 +35,8 @@ use advisor::orchestrate::advisor_prompt::build_advisor_prompt;
 use advisor::orchestrate::runner_prompts::build_runner_pool_prompt;
 use advisor::orchestrate::verify_dispatch::build_verify_dispatch_prompt;
 use advisor::presets;
-use advisor::rank::{self, fnmatch_match, load_advisorignore, rank_files};
+use advisor::fs::normalize_path;
+use advisor::rank::{self, load_advisorignore, path_matches_file_types, rank_files};
 use advisor::verify::{parse_findings_from_text, INCOMPLETE_FILE_PATH};
 use advisor::Finding;
 
@@ -751,6 +752,12 @@ fn coerce_finding_for_append(
         .unwrap_or("")
         .trim()
         .to_string();
+    let opt = |k: &str| {
+        map.get(k)
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
     Ok(advisor::history::HistoryEntry {
         timestamp,
         file_path: file_path.trim().to_string(),
@@ -763,6 +770,10 @@ fn coerce_finding_for_append(
             .and_then(|v| v.as_str())
             .unwrap_or("1.0")
             .to_string(),
+        evidence: opt("evidence"),
+        fix: opt("fix"),
+        rule_id: opt("rule_id"),
+        tool: opt("tool"),
     })
 }
 
@@ -849,7 +860,7 @@ fn cmd_history_append(
             .map(|e| {
                 (
                     e.run_id.clone(),
-                    e.file_path.clone(),
+                    normalize_path(&e.file_path),
                     e.severity.clone(),
                     e.description.clone(),
                 )
@@ -858,7 +869,7 @@ fn cmd_history_append(
         entries.retain(|e| {
             let key = (
                 e.run_id.clone(),
-                e.file_path.clone(),
+                normalize_path(&e.file_path),
                 e.severity.clone(),
                 e.description.clone(),
             );
@@ -1392,7 +1403,12 @@ fn discover(target: &Path, file_types: &str) -> Result<Vec<String>, String> {
             } else if ft.is_file() {
                 let name = entry.file_name();
                 let name = name.to_string_lossy();
-                if pats.iter().any(|pat| fnmatch_match(&name, pat)) {
+                let rel = path
+                    .strip_prefix(&root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                if path_matches_file_types(&rel, &name, &pats) {
                     let s = path.to_string_lossy().to_string();
                     if seen.insert(s.clone()) {
                         out.push(s);
@@ -1418,17 +1434,25 @@ fn filter_git_scope(target: &Path, files: Vec<String>, file_types: &str) -> Vec<
         .into_iter()
         .filter(|p| {
             if apply_types {
-                let name = Path::new(p)
+                let path_obj = Path::new(p);
+                let name = path_obj
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
-                if !pats.iter().any(|pat| fnmatch_match(&name, pat)) {
+                let rel = match (&target_resolved, path_obj.canonicalize()) {
+                    (Some(tr), Ok(rp)) if rp.starts_with(tr) => rp
+                        .strip_prefix(tr)
+                        .map(|r| r.to_string_lossy().replace('\\', "/"))
+                        .unwrap_or_else(|_| name.clone()),
+                    _ => p.replace('\\', "/"),
+                };
+                if !path_matches_file_types(&rel, &name, &pats) {
                     return false;
                 }
             }
             match (&target_resolved, Path::new(p).canonicalize()) {
                 (Some(tr), Ok(rp)) => rp.starts_with(tr),
-                _ => true,
+                _ => false,
             }
         })
         .collect()
@@ -1757,7 +1781,7 @@ fn fail_on_exit(threshold: &str, findings: &[Finding]) -> Option<u8> {
         "HIGH" => 3,
         "CRITICAL" => 4,
         "UNKNOWN" => 99,
-        _ => 0,
+        _ => 99,
     };
     if findings.iter().any(|f| rank(&f.severity) >= gate) {
         Some(4)
@@ -2460,7 +2484,7 @@ fn print_status(
     let update_ok = s
         .update_skill
         .as_ref()
-        .map_or(true, |u| u.present && u.current);
+        .is_none_or(|u| u.present && u.current);
     let healthy =
         s.nudge.present && s.nudge.current && s.skill.present && s.skill.current && update_ok;
 
@@ -2623,9 +2647,9 @@ fn cmd_install(
     };
     let strict_noop = strict
         && is_unchanged(&nudge_result)
-        && skill_result.as_ref().map_or(true, is_unchanged)
-        && update_result.as_ref().map_or(true, is_unchanged)
-        && codex_result.as_ref().map_or(true, is_unchanged);
+        && skill_result.as_ref().is_none_or(is_unchanged)
+        && update_result.as_ref().is_none_or(is_unchanged)
+        && codex_result.as_ref().is_none_or(is_unchanged);
     if failed {
         ExitCode::FAILURE
     } else if strict_noop {
@@ -2876,11 +2900,19 @@ fn cmd_live(action: LiveAction) -> ExitCode {
             let data_val: Option<serde_json::Value> = match data.as_deref() {
                 None => None,
                 Some("-") => {
-                    let mut buf = String::new();
-                    if let Err(e) = std::io::stdin().read_to_string(&mut buf) {
+                    let mut buf = Vec::new();
+                    if let Err(e) = std::io::stdin()
+                        .take((STDIN_LIMIT + 1) as u64)
+                        .read_to_end(&mut buf)
+                    {
                         eprintln!("error reading stdin: {e}");
                         return ExitCode::from(2);
                     }
+                    if buf.len() > STDIN_LIMIT {
+                        eprintln!("--data -: input exceeds {STDIN_LIMIT}-byte cap");
+                        return ExitCode::from(2);
+                    }
+                    let buf = String::from_utf8_lossy(&buf).into_owned();
                     if buf.trim().is_empty() {
                         eprintln!("--data -: stdin was empty; expected a JSON object");
                         return ExitCode::from(2);
