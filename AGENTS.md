@@ -2,22 +2,34 @@
 
 ## Cursor Cloud specific instructions
 
+### Environment install
+
+The repo on `main` is **Rust-only** (`advisor-rs` / `Cargo.toml`). There is no
+`pyproject.toml`. Use:
+
+```bash
+bash scripts/setup.sh
+```
+
+Cursor Cloud reads `.cursor/environment.json`, which runs that script before the
+agent starts. The script is idempotent (safe to re-run).
+
 ### Quick reference
 
-- **Package manager**: `uv` (lockfile: `uv.lock`)
-- **Sync deps**: `uv sync --all-extras`
-- **Lint**: `uv run ruff check advisor tests`
-- **Format**: `uv run ruff format advisor tests`
-- **Type check**: `uv run mypy advisor/`
-- **Tests**: `uv run pytest tests/ -v`
-- **All checks**: `uv run ruff check advisor tests && uv run mypy advisor/ && uv run pytest tests/ -v` (or `make check` with `.venv/bin/python`)
-- **Run CLI**: `uv run advisor <subcommand>` (e.g. `version`, `plan`, `doctor`, `status`, `presets`, `ui`)
-- **Web dashboard**: `uv run advisor ui --port 8765` (stdlib http.server, no extra deps)
+- **Setup / sync deps**: `bash scripts/setup.sh` (or `cargo build --locked` after toolchain is ready)
+- **Toolchain**: `rust-toolchain.toml` pins `stable` (needs edition-2024 support — Rust 1.85+)
+- **Build**: `cargo build`
+- **Tests**: `cargo test --locked`
+- **Lint**: `cargo clippy --all-targets -- -D warnings`
+- **Format**: `cargo fmt --check`
+- **All checks**: `make check` (clippy + fmt + test)
+- **Run CLI**: `cargo run -- <subcommand>` (e.g. `version`, `plan`, `presets`, `ui`)
+- **Web dashboard**: `cargo run -- ui --port 8765`
 
 ### Gotchas
 
-- Zero runtime dependencies — the package itself has `dependencies = []`. All dev tooling (pytest, ruff, mypy, hypothesis, pre-commit) is in the `[dev]` optional extra. Use `uv sync --all-extras` to get everything.
-- The `Makefile` targets assume `.venv/bin/python`; prefer `uv run <tool>` commands directly when working with uv.
-- `pyproject.toml` promotes `FutureWarning` to hard errors in pytest (`filterwarnings = ["error::FutureWarning"]`), so hypothesis fuzz tests will fail if any stdlib regex deprecation is triggered.
-- mypy is set to `strict = true` with `warn_unused_ignores = true`; tests are excluded via `[[tool.mypy.overrides]]`.
-- The `claude` and `codex` CLIs are not needed for development/testing — only for the live pipeline. `advisor doctor` will warn about their absence, but the tool is otherwise fully functional.
+- **No Python package on `main`**: `tests/*.py` and `uv sync` are legacy; CI uses `cargo test --locked`.
+- **Zero runtime deps** for the binary — only the Rust toolchain is required to build.
+- `Makefile` targets wrap `cargo` (see `make help` via targets in the Makefile).
+- The `claude` and `codex` CLIs are not needed for development/testing — only for the live pipeline.
+- If `cargo build` fails with `edition2024` / `idna_adapter`, run `rustup update stable` (handled by `scripts/setup.sh`).
