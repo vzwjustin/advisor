@@ -5,8 +5,7 @@ project; most contributions land in under a week. Here's how to get going.
 
 ## Prerequisites
 
-- Python 3.10+
-- `pip` or `uv`
+- [Rust](https://rustup.rs/) **1.85+** (stable; see `rust-toolchain.toml`)
 - `git`
 
 ## First-time setup
@@ -14,25 +13,22 @@ project; most contributions land in under a week. Here's how to get going.
 ```bash
 git clone https://github.com/vzwjustin/advisor
 cd advisor
-pip install -e ".[dev,completion]"
-make hooks    # installs pre-commit + runs it once
+bash scripts/setup.sh    # installs stable toolchain + cargo build --locked
 ```
 
-`make hooks` installs the ruff/ruff-format/mypy pre-commit hooks and the
-standard whitespace/YAML/TOML sanity checks. Everything is reproducible —
-the hook revisions are pinned in `.pre-commit-config.yaml`.
+Optional: `cargo install --path .` to put `advisor` on your PATH.
 
 ## The dev loop
 
 ```bash
-make check           # ruff + mypy + pytest — must pass before PR
-make test            # pytest only
-make fmt             # apply ruff format
-pytest --cov=advisor --cov-report=term-missing   # local coverage
+make check           # clippy + fmt + cargo test — must pass before PR
+make test            # cargo test
+make format          # cargo fmt
+make lint            # cargo clippy
 ```
 
-CI runs the same `make check` on Python 3.10–3.13 across Linux, macOS, and
-Windows (`.github/workflows/ci.yml`).
+CI runs `cargo test --locked`, `cargo fmt --check`, and `cargo clippy` on
+Linux, macOS, and Windows (`.github/workflows/ci.yml`).
 
 ## Project layout
 

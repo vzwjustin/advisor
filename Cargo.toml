@@ -2,7 +2,7 @@
 name = "advisor-rs"
 version = "0.8.5"
 edition = "2021"
-rust-version = "1.74"
+rust-version = "1.85"
 description = "Rust port of advisor — an Opus-led code-review-and-fix pipeline for Claude Code (in progress)."
 license = "MIT"
 repository = "https://github.com/vzwjustin/advisor"
