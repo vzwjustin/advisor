@@ -30,6 +30,7 @@ sha1 = "0.10"                                        # sarif rule-id + baseline 
 clap = { version = "4", features = ["derive"] }     # argparse CLI
 ureq = "2.9"                                        # urllib.request (PyPI / GitHub HTTP requests)
 tiny_http = "0.12"                                  # http.server (lightweight web dashboard)
+fs2 = "0.4"                                         # advisory flock on JSONL append paths
 
 [dev-dependencies]
 # Reserved for upcoming CLI integration + property parity tests

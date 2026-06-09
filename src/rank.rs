@@ -484,10 +484,21 @@ fn is_word(c: char) -> bool {
 /// with reasons attributed only to the winning tier, in first-match order.
 /// Mirrors `_score_file`.
 fn score_file(path: &str, content: &str, keyword_list: &[KeywordEntry]) -> (i64, Vec<String>) {
-    // combined = path[:256] + " " + content[:CONTENT_SCAN_LIMIT] (char-based)
+    // combined = path[:256] + content[:CONTENT_SCAN_LIMIT]; large files also
+    // append a trailing window so late-file auth keywords are not missed.
+    const TAIL_EXTRA: usize = 256;
+    let content_chars: Vec<char> = content.chars().collect();
     let mut combined: Vec<char> = path.chars().take(256).collect();
     combined.push(' ');
-    combined.extend(content.chars().take(CONTENT_SCAN_LIMIT));
+    combined.extend(content_chars.iter().take(CONTENT_SCAN_LIMIT).copied());
+    if content_chars.len() > CONTENT_SCAN_LIMIT {
+        combined.push(' ');
+        combined.extend(
+            content_chars[content_chars.len().saturating_sub(TAIL_EXTRA)..]
+                .iter()
+                .copied(),
+        );
+    }
 
     // Collect every boundary-valid candidate match.
     struct Cand {
@@ -1053,6 +1064,28 @@ pub fn fnmatch_match(name: &str, pattern: &str) -> bool {
         Ok(re) => re.is_match(name),
         Err(_) => false,
     }
+}
+
+/// Match a discovered file against a `--file-types` pattern using basename and,
+/// when the pattern contains path segments, the repo-relative path.
+pub fn file_matches_pattern(relative_path: &str, basename: &str, pattern: &str) -> bool {
+    if fnmatch_match(basename, pattern) {
+        return true;
+    }
+    if pattern.contains('/') || pattern.contains("**") {
+        if let Some(re) = try_double_star_regex(pattern) {
+            return re.is_match(relative_path);
+        }
+        return fnmatch_match(relative_path, pattern);
+    }
+    false
+}
+
+/// True when any comma-separated pattern matches the file.
+pub fn path_matches_file_types(relative_path: &str, basename: &str, patterns: &[&str]) -> bool {
+    patterns
+        .iter()
+        .any(|pat| file_matches_pattern(relative_path, basename, pat))
 }
 
 /// Never-match regex used as the inert fallback (mirrors `re.compile(r"$.^")`).

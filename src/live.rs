@@ -152,9 +152,15 @@ pub fn append_event(
         .append(true)
         .open(&path)
         .map_err(|e| e.to_string())?;
-    f.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
-    f.write_all(b"\n").map_err(|e| e.to_string())?;
-    f.flush().map_err(|e| e.to_string())?;
+    crate::fs::lock_exclusive(&f).map_err(|e| e.to_string())?;
+    let write_result = (|| -> Result<(), String> {
+        f.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+        f.write_all(b"\n").map_err(|e| e.to_string())?;
+        f.flush().map_err(|e| e.to_string())?;
+        Ok(())
+    })();
+    let _ = crate::fs::unlock(&f);
+    write_result?;
     Ok(path)
 }
 

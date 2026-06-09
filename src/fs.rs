@@ -157,8 +157,24 @@ pub fn read_text_capped(path: &std::path::Path, max_bytes: u64) -> Result<String
 /// Atomically write `text` to `target` (temp file in the same directory, then
 /// rename). Mirrors `_fs.atomic_write_text` for the default (no symlink/mode)
 /// path; the fsync/symlink-rejection nuances are tracked in PORT_NOTES.
+/// Exclusive advisory lock for append-heavy JSONL writers (history, live events).
+pub fn lock_exclusive(file: &std::fs::File) -> std::io::Result<()> {
+    fs2::FileExt::lock_exclusive(file)
+}
+
+/// Release an advisory lock acquired via [`lock_exclusive`].
+pub fn unlock(file: &std::fs::File) -> std::io::Result<()> {
+    fs2::FileExt::unlock(file)
+}
+
 pub fn atomic_write_text(target: &std::path::Path, text: &str) -> std::io::Result<()> {
     use std::io::Write;
+    if target.is_symlink() {
+        return Err(std::io::Error::other(format!(
+            "refusing to write through symlink: {}",
+            target.display()
+        )));
+    }
     let parent = target.parent().unwrap_or_else(|| std::path::Path::new("."));
     std::fs::create_dir_all(parent)?;
     let name = target
@@ -232,6 +248,21 @@ pub(crate) fn posix_normpath(path: &str) -> String {
     }
 }
 
+/// Read up to `max_bytes` from the end of a file (for bounded JSONL tail scans).
+pub fn read_tail_bytes(path: &std::path::Path, max_bytes: u64) -> std::io::Result<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path)?;
+    let size = file.metadata()?.len();
+    if size == 0 {
+        return Ok(Vec::new());
+    }
+    let chunk = size.min(max_bytes);
+    file.seek(SeekFrom::End(-(chunk as i64)))?;
+    let mut buf = vec![0u8; chunk as usize];
+    file.read_exact(&mut buf)?;
+    Ok(buf)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -289,6 +320,24 @@ mod tests {
         for (input, expected) in cases {
             assert_eq!(normalize_path(input), expected, "input={input:?}");
         }
+    }
+
+    #[test]
+    fn atomic_write_rejects_symlink_target() {
+        let dir = std::env::temp_dir().join(format!("advisor_fs_symlink_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("out.txt");
+        let payload = dir.join("payload.txt");
+        std::fs::write(&payload, "secret").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            symlink(&payload, &target).unwrap();
+            let err = atomic_write_text(&target, "overwrite").unwrap_err();
+            assert!(err.to_string().contains("symlink"));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
