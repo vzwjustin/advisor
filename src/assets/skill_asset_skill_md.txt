@@ -37,7 +37,7 @@ write it to a unique temp file, then Read it back and pass the content
 directly as the `prompt` parameter to Agent:
 
 ```bash
-TMPF=$(mktemp /tmp/advisor_prompt.XXXXXX.txt) && advisor prompt advisor TARGET --context 'CONTEXT' --quiet > "$TMPF" && echo "$TMPF"
+TMPF=$(mktemp) && advisor prompt advisor TARGET --context 'CONTEXT' --quiet > "$TMPF" && echo "$TMPF"
 ```
 
 If `advisor` is not on `python3`'s path (uv-tool installs), the command
@@ -46,7 +46,7 @@ above still works because `advisor` resolves via `$PATH`. If you get
 `head -1 $(which advisor)` and substitute it for `python3`:
 
 ```bash
-TMPF=$(mktemp /tmp/advisor_prompt.XXXXXX.txt) && /home/USER/.local/share/uv/tools/advisor-agent/bin/python3 -m advisor   prompt advisor TARGET --context 'CONTEXT' --quiet > "$TMPF" && echo "$TMPF"
+TMPF=$(mktemp) && /home/USER/.local/share/uv/tools/advisor-agent/bin/python3 -m advisor   prompt advisor TARGET --context 'CONTEXT' --quiet > "$TMPF" && echo "$TMPF"
 ```
 
 The Bash command prints the unique tmpfile path. Then `Read("<that path>")`
@@ -94,7 +94,7 @@ default_team_config(
 
 **Concrete example (use this pattern verbatim):**
 ```bash
-TMPF=$(mktemp /tmp/advisor_prompt.XXXXXX.txt) && advisor prompt advisor /Users/.../project   --context 'Audit codebase for UI enhancements'   --quiet > "$TMPF" && echo "$TMPF"
+TMPF=$(mktemp) && advisor prompt advisor /Users/.../project   --context 'Audit codebase for UI enhancements'   --quiet > "$TMPF" && echo "$TMPF"
 ```
 
 **NEVER do these:**

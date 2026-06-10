@@ -218,7 +218,11 @@ pub fn apply_nudge(existing: &str, body: &str) -> (String, InstallAction) {
     let has_start = existing.contains(START_MARKER);
     let has_end = existing.contains(END_MARKER);
     if has_start && !has_end {
-        let stripped = existing.split(START_MARKER).next().unwrap_or(existing).trim();
+        let stripped = existing
+            .split(START_MARKER)
+            .next()
+            .unwrap_or(existing)
+            .trim();
         let updated = if stripped.is_empty() {
             block.clone()
         } else {

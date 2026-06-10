@@ -150,6 +150,7 @@ pub fn append_event(
     let mut f = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
+        .read(true) // Windows LockFileEx needs read or write access on the handle
         .open(&path)
         .map_err(|e| e.to_string())?;
     crate::fs::lock_exclusive(&f).map_err(|e| e.to_string())?;
