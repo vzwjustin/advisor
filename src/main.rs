@@ -23,6 +23,7 @@ use advisor::fence::sanitize_inline;
 use advisor::focus::{
     self, create_focus_batches, create_focus_tasks, FocusBatch, FocusTask, DEFAULT_TASK_PROMPT,
 };
+use advisor::fs::normalize_path;
 use advisor::install::{
     codex_cli_available, get_installed_skill_version, get_status, install, install_skill,
     install_update_skill, load_changelog_sections, load_release_notes, uninstall_nudge,
@@ -35,7 +36,6 @@ use advisor::orchestrate::advisor_prompt::build_advisor_prompt;
 use advisor::orchestrate::runner_prompts::build_runner_pool_prompt;
 use advisor::orchestrate::verify_dispatch::build_verify_dispatch_prompt;
 use advisor::presets;
-use advisor::fs::normalize_path;
 use advisor::rank::{self, load_advisorignore, path_matches_file_types, rank_files};
 use advisor::verify::{parse_findings_from_text, INCOMPLETE_FILE_PATH};
 use advisor::Finding;
@@ -276,6 +276,9 @@ enum Command {
         /// Glob pattern(s) for files.
         #[arg(long, default_value = "*.py")]
         file_types: String,
+        /// User goal / review focus (use `-` to read from stdin).
+        #[arg(long)]
+        context: Option<String>,
     },
     /// Install the /advisor skill AND append the CLAUDE.md nudge.
     Install {
@@ -656,6 +659,7 @@ fn main() -> ExitCode {
             no_history,
             preset,
             file_types,
+            context,
         } => cmd_prompt(PromptArgs {
             step,
             target,
@@ -670,6 +674,7 @@ fn main() -> ExitCode {
             no_history,
             preset,
             file_types,
+            context,
         }),
         Command::CodexPlanCsv {
             target,
@@ -3054,6 +3059,7 @@ struct PromptArgs {
     no_history: bool,
     preset: Option<String>,
     file_types: String,
+    context: Option<String>,
 }
 
 fn cmd_prompt(args: PromptArgs) -> ExitCode {
@@ -3070,6 +3076,7 @@ fn cmd_prompt(args: PromptArgs) -> ExitCode {
         inp.preset = Some(p.to_string());
     }
     inp.file_types = args.file_types.clone();
+    inp.context = advisor::config::resolve_cli_context(args.context.as_deref());
     let cfg = default_team_config(inp);
 
     let text = match args.step.as_str() {
@@ -3368,6 +3375,16 @@ mod tests {
 
         assert_eq!(first, ExitCode::SUCCESS);
         assert_eq!(second, ExitCode::from(STRICT_NOOP_EXIT));
+    }
+
+    #[test]
+    fn prompt_accepts_context_flag() {
+        let mut inp = TeamConfigInput::new(".");
+        inp.context = advisor::config::resolve_cli_context(Some("find security bugs"));
+        let cfg = default_team_config(inp);
+        let text = build_advisor_prompt(&cfg, "");
+        assert!(text.contains("find security bugs"));
+        assert!(text.contains("user's goal"));
     }
 
     #[test]

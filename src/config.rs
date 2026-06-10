@@ -162,6 +162,20 @@ fn warn(msg: &str) {
     eprintln!("⚠ {msg}");
 }
 
+/// Resolve `--context` / `--context -` (stdin) to the context string stored on
+/// [`TeamConfig`]. Mirrors Python `_resolve_context`.
+pub fn resolve_cli_context(raw: Option<&str>) -> String {
+    match raw {
+        None | Some("") => String::new(),
+        Some("-") => {
+            let mut buf = String::new();
+            let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf);
+            buf
+        }
+        Some(s) => s.to_string(),
+    }
+}
+
 /// Create a default team configuration with env-var fallbacks, range clamping
 /// (with stderr warnings), and optional preset merge. Mirrors
 /// `default_team_config`.
@@ -233,6 +247,12 @@ pub fn default_team_config(input: TeamConfigInput) -> TeamConfig {
 
     if file_types_is_default {
         file_types = env_or("ADVISOR_FILE_TYPES", &file_types);
+    }
+    if file_types_is_default && file_types == "*.py" {
+        let root = std::path::Path::new(&target_dir);
+        if let Some(inferred) = crate::fs::infer_default_file_types(root) {
+            file_types = inferred;
+        }
     }
     if min_priority_is_default {
         min_priority = env_int_or("ADVISOR_MIN_PRIORITY", min_priority);
@@ -375,6 +395,16 @@ mod tests {
     fn date_stamp_must_be_eight_digits() {
         // Bounded version segment must not swallow a bogus date stamp.
         assert!(!is_known_model("claude-opus-4-99999999-extra"));
+    }
+
+    #[test]
+    fn resolve_cli_context_reads_literal_and_empty() {
+        assert_eq!(resolve_cli_context(None), "");
+        assert_eq!(resolve_cli_context(Some("")), "");
+        assert_eq!(
+            resolve_cli_context(Some("find auth bugs")),
+            "find auth bugs"
+        );
     }
 
     #[test]

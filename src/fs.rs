@@ -248,6 +248,115 @@ pub(crate) fn posix_normpath(path: &str) -> String {
     }
 }
 
+const INFER_SKIP_DIRS: &[&str] = &[
+    ".git",
+    "node_modules",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "dist",
+    "build",
+    "target",
+    ".advisor",
+    ".cursor",
+    "vendor",
+    "tests",
+    "test",
+    "__tests__",
+];
+
+const INFER_SOURCE_EXTS: &[&str] = &[
+    "py", "rs", "go", "js", "ts", "tsx", "jsx", "java", "kt", "cs", "rb", "php", "swift", "cpp",
+    "c",
+];
+
+/// When the caller left `file_types` at the `*.py` sentinel, infer a better
+/// default from project manifests and dominant source extensions under `root`.
+/// Returns `None` when the tree is empty or unreadable. Skips common
+/// vendor/build dirs and test trees so legacy `tests/*.py` does not mask a
+/// Rust/JS primary codebase.
+pub fn infer_default_file_types(root: &std::path::Path) -> Option<String> {
+    let root = root.canonicalize().ok()?;
+    if !root.is_dir() {
+        return None;
+    }
+    if root.join("Cargo.toml").is_file() {
+        return Some("*.rs".to_string());
+    }
+    if root.join("package.json").is_file() {
+        return Some("*.js,*.ts".to_string());
+    }
+    if root.join("go.mod").is_file() {
+        return Some("*.go".to_string());
+    }
+    if root.join("pyproject.toml").is_file() || root.join("setup.py").is_file() {
+        return Some("*.py".to_string());
+    }
+    let mut counts: std::collections::HashMap<&'static str, usize> =
+        INFER_SOURCE_EXTS.iter().copied().map(|e| (e, 0)).collect();
+    infer_count_extensions(&root, &mut counts);
+    let total: usize = counts.values().sum();
+    if total == 0 {
+        return None;
+    }
+
+    let js = counts["js"] + counts["jsx"];
+    let ts = counts["ts"] + counts["tsx"];
+    let js_ecosystem = js + ts;
+    if js_ecosystem > 0 {
+        let max_other = counts
+            .iter()
+            .filter(|(ext, _)| !matches!(**ext, "js" | "jsx" | "ts" | "tsx"))
+            .map(|(_, c)| *c)
+            .max()
+            .unwrap_or(0);
+        if js_ecosystem >= max_other {
+            let mut patterns = Vec::new();
+            if js > 0 {
+                patterns.push("*.js");
+            }
+            if ts > 0 {
+                patterns.push("*.ts");
+            }
+            if patterns.is_empty() {
+                patterns.push("*.js");
+            }
+            return Some(patterns.join(","));
+        }
+    }
+
+    let (ext, count) = counts.iter().max_by_key(|(_, count)| *count)?;
+    if *count == 0 {
+        return None;
+    }
+    Some(format!("*.{ext}"))
+}
+
+fn infer_count_extensions(
+    dir: &std::path::Path,
+    counts: &mut std::collections::HashMap<&str, usize>,
+) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut entries: Vec<_> = rd.flatten().collect();
+    entries.sort_by_key(|e| e.file_name());
+    for entry in entries {
+        let path = entry.path();
+        if path.is_dir() {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name.starts_with('.') || INFER_SKIP_DIRS.contains(&name) {
+                continue;
+            }
+            infer_count_extensions(&path, counts);
+        } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            if let Some(slot) = counts.get_mut(ext) {
+                *slot += 1;
+            }
+        }
+    }
+}
+
 /// Read up to `max_bytes` from the end of a file (for bounded JSONL tail scans).
 pub fn read_tail_bytes(path: &std::path::Path, max_bytes: u64) -> std::io::Result<Vec<u8>> {
     use std::io::{Read, Seek, SeekFrom};
@@ -349,5 +458,29 @@ mod tests {
         assert!(validate_file_types("/abs/*.py").is_err());
         assert!(validate_file_types("C:/x.py").is_err());
         assert!(validate_file_types("a/../b").is_err());
+    }
+
+    #[test]
+    fn infer_default_file_types_detects_rust_and_js() {
+        let dir = std::env::temp_dir().join(format!("advisor_infer_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::create_dir_all(dir.join("tests")).unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "fn main() {}").unwrap();
+        std::fs::write(dir.join("tests/legacy.py"), "def test_x(): pass").unwrap();
+        std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        assert_eq!(infer_default_file_types(&dir).as_deref(), Some("*.rs"));
+
+        let js_dir = dir.join("jsproj");
+        std::fs::create_dir_all(js_dir.join("src")).unwrap();
+        std::fs::write(js_dir.join("package.json"), "{}\n").unwrap();
+        std::fs::write(js_dir.join("src/index.js"), "export {}").unwrap();
+        std::fs::write(js_dir.join("src/util.ts"), "export {}").unwrap();
+        assert_eq!(
+            infer_default_file_types(&js_dir).as_deref(),
+            Some("*.js,*.ts")
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
