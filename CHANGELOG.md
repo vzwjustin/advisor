@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.6] - 2026-06-10
+
+CLI and file-type inference fixes from live `/advisor` pipeline feedback.
+
+### Added
+
+- **`advisor prompt --context`** — restore the `--context` flag (and
+  `--context -` stdin) on the `prompt` subcommand so generated advisor
+  prompts include the user's review goal.
+
+### Fixed
+
+- **macOS `mktemp` in skill template** — use bare `mktemp` instead of
+  `mktemp /tmp/advisor_prompt.XXXXXX.txt`, which fails on BSD/macOS.
+- **Default `file_types` inference** — detect primary language from
+  project manifests (`Cargo.toml`, `package.json`, `go.mod`,
+  `pyproject.toml`) instead of always defaulting to `*.py`; Node
+  manifests include `*.tsx`/`*.jsx`; presets apply before manifest
+  shortcuts.
+- **`infer_count_extensions` robustness** — skip symlinks (no loop
+  recursion), lowercase extension matching, fewer metadata syscalls via
+  `entry.file_type()`.
+- **Windows advisory file locks** — tolerate `Access denied` from `fs2`
+  on CI temp dirs; open append handles with `read(true)` for
+  `LockFileEx`.
+
 ## [0.8.5] - 2026-06-06
 
 Three-tier agent architecture (Advisor → Explorer → Coder) in the Rust
