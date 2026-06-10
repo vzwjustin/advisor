@@ -115,6 +115,7 @@ pub fn append_entries(target: &Path, entries: &[HistoryEntry]) -> std::io::Resul
     let mut f = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
+        .read(true) // Windows LockFileEx needs read or write access on the handle
         .open(&path)?;
     crate::fs::lock_exclusive(&f)?;
     let write_result = f.write_all(payload.as_bytes());

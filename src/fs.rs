@@ -5,6 +5,8 @@
 //! (reject path-traversal / absolute / NUL globs). The atomic-write and
 //! capped-read helpers are tracked in PORT_NOTES.md.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 /// Number of bytes scanned per file for keyword ranking (`CONTENT_SCAN_LIMIT`).
 pub const CONTENT_SCAN_LIMIT: usize = 1024;
 
@@ -157,14 +159,59 @@ pub fn read_text_capped(path: &std::path::Path, max_bytes: u64) -> Result<String
 /// Atomically write `text` to `target` (temp file in the same directory, then
 /// rename). Mirrors `_fs.atomic_write_text` for the default (no symlink/mode)
 /// path; the fsync/symlink-rejection nuances are tracked in PORT_NOTES.
+static LOCK_UNAVAILABLE_WARNED: AtomicBool = AtomicBool::new(false);
+
+/// Whether an advisory-lock failure is tolerable (NFS, Windows CI temp dirs, etc.).
+/// Mirrors Python `_lock_exclusive` continuing unlocked after `ENOLCK`/`ENOSYS`.
+fn lock_error_tolerable(err: &std::io::Error) -> bool {
+    if let Some(code) = err.raw_os_error() {
+        #[cfg(windows)]
+        {
+            // ERROR_ACCESS_DENIED, ERROR_LOCK_VIOLATION, ERROR_NOT_SUPPORTED
+            return matches!(code, 5 | 33 | 50);
+        }
+        #[cfg(unix)]
+        {
+            // EAGAIN/EWOULDBLOCK, ENOSYS, EOPNOTSUPP, ENOLCK, ENOTSUP
+            return matches!(code, 11 | 38 | 45 | 95 | 122);
+        }
+        #[cfg(not(any(windows, unix)))]
+        {
+            let _ = code;
+        }
+    }
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::Unsupported | std::io::ErrorKind::PermissionDenied
+    )
+}
+
+fn warn_lock_unavailable(err: &std::io::Error) {
+    if !LOCK_UNAVAILABLE_WARNED.swap(true, Ordering::Relaxed) {
+        eprintln!("⚠ advisory file lock unavailable ({err}); continuing without lock");
+    }
+}
+
 /// Exclusive advisory lock for append-heavy JSONL writers (history, live events).
+/// Best-effort: tolerates platform/NFS lock failures with a one-shot stderr warning.
 pub fn lock_exclusive(file: &std::fs::File) -> std::io::Result<()> {
-    fs2::FileExt::lock_exclusive(file)
+    match fs2::FileExt::lock_exclusive(file) {
+        Ok(()) => Ok(()),
+        Err(e) if lock_error_tolerable(&e) => {
+            warn_lock_unavailable(&e);
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Release an advisory lock acquired via [`lock_exclusive`].
 pub fn unlock(file: &std::fs::File) -> std::io::Result<()> {
-    fs2::FileExt::unlock(file)
+    match fs2::FileExt::unlock(file) {
+        Ok(()) => Ok(()),
+        Err(e) if lock_error_tolerable(&e) => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
 pub fn atomic_write_text(target: &std::path::Path, text: &str) -> std::io::Result<()> {
@@ -458,6 +505,19 @@ mod tests {
         assert!(validate_file_types("/abs/*.py").is_err());
         assert!(validate_file_types("C:/x.py").is_err());
         assert!(validate_file_types("a/../b").is_err());
+    }
+
+    #[test]
+    fn lock_error_tolerable_permission_denied() {
+        let err = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert!(lock_error_tolerable(&err));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn lock_error_tolerable_windows_access_denied_code() {
+        let err = std::io::Error::from_raw_os_error(5);
+        assert!(lock_error_tolerable(&err));
     }
 
     #[test]
