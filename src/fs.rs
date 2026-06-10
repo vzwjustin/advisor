@@ -331,7 +331,7 @@ pub fn infer_default_file_types(root: &std::path::Path) -> Option<String> {
         return Some("*.rs".to_string());
     }
     if root.join("package.json").is_file() {
-        return Some("*.js,*.ts".to_string());
+        return Some("*.js,*.ts,*.tsx,*.jsx".to_string());
     }
     if root.join("go.mod").is_file() {
         return Some("*.go".to_string());
@@ -365,6 +365,12 @@ pub fn infer_default_file_types(root: &std::path::Path) -> Option<String> {
             if ts > 0 {
                 patterns.push("*.ts");
             }
+            if counts["jsx"] > 0 {
+                patterns.push("*.jsx");
+            }
+            if counts["tsx"] > 0 {
+                patterns.push("*.tsx");
+            }
             if patterns.is_empty() {
                 patterns.push("*.js");
             }
@@ -389,16 +395,25 @@ fn infer_count_extensions(
     let mut entries: Vec<_> = rd.flatten().collect();
     entries.sort_by_key(|e| e.file_name());
     for entry in entries {
+        let Ok(ft) = entry.file_type() else {
+            continue;
+        };
+        if ft.is_symlink() {
+            continue;
+        }
         let path = entry.path();
-        if path.is_dir() {
+        if ft.is_dir() {
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if name.starts_with('.') || INFER_SKIP_DIRS.contains(&name) {
                 continue;
             }
             infer_count_extensions(&path, counts);
-        } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-            if let Some(slot) = counts.get_mut(ext) {
-                *slot += 1;
+        } else if ft.is_file() {
+            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                let ext_lower = ext.to_ascii_lowercase();
+                if let Some(slot) = counts.get_mut(ext_lower.as_str()) {
+                    *slot += 1;
+                }
             }
         }
     }
@@ -538,8 +553,43 @@ mod tests {
         std::fs::write(js_dir.join("src/util.ts"), "export {}").unwrap();
         assert_eq!(
             infer_default_file_types(&js_dir).as_deref(),
-            Some("*.js,*.ts")
+            Some("*.js,*.ts,*.tsx,*.jsx")
         );
+
+        let react_dir = dir.join("reactproj");
+        std::fs::create_dir_all(react_dir.join("src")).unwrap();
+        std::fs::write(react_dir.join("package.json"), "{}\n").unwrap();
+        std::fs::write(react_dir.join("src/App.tsx"), "export {}").unwrap();
+        assert_eq!(
+            infer_default_file_types(&react_dir).as_deref(),
+            Some("*.js,*.ts,*.tsx,*.jsx")
+        );
+
+        let upper_dir = dir.join("upper");
+        std::fs::create_dir_all(upper_dir.join("src")).unwrap();
+        std::fs::write(upper_dir.join("src/lib.RS"), "fn main() {}").unwrap();
+        assert_eq!(
+            infer_default_file_types(&upper_dir).as_deref(),
+            Some("*.rs")
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn infer_count_extensions_skips_symlink_loops() {
+        let dir = std::env::temp_dir().join(format!("advisor_infer_loop_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("main.rs"), "fn main() {}").unwrap();
+        use std::os::unix::fs::symlink;
+        symlink(".", dir.join("loop")).unwrap();
+
+        let mut counts: std::collections::HashMap<&str, usize> =
+            INFER_SOURCE_EXTS.iter().copied().map(|e| (e, 0)).collect();
+        infer_count_extensions(&dir, &mut counts);
+        assert_eq!(counts["rs"], 1);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

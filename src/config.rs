@@ -248,6 +248,15 @@ pub fn default_team_config(input: TeamConfigInput) -> TeamConfig {
     if file_types_is_default {
         file_types = env_or("ADVISOR_FILE_TYPES", &file_types);
     }
+    // Preset file_types before manifest inference so e.g. --preset typescript-react
+    // is not clobbered by package.json → *.js,*.ts,*.tsx,*.jsx.
+    if file_types_is_default && file_types == "*.py" {
+        if let Some(name) = &preset {
+            if let Ok(pack) = get_preset(name) {
+                file_types = pack.file_types.to_string();
+            }
+        }
+    }
     if file_types_is_default && file_types == "*.py" {
         let root = std::path::Path::new(&target_dir);
         if let Some(inferred) = crate::fs::infer_default_file_types(root) {
@@ -405,6 +414,23 @@ mod tests {
             resolve_cli_context(Some("find auth bugs")),
             "find auth bugs"
         );
+    }
+
+    #[test]
+    fn preset_file_types_apply_before_manifest_inference() {
+        let dir = std::env::temp_dir().join(format!("advisor_preset_infer_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("package.json"), "{}\n").unwrap();
+        std::fs::write(dir.join("App.tsx"), "export {}").unwrap();
+
+        let mut input = TeamConfigInput::new(dir.to_string_lossy().as_ref());
+        input.warn_unknown_model = false;
+        input.preset = Some("typescript-react".to_string());
+        let cfg = default_team_config(input);
+        assert_eq!(cfg.file_types, "*.ts,*.tsx");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
