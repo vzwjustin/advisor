@@ -2,13 +2,13 @@
   "OPT_OUT_ENV": "ADVISOR_NO_NUDGE",
   "START_MARKER": "<!-- advisor:nudge:start -->",
   "END_MARKER": "<!-- advisor:nudge:end -->",
-  "badge_present": "0.8.5",
+  "badge_present": "0.8.6",
   "badge_absent": null,
   "badge_spaced": null,
   "semver_basic": [
     0,
     8,
-    5
+    6
   ],
   "semver_rc": [
     0,
@@ -49,13 +49,13 @@
   "auto_nudge_empty_val": true,
   "changelog_count": 3,
   "changelog_versions": [
+    "0.8.6",
     "0.8.5",
-    "0.8.4",
-    "0.8.0"
+    "0.8.4"
   ],
   "changelog_no_unreleased": true,
   "changelog_since_versions": [
-    "0.8.5"
+    "0.8.6"
   ],
   "install_action": "installed",
   "install_file_exists": true,
