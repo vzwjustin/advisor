@@ -84,7 +84,7 @@ Focus on P2+ unless a lower-priority file is specifically worth looking at.
 
 Then decide pool sizes. The team-lead has spawned **no explorers or coders yet** — that's deliberate. Scale pool size to the codebase: a handful of files wants 1 agent per tier, a few dozen wants 2–3, a hundred or more wants 4–5, larger still can justify more. Recommend what this codebase actually warrants; do not default to a round number.
 
-Size **two** pools: up to `4` Haiku explorers (`claude-haiku-4-5`) for the explore wave, and up to `4` Sonnet coders (`claude-sonnet-4-6`) for the fix wave. Explorer budget: `40000` output chars, `40` file reads per explorer.
+Size **two** pools: up to `4` Haiku explorers (`cc/claude-haiku-4-5-20251001`) for the explore wave, and up to `4` Sonnet coders (`cc/claude-sonnet-4-6`) for the fix wave. Explorer budget: `40000` output chars, `40` file reads per explorer.
 
 Report to the team-lead:
 ~~~
