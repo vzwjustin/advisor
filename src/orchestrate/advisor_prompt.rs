@@ -285,4 +285,24 @@ mod tests {
             include_str!("../../tests/snapshots/advisor_prompt_full.txt")
         );
     }
+
+    /// `ADVISOR_UPDATE_SNAPSHOTS=1 cargo test write_advisor_prompt_snapshots -- --ignored`
+    #[test]
+    #[ignore]
+    fn write_advisor_prompt_snapshots() {
+        if std::env::var("ADVISOR_UPDATE_SNAPSHOTS").ok().as_deref() != Some("1") {
+            return;
+        }
+        let history = "- 2026-05-01: SQL injection in login form (HIGH)\n- 2026-05-08: missing CSRF on /api/transfer (MED)";
+        std::fs::write(
+            "tests/snapshots/advisor_prompt_minimal.txt",
+            build_advisor_prompt(&minimal(), ""),
+        )
+        .unwrap();
+        std::fs::write(
+            "tests/snapshots/advisor_prompt_full.txt",
+            build_advisor_prompt(&full(), history),
+        )
+        .unwrap();
+    }
 }

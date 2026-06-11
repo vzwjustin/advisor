@@ -2490,8 +2490,12 @@ fn print_status(
         .update_skill
         .as_ref()
         .is_none_or(|u| u.present && u.current);
-    let healthy =
-        s.nudge.present && s.nudge.current && s.skill.present && s.skill.current && update_ok;
+    let healthy = s.nudge.present
+        && s.nudge.current
+        && s.skill.present
+        && s.skill.current
+        && update_ok
+        && s.harness_types.ok;
 
     if json {
         let mut payload = serde_json::json!({
@@ -2518,6 +2522,17 @@ fn print_status(
                 "path": u.path.display().to_string(),
             });
         }
+        let expected: serde_json::Map<String, serde_json::Value> = s
+            .harness_types
+            .expected
+            .iter()
+            .map(|(role, typ)| (role.to_string(), serde_json::json!(typ)))
+            .collect();
+        payload["harness_agent_types"] = serde_json::json!({
+            "ok": s.harness_types.ok,
+            "issues": s.harness_types.issues,
+            "expected": expected,
+        });
         println!(
             "{}",
             ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
@@ -2540,6 +2555,13 @@ fn print_status(
         }
         if s.opt_out {
             println!("  (ADVISOR_NO_NUDGE is set)");
+        }
+        if s.harness_types.ok {
+            println!("  ✓ harness agent types: built-in only");
+        } else {
+            for issue in &s.harness_types.issues {
+                println!("  ~ harness: {issue}");
+            }
         }
         maybe_print_update_indicator();
     }
@@ -2840,7 +2862,7 @@ const PROTOCOL_TEXT: &str = concat!(
     "   TeamCreate(name=\"review\")\n\n",
     "2. Spawn advisor FIRST (no runners yet):\n",
     "   Agent(name=\"advisor\", description=\"Investigate, rank, and dispatch runners\",\n",
-    "         subagent_type=\"advisor-executor\", team_name=\"review\",\n",
+    "         subagent_type=\"generalPurpose\", team_name=\"review\",\n",
     "         prompt=<build_advisor_prompt(config)>)\n\n",
     "3. Advisor does Glob+Grep discovery, ranks P1-P5, decides runner pool size,\n",
     "   THEN sends a dispatch plan with a per-runner prompt for each runner.\n\n",

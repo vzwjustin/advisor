@@ -6,6 +6,8 @@
 //! gated) are tracked in PORT_NOTES.
 
 pub mod advisor_prompt;
+pub mod agent_specs;
+pub mod agent_types;
 pub mod explorer_prompts;
 pub mod pipeline;
 pub mod runner_prompts;
@@ -15,6 +17,11 @@ pub mod verify_dispatch;
 pub const FINDING_SCHEMA: &str = "- **File**: path:line_number\n- **Severity**: CRITICAL / HIGH / MEDIUM / LOW\n- **Description**: what the issue is\n- **Evidence**: the code path or proof\n- **Expected \u{2192} Actual**: *(MEDIUM+ only)* what you expected before reading this file \u{00b7} what you actually found — the divergence is the finding\n- **Fix**: suggested remediation";
 
 pub use advisor_prompt::build_advisor_prompt;
+pub use agent_specs::{build_advisor_agent, build_runner_pool_agents};
+pub use agent_types::{
+    ADVISOR_SUBAGENT_TYPE, DEPRECATED_SUBAGENT_TYPES, EXPLORER_SUBAGENT_TYPE, HARNESS_AGENT_TYPES,
+    RUNNER_SUBAGENT_TYPE,
+};
 pub use explorer_prompts::{build_explorer_pool_agents, build_explorer_prompt};
 pub use pipeline::render_pipeline;
 pub use runner_prompts::{

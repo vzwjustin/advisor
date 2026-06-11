@@ -22,9 +22,9 @@ and [`PORT_NOTES.md`](PORT_NOTES.md) for migration status.
 
 | Role | Model | Agent type | Job |
 |------|-------|------------|-----|
-| **Advisor** | Opus 4.7 (`claude-opus-4-7`) | `advisor-executor` | Glob+Grep discovery, P1–P5 ranking, sizes explorer + coder pools, writes per-agent prompts, dispatches explore + fix waves — stays live: redirects drift, answers questions, verifies each output, adjusts plan mid-wave |
+| **Advisor** | Opus 4.7 (`claude-opus-4-7`) | `generalPurpose` | Glob+Grep discovery, P1–P5 ranking, sizes explorer + coder pools, writes per-agent prompts, dispatches explore + fix waves — stays live: redirects drift, answers questions, verifies each output, adjusts plan mid-wave |
 | **Explorer pool** | Haiku 4.5 (`claude-haiku-4-5`) × N | `explore` | Read-only structural discovery on advisor-assigned file batches; reports findings to team-lead → advisor |
-| **Coder pool** | Sonnet 4.6 (`claude-sonnet-4-6`) × N | `code-review` | Long-lived fix workers; each gets a domain-specific prompt (with exploration context on fix assignments); reports findings + diffs to team-lead → advisor |
+| **Coder pool** | Sonnet 4.6 (`claude-sonnet-4-6`) × N | `generalPurpose` | Long-lived fix workers; each gets a domain-specific prompt (with exploration context on fix assignments); reports findings + diffs to team-lead → advisor |
 
 Priority scale: **P5** auth/secrets · **P4** user input/parsing · **P3** handlers/DB/exec · **P2** config/crypto/logging · **P1** utils/tests.
 

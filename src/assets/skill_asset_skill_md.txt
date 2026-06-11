@@ -54,9 +54,14 @@ and use its content as the Agent `prompt` parameter verbatim.
 
 **Step 5:** Spawn Agent with the prompt content from Step 4.
 
-**Step 6 (immediately after Step 5):** Send a begin trigger — agents in
-mailbox mode go idle until a message arrives. Without this, the advisor's
-first turn will never start:
+**First idle is expected (not failure).** Mailbox-mode agents idle until a
+message arrives. An immediate `idle_notification` with zero tool calls right
+after Step 5 is normal — the advisor prompt says "Begin immediately" but
+mailbox mode overrides that until Step 6 lands. Do not re-spawn or pivot
+to a different agent type.
+
+**Step 6 (immediately after Step 5):** Send a begin trigger — without this,
+the advisor's first turn will never start:
 
 ```
 SendMessage({ to: "advisor", summary: "Begin.", message: "Begin." })
@@ -167,15 +172,19 @@ TeamCreate({ team_name: "review", description: "Code review of <target>" })
 Agent({
   name: "advisor",
   description: "Investigate, rank, and dispatch runners",
-  subagent_type: "advisor-executor",
+  subagent_type: "generalPurpose",
   model: "claude-opus-4-7",
   team_name: "review",
   prompt: <build_advisor_prompt(config)>
 })
 ```
 
-**Immediately after spawning, send a begin trigger** — agents in mailbox
-mode go idle until a message arrives:
+Use built-in harness types only (`generalPurpose`, `explore`) — custom
+types like `advisor-executor` or `code-review` are not guaranteed to
+resolve and will wedge the run.
+
+**Immediately after spawning, send a begin trigger** — mailbox-mode agents
+idle until a message arrives (first idle is expected, not spawn failure):
 
 ```
 SendMessage({ to: "advisor", summary: "Begin.", message: "Begin." })
@@ -222,7 +231,7 @@ utilities.
 Agent({
   name: "runner-1",
   description: "Pool runner 1 — reads batch from initial prompt",
-  subagent_type: "code-review",
+  subagent_type: "generalPurpose",
   model: "claude-sonnet-4-6",
   team_name: "review",
   run_in_background: true,
@@ -264,6 +273,20 @@ SendMessage({
 
 Do not summarize, filter, or batch. Relay each report the moment it arrives. This is the fix for mailbox delivery failures — the advisor sees every finding through the relay even when direct delivery drops.
 
+**Team-lead drives verification (deadline nudge).** After relaying a runner
+report, if the advisor does not respond within one turn, nudge it:
+
+```
+SendMessage({
+  to: "advisor",
+  summary: "Verdict needed",
+  message: "Runner-N report relayed. Respond now: CONFIRM/NARROW/REDIRECT verdict for runner-N, or emit PROCESSING runner-N. Pending inbox = protocol violation."
+})
+```
+
+If the advisor verified runner-1 then idled without processing runner-2
+through runner-N, send the nudge naming the pending runners explicitly.
+
 Runners and Opus also talk continuously:
 
 - Runners SendMessage team-lead with **questions**, **progress pings**, **draft findings**, and **final reports** — team-lead relays each to advisor.
@@ -297,6 +320,21 @@ SendMessage({"to": "runner-1", "message": {"type": "shutdown_request"}})
 ...
 TeamDelete()
 ```
+
+### Hard-kill fallback (when shutdown wedges)
+
+If a teammate ignores `shutdown_request` (you sent it ≥2 times with no
+`shutdown_response` and they remain active), OR `TeamDelete()` refuses
+because active members remain:
+
+1. Log one line to the user: `HARD_KILL: <name> ignored N shutdown_requests`
+2. Retry `TeamDelete()` — some harness builds force-terminate wedged agents
+   when the team-lead retries after repeated shutdown failures
+3. If still blocked, tell the user to run `TeamDelete()` manually or restart
+   the Claude Code session — do not leave a zombie team blocking the next run
+
+Never refuse cleanup indefinitely. A wedged advisor with no escape hatch is
+worse than a force-deleted team.
 
 ## Live dashboard hooks (optional, best-effort)
 

@@ -87,7 +87,7 @@ def build_explorer_pool_agents(
         {
             "description": f"Pool explorer {i} — read-only file exploration",
             "name": f"explorer-{i}",
-            "subagent_type": "explorer",
+            "subagent_type": "explore",
             "model": config.explorer_model,
             "team_name": config.team_name,
             "run_in_background": True,
