@@ -28,8 +28,12 @@ pub fn build_advisor_agent(config: &TeamConfig) -> Value {
 pub fn build_runner_pool_agents(config: &TeamConfig, pool_size: Option<i64>) -> Vec<Value> {
     let raw_size = pool_size.unwrap_or(config.max_runners);
     let limit = config.max_runners.min(POOL_SIZE_CEILING);
-    let size = raw_size.clamp(1, limit);
-    if raw_size > limit {
+    let size = if limit < 1 {
+        0
+    } else {
+        raw_size.clamp(1, limit)
+    };
+    if limit >= 1 && raw_size > limit {
         eprintln!("⚠ pool_size={raw_size} exceeds runner pool limit of {limit}; using {limit}");
     }
     (1..=size)
@@ -71,6 +75,14 @@ mod tests {
             spec["prompt"].as_str().unwrap(),
             build_advisor_prompt(&config, "")
         );
+    }
+
+    #[test]
+    fn runner_pool_empty_when_max_runners_zero() {
+        let mut config = minimal();
+        config.max_runners = 0;
+        assert!(build_runner_pool_agents(&config, None).is_empty());
+        assert!(build_runner_pool_agents(&config, Some(5)).is_empty());
     }
 
     #[test]
