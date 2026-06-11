@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`ResponseAborted` during advising** — SKILL.md now requires spawning the
+  advisor and sending Begin in the **same turn** (parallel `Agent` +
+  `SendMessage`). Splitting across turns races the mailbox and often aborts the
+  stream (~6s, zero tool calls). Prefer bare `opus`/`sonnet` aliases; added
+  troubleshooting section for this log pattern.
 - **Opus 4.8 model ID mistakes** — `normalize_model_id` rewrites mid-form
   (`opus-4-8`) and dotted (`claude-opus-4.8`) IDs before spawn, and adds
   the Claude Code `cc/` prefix (`claude-opus-4-8` → `cc/claude-opus-4-8`).
