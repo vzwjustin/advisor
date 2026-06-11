@@ -7,7 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Default advisor model** is now `claude-opus-4-8` (was `claude-opus-4-7`).
+
 ### Fixed
+
+- **Opus 4.8 model ID mistakes** — `normalize_model_id` rewrites mid-form
+  (`opus-4-8`) and dotted (`claude-opus-4.8`) IDs before spawn, and adds
+  the Claude Code `cc/` prefix (`claude-opus-4-8` → `cc/claude-opus-4-8`).
+  Cursor thinking slugs are recognized by `is_known_model`.
 
 - **Opus orchestration stall** — advisor prompt now enforces a turn-terminal
   contract: every relayed runner report must get a CONFIRM/NARROW/REDIRECT
