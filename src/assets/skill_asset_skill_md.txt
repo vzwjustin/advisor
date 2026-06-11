@@ -88,8 +88,8 @@ default_team_config(
     max_runners: int | None = None,   # None → env ADVISOR_MAX_RUNNERS or 5
     min_priority: int = 3,
     context: str = "",          # ← user's request goes HERE (not 'user_request')
-    advisor_model: str = "claude-opus-4-8",
-    runner_model: str = "claude-sonnet-4-6",
+    advisor_model: str = "cc/claude-opus-4-8",
+    runner_model: str = "cc/claude-sonnet-4-6",
     # Common optional kwargs — see `advisor plan --help` for the full list
     preset: str | None = None,        # e.g. "python-web", "node-api"
     test_command: str = "",           # e.g. "pytest -q" — re-dispatch on failure
@@ -173,7 +173,7 @@ Agent({
   name: "advisor",
   description: "Investigate, rank, and dispatch runners",
   subagent_type: "generalPurpose",
-  model: "claude-opus-4-8",
+  model: "cc/claude-opus-4-8",
   team_name: "review",
   prompt: <build_advisor_prompt(config)>
 })
@@ -183,12 +183,12 @@ Use built-in harness types only (`generalPurpose`, `explore`) — custom
 types like `advisor-executor` or `code-review` are not guaranteed to
 resolve and will wedge the run.
 
-**Opus 4.8 model IDs:** Prefer bare `opus` (always-latest alias). When
-pinning, use `claude-opus-4-8` with **dashes**, never `claude-opus-4.8`
-(API 404) or `opus-4-8` (mid-form — Agent rejects). In Cursor, use the
-exact slug from your session model picker (e.g.
-`claude-opus-4-8-thinking-high`). Run `claude update` if Opus 4.8 is
-missing from `/model`.
+**Model IDs from `/model`:** Copy the exact custom slug from your picker —
+e.g. `cc/claude-opus-4-8` (option 2), `cc/claude-sonnet-4-6`,
+`cc/claude-haiku-4-5-20251001`. Option 1 (session default) works with
+bare `opus` / `sonnet` / `haiku` instead of pinning. Never use
+`claude-opus-4.8` (dot) or `opus-4-8` (mid-form). Bare `claude-opus-4-8`
+(without `cc/`) often fails spawn when your picker shows `cc/…` slugs.
 
 **Immediately after spawning, send a begin trigger** — mailbox-mode agents
 idle until a message arrives (first idle is expected, not spawn failure):
@@ -239,7 +239,7 @@ Agent({
   name: "runner-1",
   description: "Pool runner 1 — reads batch from initial prompt",
   subagent_type: "generalPurpose",
-  model: "claude-sonnet-4-6",
+  model: "cc/claude-sonnet-4-6",
   team_name: "review",
   run_in_background: true,
   prompt: <verbatim text from Opus's "### runner-1 / #### Prompt" block>
@@ -366,7 +366,7 @@ Three checkpoints, three event kinds:
    meaningful context.
 
    ```bash
-   advisor live record --kind run_start      --data '{"target":"<absolute path>","user_goal":"<short goal>","advisor_model":"claude-opus-4-8","runner_model":"claude-sonnet-4-6"}'      <target> || true
+   advisor live record --kind run_start      --data '{"target":"<absolute path>","user_goal":"<short goal>","advisor_model":"cc/claude-opus-4-8","runner_model":"cc/claude-sonnet-4-6"}'      <target> || true
    ```
 
 2. **`report_relay`** — every time a runner report arrives in your
