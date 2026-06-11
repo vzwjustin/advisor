@@ -5,6 +5,8 @@ use std::collections::HashMap;
 use crate::config::{TeamConfig, POOL_SIZE_CEILING};
 use crate::fence::sanitize_inline;
 
+use super::agent_types::EXPLORER_SUBAGENT_TYPE;
+
 const EXPLORER_TEMPLATE: &str = include_str!("../assets/explorer.txt");
 
 fn format_target_files(target_files: &[String], guidance: &HashMap<String, String>) -> String {
@@ -69,7 +71,7 @@ pub fn build_explorer_pool_agents(
             serde_json::json!({
                 "description": format!("Pool explorer {i} — read-only file exploration"),
                 "name": format!("explorer-{i}"),
-                "subagent_type": "explorer",
+                "subagent_type": EXPLORER_SUBAGENT_TYPE,
                 "model": config.explorer_model,
                 "team_name": config.team_name,
                 "run_in_background": true,

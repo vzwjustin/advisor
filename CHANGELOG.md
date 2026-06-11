@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Opus orchestration stall** — advisor prompt now enforces a turn-terminal
+  contract: every relayed runner report must get a CONFIRM/NARROW/REDIRECT
+  verdict or a `PROCESSING runner-N` line; pending inbox + idle is a protocol
+  violation. Shutdown requests are highest priority.
+- **Team-lead verification driver** — SKILL.md instructs team-lead to nudge the
+  advisor when it idles after relaying a runner report.
+- **Hard-kill fallback** — SKILL.md documents escape hatch when
+  `shutdown_request` is ignored and `TeamDelete()` blocks on active members.
+- **First-turn idle** — SKILL.md documents that mailbox-mode spawn idle is
+  expected, not a spawn failure.
+- **Built-in subagent types** — drop custom `advisor-executor` /
+  `code-review` types; use `generalPurpose` (advisor + runners) and `explore`
+  (explorer tier). `advisor status` / `doctor` now verify harness agent types.
+
 ## [0.8.6] - 2026-06-10
 
 CLI and file-type inference fixes from live `/advisor` pipeline feedback.
