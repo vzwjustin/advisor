@@ -22,7 +22,7 @@ Uncommitted changes block rebase/merge every time — always stash first:
 
 ### Advisor pipeline gotchas
 - `SendMessage` with a string `message` **requires** a `summary` param or it errors: `summary is required when message is a string`
-- Agent `model` field: only bare aliases (`opus`, `sonnet`, `haiku`) or full IDs (`claude-opus-4-7`) — mid-form strings error
+- Agent `model` field: only bare aliases (`opus`, `sonnet`, `haiku`) or full IDs (`claude-opus-4-8`) — mid-form strings like `opus-4-8` error (advisor CLI normalizes these automatically)
 - `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` must be set in env for TeamCreate/TeamDelete/SendMessage
 
 ### Large files (>800 LOC → 3-fix cap in advisor pipeline)
@@ -37,13 +37,13 @@ Uncommitted changes block rebase/merge every time — always stash first:
 
 
 Two-model team using Claude Code's TeamCreate/Agent/SendMessage. No external API calls.
-Models configurable via `TeamConfig(advisor_model=, runner_model=)` — defaults: `claude-opus-4-7` / `claude-sonnet-4-6`. Claude Code's Agent() tool accepts bare aliases (`opus`, `sonnet`, `haiku`) for "always-latest" or full `claude-<family>-<version>` IDs to pin a specific version; mid-form strings like `opus-4-5` are not accepted.
+Models configurable via `TeamConfig(advisor_model=, runner_model=)` — defaults: `claude-opus-4-8` / `claude-sonnet-4-6`. Claude Code's Agent() tool accepts bare aliases (`opus`, `sonnet`, `haiku`) for "always-latest" or full `claude-<family>-<version>` IDs to pin a specific version; mid-form strings like `opus-4-5` are not accepted.
 
 ## Team Roles
 
 | Role | Default Model | Agent Type | Job |
 |------|---------------|------------|-----|
-| **Advisor** | Opus 4.7 (`claude-opus-4-7`) | `generalPurpose` | Glob+Grep discovery, ranks P1–P5, sizes runner pool, **writes a unique, file-aware prompt for every runner**, dispatches explore + fix waves, live dialogue with runners, verifies each output as it lands |
+| **Advisor** | Opus 4.8 (`claude-opus-4-8`) | `generalPurpose` | Glob+Grep discovery, ranks P1–P5, sizes runner pool, **writes a unique, file-aware prompt for every runner**, dispatches explore + fix waves, live dialogue with runners, verifies each output as it lands |
 | **Runner** | Sonnet 4.6 (`claude-sonnet-4-6`) | `generalPurpose` | Reads files, finds issues, implements fixes. Each runner gets a domain-specific prompt from the advisor — not a generic template. Works ONLY on what the advisor hands it. In constant two-way conversation with the advisor (via team-lead relay). |
 
 ## Pipeline
@@ -69,7 +69,7 @@ context from its discovery pass.
 Agent(
   name="advisor",
   subagent_type="generalPurpose",
-  model="claude-opus-4-7",
+  model="claude-opus-4-8",
   team_name="review",
   prompt=<build_advisor_prompt(config)>
 )

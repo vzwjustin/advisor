@@ -22,7 +22,7 @@ and [`PORT_NOTES.md`](PORT_NOTES.md) for migration status.
 
 | Role | Model | Agent type | Job |
 |------|-------|------------|-----|
-| **Advisor** | Opus 4.7 (`claude-opus-4-7`) | `generalPurpose` | Glob+Grep discovery, P1–P5 ranking, sizes explorer + coder pools, writes per-agent prompts, dispatches explore + fix waves — stays live: redirects drift, answers questions, verifies each output, adjusts plan mid-wave |
+| **Advisor** | Opus 4.8 (`claude-opus-4-8`) | `generalPurpose` | Glob+Grep discovery, P1–P5 ranking, sizes explorer + coder pools, writes per-agent prompts, dispatches explore + fix waves — stays live: redirects drift, answers questions, verifies each output, adjusts plan mid-wave |
 | **Explorer pool** | Haiku 4.5 (`claude-haiku-4-5`) × N | `explore` | Read-only structural discovery on advisor-assigned file batches; reports findings to team-lead → advisor |
 | **Coder pool** | Sonnet 4.6 (`claude-sonnet-4-6`) × N | `generalPurpose` | Long-lived fix workers; each gets a domain-specific prompt (with exploration context on fix assignments); reports findings + diffs to team-lead → advisor |
 
@@ -151,13 +151,13 @@ long scope description is supported via `--context -` (reads stdin).
 
 Flags: `--team`, `--file-types`, `--max-runners` (advisory — Opus may
 exceed for large repos), `--min-priority`, `--context`, `--advisor-model`,
-`--runner-model`. Default models: `claude-opus-4-7` / `claude-sonnet-4-6` / `claude-haiku-4-5` (full IDs pin the version; bare aliases `opus`/`sonnet`/`haiku` resolve to the latest at spawn time).
+`--runner-model`. Default models: `claude-opus-4-8` / `claude-sonnet-4-6` / `claude-haiku-4-5` (full IDs pin the version; bare aliases `opus`/`sonnet`/`haiku` resolve to the latest at spawn time). Mid-form IDs like `opus-4-8` are auto-normalized to `claude-opus-4-8`.
 
 Environment overrides (also read by `default_team_config`):
 
 | Variable | Default | Effect |
 |----------|---------|--------|
-| `ADVISOR_MODEL` | `claude-opus-4-7` | Advisor model |
+| `ADVISOR_MODEL` | `claude-opus-4-8` | Advisor model |
 | `ADVISOR_RUNNER_MODEL` | `claude-sonnet-4-6` | Coder model |
 | `ADVISOR_EXPLORER_MODEL` | `claude-haiku-4-5` | Explorer model |
 | `ADVISOR_MAX_RUNNERS` | `5` | Suggested coder pool size |

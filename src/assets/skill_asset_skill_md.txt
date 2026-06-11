@@ -88,7 +88,7 @@ default_team_config(
     max_runners: int | None = None,   # None → env ADVISOR_MAX_RUNNERS or 5
     min_priority: int = 3,
     context: str = "",          # ← user's request goes HERE (not 'user_request')
-    advisor_model: str = "claude-opus-4-7",
+    advisor_model: str = "claude-opus-4-8",
     runner_model: str = "claude-sonnet-4-6",
     # Common optional kwargs — see `advisor plan --help` for the full list
     preset: str | None = None,        # e.g. "python-web", "node-api"
@@ -173,7 +173,7 @@ Agent({
   name: "advisor",
   description: "Investigate, rank, and dispatch runners",
   subagent_type: "generalPurpose",
-  model: "claude-opus-4-7",
+  model: "claude-opus-4-8",
   team_name: "review",
   prompt: <build_advisor_prompt(config)>
 })
@@ -182,6 +182,13 @@ Agent({
 Use built-in harness types only (`generalPurpose`, `explore`) — custom
 types like `advisor-executor` or `code-review` are not guaranteed to
 resolve and will wedge the run.
+
+**Opus 4.8 model IDs:** Prefer bare `opus` (always-latest alias). When
+pinning, use `claude-opus-4-8` with **dashes**, never `claude-opus-4.8`
+(API 404) or `opus-4-8` (mid-form — Agent rejects). In Cursor, use the
+exact slug from your session model picker (e.g.
+`claude-opus-4-8-thinking-high`). Run `claude update` if Opus 4.8 is
+missing from `/model`.
 
 **Immediately after spawning, send a begin trigger** — mailbox-mode agents
 idle until a message arrives (first idle is expected, not spawn failure):
@@ -359,7 +366,7 @@ Three checkpoints, three event kinds:
    meaningful context.
 
    ```bash
-   advisor live record --kind run_start      --data '{"target":"<absolute path>","user_goal":"<short goal>","advisor_model":"claude-opus-4-7","runner_model":"claude-sonnet-4-6"}'      <target> || true
+   advisor live record --kind run_start      --data '{"target":"<absolute path>","user_goal":"<short goal>","advisor_model":"claude-opus-4-8","runner_model":"claude-sonnet-4-6"}'      <target> || true
    ```
 
 2. **`report_relay`** — every time a runner report arrives in your
