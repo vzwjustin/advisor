@@ -49,8 +49,8 @@ pub use baseline::{
 pub use checkpoint::{checkpoint_path, list_checkpoints, load_checkpoint, Checkpoint};
 pub use codex_skill::{build_codex_runner_prompt, render_codex_skill_md};
 pub use config::{
-    default_team_config, is_known_model, TeamConfig, TeamConfigInput, DEFAULT_ADVISOR_MODEL,
-    DEFAULT_RUNNER_MODEL, POOL_SIZE_CEILING,
+    default_team_config, is_known_model, normalize_model_id, TeamConfig, TeamConfigInput,
+    DEFAULT_ADVISOR_MODEL, DEFAULT_RUNNER_MODEL, POOL_SIZE_CEILING,
 };
 pub use cost::{estimate_cost, format_estimate, load_pricing, CostEstimate};
 pub use doctor::{format_report, run_doctor, Check, DoctorReport, HealthLevel};
