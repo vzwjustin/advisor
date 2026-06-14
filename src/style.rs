@@ -93,9 +93,12 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn ignore_sigpipe_maps_closed_pipe_to_broken_pipe_error() {
+        use std::os::unix::net::UnixStream;
+
         ignore_sigpipe();
-        let (reader, mut writer) = std::io::pipe().expect("pipe");
+        let (reader, mut writer) = UnixStream::pair().expect("pipe");
         drop(reader);
         let err = writer.write_all(b"x").unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
