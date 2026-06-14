@@ -1072,15 +1072,15 @@ mod tests {
             .unwrap_or_default()
             .as_secs();
         let mock_cache = serde_json::json!({
-            "latest": "0.8.7",
+            "latest": "0.8.8",
             "checked_at": now
         });
         std::fs::write(&cache_file, serde_json::to_string(&mock_cache).unwrap()).unwrap();
 
-        let res = check_for_update_cached("0.8.6", 86400, Some(&cache_file));
-        assert_eq!(res, Some("0.8.7".to_string()));
-
         let res = check_for_update_cached("0.8.7", 86400, Some(&cache_file));
+        assert_eq!(res, Some("0.8.8".to_string()));
+
+        let res = check_for_update_cached("0.8.8", 86400, Some(&cache_file));
         assert_eq!(res, None);
 
         invalidate_update_check_cache(Some(&cache_file));

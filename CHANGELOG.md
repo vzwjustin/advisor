@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.7] - 2026-06-14
+
+Opus 4.8 / orchestration hardening, CLI robustness, and PR #1 parity fixes.
+
 ### Changed
 
 - **Default advisor model** is now `claude-opus-4-8` (was `claude-opus-4-7`).
@@ -28,7 +32,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`opus-4-8`) and dotted (`claude-opus-4.8`) IDs before spawn, and adds
   the Claude Code `cc/` prefix (`claude-opus-4-8` → `cc/claude-opus-4-8`).
   Cursor thinking slugs are recognized by `is_known_model`.
-
 - **Opus orchestration stall** — advisor prompt now enforces a turn-terminal
   contract: every relayed runner report must get a CONFIRM/NARROW/REDIRECT
   verdict or a `PROCESSING runner-N` line; pending inbox + idle is a protocol
