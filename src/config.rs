@@ -218,6 +218,9 @@ fn warn(msg: &str) {
     eprintln!("⚠ {msg}");
 }
 
+/// Max bytes read from stdin (`_STDIN_LIMIT` in Python / `main.rs`).
+pub const STDIN_READ_LIMIT: usize = 50 * 1024 * 1024;
+
 /// Read stdin without blocking when nothing is piped.
 ///
 /// In some non-interactive environments stdin is not a TTY but is also empty;
@@ -241,27 +244,14 @@ pub fn read_stdin_if_available(default: &str, cap: usize) -> String {
 fn stdin_has_data() -> bool {
     use std::os::unix::io::AsRawFd;
 
-    #[repr(C)]
-    struct PollFd {
-        fd: i32,
-        events: i16,
-        revents: i16,
-    }
-
-    const POLLIN: i16 = 0x0001;
-
-    extern "C" {
-        fn poll(fds: *mut PollFd, nfds: u64, timeout: i32) -> i32;
-    }
-
     let fd = std::io::stdin().as_raw_fd();
-    let mut pfd = PollFd {
+    let mut pfd = libc::pollfd {
         fd,
-        events: POLLIN,
+        events: libc::POLLIN,
         revents: 0,
     };
-    let ready = unsafe { poll(&mut pfd, 1, 0) };
-    ready > 0 && (pfd.revents & POLLIN) != 0
+    let ready = unsafe { libc::poll(&mut pfd, 1, 0) };
+    ready > 0 && (pfd.revents & libc::POLLIN) != 0
 }
 
 #[cfg(not(unix))]
@@ -275,7 +265,7 @@ fn stdin_has_data() -> bool {
 pub fn resolve_cli_context(raw: Option<&str>) -> String {
     match raw {
         None | Some("") => String::new(),
-        Some("-") => read_stdin_if_available("", usize::MAX),
+        Some("-") => read_stdin_if_available("", STDIN_READ_LIMIT),
         Some(s) => s.to_string(),
     }
 }

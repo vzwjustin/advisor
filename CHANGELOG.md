@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Python `_print` / `BrokenPipeError` → exit 0.
 - **Non-blocking stdin for prompt verify** — `advisor prompt verify` no longer
   blocks forever when stdin is non-interactive but empty; uses
-  `read_stdin_if_available` (PR #1).
+  `read_stdin_if_available` (PR #1). `--context -` is capped at 50 MiB.
 - **`ResponseAborted` during advising** — SKILL.md now requires spawning the
   advisor and sending Begin in the **same turn** (parallel `Agent` +
   `SendMessage`). Splitting across turns races the mailbox and often aborts the

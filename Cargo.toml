@@ -32,6 +32,9 @@ ureq = "2.9"                                        # urllib.request (PyPI / Git
 tiny_http = "0.12"                                  # http.server (lightweight web dashboard)
 fs2 = "0.4"                                         # advisory flock on JSONL append paths
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"                                        # poll(2) for non-blocking stdin probe
+
 [dev-dependencies]
 # Reserved for upcoming CLI integration + property parity tests
 # (assert_cmd / predicates / proptest) per RUST_PORT_PLAN.md §3.
