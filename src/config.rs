@@ -2,6 +2,8 @@
 //! plus the [`TeamConfig`] dataclass and the [`default_team_config`] assembler
 //! (env-var fallbacks, range clamping with stderr warnings, preset merge).
 
+use std::io::{IsTerminal, Read};
+
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -216,16 +218,64 @@ fn warn(msg: &str) {
     eprintln!("⚠ {msg}");
 }
 
+/// Read stdin without blocking when nothing is piped.
+///
+/// In some non-interactive environments stdin is not a TTY but is also empty;
+/// a blocking read would hang forever. Mirrors Python `_read_stdin_if_available`.
+pub fn read_stdin_if_available(default: &str, cap: usize) -> String {
+    if std::io::stdin().is_terminal() {
+        return default.to_string();
+    }
+    if !stdin_has_data() {
+        return default.to_string();
+    }
+    let mut buf = Vec::new();
+    let _ = std::io::Read::read_to_end(
+        &mut std::io::stdin().take(cap.try_into().unwrap_or(u64::MAX)),
+        &mut buf,
+    );
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
+#[cfg(unix)]
+fn stdin_has_data() -> bool {
+    use std::os::unix::io::AsRawFd;
+
+    #[repr(C)]
+    struct PollFd {
+        fd: i32,
+        events: i16,
+        revents: i16,
+    }
+
+    const POLLIN: i16 = 0x0001;
+
+    extern "C" {
+        fn poll(fds: *mut PollFd, nfds: u64, timeout: i32) -> i32;
+    }
+
+    let fd = std::io::stdin().as_raw_fd();
+    let mut pfd = PollFd {
+        fd,
+        events: POLLIN,
+        revents: 0,
+    };
+    let ready = unsafe { poll(&mut pfd, 1, 0) };
+    ready > 0 && (pfd.revents & POLLIN) != 0
+}
+
+#[cfg(not(unix))]
+fn stdin_has_data() -> bool {
+    // Windows lacks a portable poll-on-stdin helper; assume piped stdin may hold data.
+    true
+}
+
 /// Resolve `--context` / `--context -` (stdin) to the context string stored on
 /// [`TeamConfig`]. Mirrors Python `_resolve_context`.
 pub fn resolve_cli_context(raw: Option<&str>) -> String {
     match raw {
         None | Some("") => String::new(),
-        Some("-") => {
-            let mut buf = String::new();
-            let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf);
-            buf
-        }
+        Some("-") => read_stdin_if_available("", usize::MAX),
         Some(s) => s.to_string(),
     }
 }
@@ -448,6 +498,17 @@ mod tests {
     use super::*;
 
     // Reference values captured from the Python implementation.
+    #[test]
+    fn read_stdin_if_available_returns_default_on_tty() {
+        // Cannot reliably simulate piped stdin in unit tests; TTY path is deterministic.
+        if std::io::stdin().is_terminal() {
+            assert_eq!(
+                read_stdin_if_available("<placeholder>", 1024),
+                "<placeholder>"
+            );
+        }
+    }
+
     #[test]
     fn known_model_matrix() {
         assert!(is_known_model("opus"));
