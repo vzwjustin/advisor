@@ -86,7 +86,8 @@ fn next_seq(path: &Path) -> i64 {
     last_seq_from_tail(&tail) + 1
 }
 
-/// Append a single event. Returns the path written. Simplified lock (no flock, matches history.rs).
+/// Append a single event. Returns the path written. Uses advisory `flock` via
+/// [`crate::fs::lock_exclusive`] (same as `history.rs`).
 pub fn append_event(
     target: &Path,
     kind: &str,
@@ -355,6 +356,25 @@ mod tests {
             last_seq_from_tail(b"{\"seq\":-1,\"kind\":\"x\"}\n"),
             g["last_seq_negative"].as_i64().unwrap()
         );
+    }
+
+    #[test]
+    fn next_seq_handles_large_last_record() {
+        let tmp = TempDir::new().unwrap();
+        let target = tmp.path().join("proj");
+        fs::create_dir_all(&target).unwrap();
+
+        let big_payload = "x".repeat(9 * 1024);
+        append_event(
+            &target,
+            "big",
+            Some(serde_json::json!({"blob": big_payload})),
+            None,
+        )
+        .unwrap();
+
+        let path = live_events_path(&target);
+        assert_eq!(next_seq(&path), 2);
     }
 
     #[test]
