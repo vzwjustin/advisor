@@ -59,7 +59,7 @@ After edits, reinstall with `cargo install --path . --force`.
 
 ```bash
 # Install a tagged release without cloning (needs Rust + git)
-cargo install --git https://github.com/vzwjustin/advisor --tag v0.8.6
+cargo install --git https://github.com/vzwjustin/advisor --tag v0.8.7
 
 # Run without installing
 cargo run -- version
@@ -312,7 +312,7 @@ on:
 
 jobs:
   advisor:
-    uses: vzwjustin/advisor/.github/workflows/advisor.yml@v0.8.6
+    uses: vzwjustin/advisor/.github/workflows/advisor.yml@v0.8.7
     with:
       target: "."
       min-priority: 3
