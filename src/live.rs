@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
@@ -53,7 +53,15 @@ pub fn last_seq_from_tail(tail: &[u8]) -> i64 {
 }
 
 fn read_final_tail(path: &Path) -> Vec<u8> {
-    let meta = match std::fs::metadata(path) {
+    let mut f = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return vec![],
+    };
+    read_final_tail_from_file(&mut f)
+}
+
+fn read_final_tail_from_file(f: &mut std::fs::File) -> Vec<u8> {
+    let meta = match f.metadata() {
         Ok(m) => m,
         Err(_) => return vec![],
     };
@@ -63,11 +71,6 @@ fn read_final_tail(path: &Path) -> Vec<u8> {
     }
     let chunk = size.min(TAIL_READ_BYTES);
     let offset = (size - chunk) as u64;
-    use std::io::{Read, Seek, SeekFrom};
-    let mut f = match std::fs::File::open(path) {
-        Ok(f) => f,
-        Err(_) => return vec![],
-    };
     if f.seek(SeekFrom::Start(offset)).is_err() {
         return vec![];
     }
@@ -131,7 +134,7 @@ pub fn append_event(
     crate::fs::lock_exclusive(&f).map_err(|e| e.to_string())?;
     let write_result = (|| -> Result<i64, String> {
         // Lock covers reading last seq and appending so concurrent CLIs do not reuse seqs.
-        let tail = read_final_tail(&path);
+        let tail = read_final_tail_from_file(&mut f);
         let seq = if tail.is_empty() && !path.exists() {
             1
         } else {

@@ -1515,7 +1515,8 @@ mod tests {
             tmp.path(),
         );
 
-        assert!(ranked.iter().any(|r| r.path.ends_with("src/public.py")));
-        assert!(!ranked.iter().any(|r| r.path.ends_with("src/secret.py")));
+        let ranked_paths: Vec<String> = ranked.iter().map(|r| r.path.replace('\\', "/")).collect();
+        assert!(ranked_paths.iter().any(|p| p.ends_with("src/public.py")));
+        assert!(!ranked_paths.iter().any(|p| p.ends_with("src/secret.py")));
     }
 }
