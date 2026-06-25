@@ -836,7 +836,7 @@ fn rank_files_inner(
 }
 
 fn normalize_base_for_ignore(base: &Path) -> PathBuf {
-    base.canonicalize().unwrap_or_else(|_| base.to_path_buf())
+    base.to_path_buf()
 }
 
 fn relative_to_base_for_ignore(file_path: &str, base: &Path) -> Option<String> {

@@ -2350,20 +2350,11 @@ fn cmd_update(yes: bool, quiet: bool, json: bool) -> ExitCode {
 
     let mut upgrade_cmd = std::process::Command::new(&cmd[0]);
     upgrade_cmd.args(&cmd[1..]);
-    match upgrade_cmd.output() {
+    match upgrade_cmd.status() {
         Ok(status) => {
-            if !status.status.success() {
-                let stdout = String::from_utf8_lossy(&status.stdout);
-                let stderr = String::from_utf8_lossy(&status.stderr);
-                eprintln!(
-                    "{}",
-                    error_box(&format!(
-                        "upgrade failed\nstdout:\n{}\nstderr:\n{}",
-                        stdout.trim(),
-                        stderr.trim()
-                    ))
-                );
-                return ExitCode::from(status.status.code().unwrap_or(1) as u8);
+            if !status.success() {
+                eprintln!("{}", error_box("upgrade failed"));
+                return ExitCode::from(status.code().unwrap_or(1) as u8);
             }
         }
         Err(e) => {
