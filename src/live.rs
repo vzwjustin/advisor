@@ -86,14 +86,14 @@ fn next_seq(path: &Path) -> i64 {
     last_seq_from_tail(&tail) + 1
 }
 
-/// Append a single event. Returns the path written. Uses advisory `flock` via
-/// [`crate::fs::lock_exclusive`] (same as `history.rs`).
+/// Append a single event. Returns the path written and assigned seq.
+/// Uses advisory `flock` via [`crate::fs::lock_exclusive`] (same as `history.rs`).
 pub fn append_event(
     target: &Path,
     kind: &str,
     data: Option<Value>,
     ts: Option<&str>,
-) -> Result<PathBuf, String> {
+) -> Result<(PathBuf, i64), String> {
     if kind.is_empty() {
         return Err(format!("kind must be a non-empty string, got {:?}", kind));
     }
@@ -122,32 +122,6 @@ pub fn append_event(
         }
     };
 
-    // Read tail to get last seq, then append atomically enough for our use case
-    // (append_event called at most a few times per run, not per-token).
-    let tail = read_final_tail(&path);
-    let seq = if tail.is_empty() && !path.exists() {
-        1
-    } else {
-        last_seq_from_tail(&tail) + 1
-    };
-
-    let record = json!({
-        "schema_version": LIVE_SCHEMA_VERSION,
-        "ts": ts_string,
-        "seq": seq,
-        "kind": kind,
-        "data": data,
-    });
-    // Python uses separators=(",", ":") — compact, no spaces
-    let line = serde_json::to_string(&record).map_err(|e| e.to_string())?;
-    let encoded = line.as_bytes();
-    if encoded.len() > MAX_LINE {
-        return Err(format!(
-            "live event too large ({} bytes > {} byte per-line cap); trim the data payload",
-            encoded.len(),
-            MAX_LINE
-        ));
-    }
     let mut f = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -155,15 +129,40 @@ pub fn append_event(
         .open(&path)
         .map_err(|e| e.to_string())?;
     crate::fs::lock_exclusive(&f).map_err(|e| e.to_string())?;
-    let write_result = (|| -> Result<(), String> {
+    let write_result = (|| -> Result<i64, String> {
+        // Lock covers reading last seq and appending so concurrent CLIs do not reuse seqs.
+        let tail = read_final_tail(&path);
+        let seq = if tail.is_empty() && !path.exists() {
+            1
+        } else {
+            last_seq_from_tail(&tail) + 1
+        };
+
+        let record = json!({
+            "schema_version": LIVE_SCHEMA_VERSION,
+            "ts": ts_string,
+            "seq": seq,
+            "kind": kind,
+            "data": data,
+        });
+        // Python uses separators=(",", ":") — compact, no spaces
+        let mut line = serde_json::to_string(&record).map_err(|e| e.to_string())?;
+        line.push('\n');
+        let encoded = line.as_bytes();
+        if encoded.len() > MAX_LINE {
+            return Err(format!(
+                "live event too large ({} bytes > {} byte per-line cap); trim the data payload",
+                encoded.len(),
+                MAX_LINE
+            ));
+        }
         f.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
-        f.write_all(b"\n").map_err(|e| e.to_string())?;
         f.flush().map_err(|e| e.to_string())?;
-        Ok(())
+        Ok(seq)
     })();
     let _ = crate::fs::unlock(&f);
-    write_result?;
-    Ok(path)
+    let seq = write_result?;
+    Ok((path, seq))
 }
 
 /// Return events with seq > since, up to limit. Chronological order.
@@ -384,7 +383,7 @@ mod tests {
         let target = tmp.path().join("proj");
         fs::create_dir_all(&target).unwrap();
 
-        let p = append_event(
+        let (p, seq) = append_event(
             &target,
             "run_start",
             Some(json!({"runner_count": 2})),
@@ -395,6 +394,7 @@ mod tests {
             p.file_name().unwrap().to_str().unwrap(),
             g["append_returns_events_jsonl"].as_str().unwrap()
         );
+        assert_eq!(seq, 1);
 
         append_event(
             &target,

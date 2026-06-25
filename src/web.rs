@@ -12,7 +12,7 @@ use crate::focus::{create_focus_tasks, FocusTask};
 use crate::fs::CONTENT_SCAN_LIMIT;
 use crate::history::{history_path, load_recent, HistoryEntry, HISTORY_SCHEMA_VERSION};
 use crate::live::{latest_seq, live_events_path, load_recent_events, LIVE_SCHEMA_VERSION};
-use crate::rank::{load_advisorignore, rank_files};
+use crate::rank::{load_advisorignore, rank_files_with_base};
 
 // Embedded assets via include_str!
 const INDEX_HTML: &str = include_str!("web/assets/index.html");
@@ -184,6 +184,9 @@ fn discover(target: &Path, file_types: &str) -> Result<Vec<String>, String> {
     while let Some(dir) = stack.pop() {
         let entries = match std::fs::read_dir(&dir) {
             Ok(e) => e,
+            Err(e) if dir == root => {
+                return Err(format!("filesystem error scanning {}: {e}", dir.display()));
+            }
             Err(_) => continue,
         };
         for entry in entries.flatten() {
@@ -224,27 +227,31 @@ fn rank_target_cached(
     file_types: &str,
     min_priority: u8,
     cache: &mut PlanCache,
-) -> Vec<FocusTask> {
+) -> Result<Vec<FocusTask>, String> {
     let min_priority = min_priority.clamp(1, 5);
     let (_, history_token, _) = get_file_mtime_info(&history_path(&state.target));
     if let Some((ft, mp, ht, tasks)) = cache {
         if ft == file_types && *mp == min_priority && *ht == history_token {
-            return tasks.clone();
+            return Ok(tasks.clone());
         }
     }
-    let tasks = rank_target(state, file_types, min_priority);
+    let tasks = rank_target(state, file_types, min_priority)?;
     *cache = Some((
         file_types.to_string(),
         min_priority,
         history_token,
         tasks.clone(),
     ));
-    tasks
+    Ok(tasks)
 }
 
-fn rank_target(state: &AppState, file_types: &str, min_priority: u8) -> Vec<FocusTask> {
+fn rank_target(
+    state: &AppState,
+    file_types: &str,
+    min_priority: u8,
+) -> Result<Vec<FocusTask>, String> {
     let min_priority = min_priority.clamp(1, 5);
-    let paths = discover(&state.target, file_types).unwrap_or_default();
+    let paths = discover(&state.target, file_types)?;
 
     let read_fn = |p: &str| -> Option<String> {
         let mut f = std::fs::File::open(p).ok()?;
@@ -254,7 +261,7 @@ fn rank_target(state: &AppState, file_types: &str, min_priority: u8) -> Vec<Focu
     };
 
     let ignore_patterns = load_advisorignore(&state.target.to_string_lossy());
-    let ranked = rank_files(
+    let ranked = rank_files_with_base(
         &paths,
         Some(&read_fn),
         &ignore_patterns,
@@ -262,13 +269,14 @@ fn rank_target(state: &AppState, file_types: &str, min_priority: u8) -> Vec<Focu
         None,
         None,
         90,
+        &state.target,
     );
-    create_focus_tasks(
+    Ok(create_focus_tasks(
         &ranked,
         None,
         min_priority,
         crate::focus::DEFAULT_TASK_PROMPT,
-    )
+    ))
 }
 
 // JSON Send helper
@@ -439,7 +447,13 @@ fn handle_get(
                 .get("min_priority")
                 .and_then(|s| s.parse::<u8>().ok())
                 .unwrap_or(state.default_min_priority);
-            let tasks = rank_target_cached(state, file_types, min_priority, plan_cache);
+            let tasks = match rank_target_cached(state, file_types, min_priority, plan_cache) {
+                Ok(tasks) => tasks,
+                Err(e) => {
+                    send_json(request, 400, &json!({"error": e}));
+                    return;
+                }
+            };
             let tasks_json: Vec<serde_json::Value> = tasks
                 .iter()
                 .map(|t| {
@@ -485,7 +499,13 @@ fn handle_get(
                 .get("min_priority")
                 .and_then(|s| s.parse::<u8>().ok())
                 .unwrap_or(state.default_min_priority);
-            let tasks = rank_target_cached(state, file_types, min_priority, plan_cache);
+            let tasks = match rank_target_cached(state, file_types, min_priority, plan_cache) {
+                Ok(tasks) => tasks,
+                Err(e) => {
+                    send_json(request, 400, &json!({"error": e}));
+                    return;
+                }
+            };
 
             if tasks.is_empty() {
                 send_json(

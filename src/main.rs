@@ -36,7 +36,7 @@ use advisor::orchestrate::advisor_prompt::build_advisor_prompt;
 use advisor::orchestrate::runner_prompts::build_runner_pool_prompt;
 use advisor::orchestrate::verify_dispatch::build_verify_dispatch_prompt;
 use advisor::presets;
-use advisor::rank::{self, load_advisorignore, path_matches_file_types, rank_files};
+use advisor::rank::{self, load_advisorignore, path_matches_file_types, rank_files_with_base};
 use advisor::style::{ignore_sigpipe, writeln_stdout, StdoutWrite};
 use advisor::verify::{parse_findings_from_text, INCOMPLETE_FILE_PATH};
 use advisor::Finding;
@@ -1321,7 +1321,7 @@ fn cmd_plan(args: PlanArgs) -> ExitCode {
         }
     };
 
-    let ranked = rank_files(
+    let ranked = rank_files_with_base(
         &paths,
         Some(&read),
         &ignore,
@@ -1329,6 +1329,7 @@ fn cmd_plan(args: PlanArgs) -> ExitCode {
         history_scores.as_ref(),
         history_counts.as_ref(),
         90,
+        target,
     );
     let tasks = create_focus_tasks(&ranked, None, cfg.min_priority as u8, DEFAULT_TASK_PROMPT);
     let batches: Option<Vec<FocusBatch>> = if args.batch_size > 0 {
@@ -1416,7 +1417,10 @@ fn discover(target: &Path, file_types: &str) -> Result<Vec<String>, String> {
     while let Some(dir) = stack.pop() {
         let entries = match std::fs::read_dir(&dir) {
             Ok(e) => e,
-            Err(_) => continue, // skip unreadable dir, keep scanning
+            Err(e) if dir == root => {
+                return Err(format!("filesystem error scanning {}: {e}", dir.display()));
+            }
+            Err(_) => continue, // skip unreadable subdir, keep scanning
         };
         for entry in entries.flatten() {
             let ft = match entry.file_type() {
@@ -2382,8 +2386,22 @@ fn cmd_update(yes: bool, quiet: bool, json: bool) -> ExitCode {
     if quiet {
         install_cmd.arg("--quiet");
     }
-    match install_cmd.status() {
-        Ok(status) => ExitCode::from(status.code().unwrap_or(0) as u8),
+    match install_cmd.output() {
+        Ok(output) => {
+            if !output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                eprintln!(
+                    "{}",
+                    error_box(&format!(
+                        "post-upgrade install failed\nstdout:\n{}\nstderr:\n{}",
+                        stdout.trim(),
+                        stderr.trim()
+                    ))
+                );
+            }
+            ExitCode::from(output.status.code().unwrap_or(0) as u8)
+        }
         Err(e) => {
             eprintln!(
                 "{}",
@@ -2991,8 +3009,7 @@ fn cmd_live(action: LiveAction) -> ExitCode {
                 }
             }
             match append_event(&target, &kind, data_val, None) {
-                Ok(path) => {
-                    let seq = latest_seq(&target);
+                Ok((path, seq)) => {
                     if json {
                         let payload = serde_json::json!({
                             "schema_version": "1.0",
@@ -3260,7 +3277,7 @@ fn cmd_codex_plan_csv(args: CodexPlanCsvArgs) -> ExitCode {
             .map(|(k, kws)| (k, kws.into_iter().map(|s| s.to_string()).collect()))
             .collect()
     });
-    let ranked = rank_files(
+    let ranked = rank_files_with_base(
         &paths,
         None,
         &ignore_patterns,
@@ -3268,6 +3285,7 @@ fn cmd_codex_plan_csv(args: CodexPlanCsvArgs) -> ExitCode {
         None,
         None,
         30,
+        &target,
     );
     let tasks = create_focus_tasks(&ranked, None, args.min_priority, DEFAULT_TASK_PROMPT);
 
