@@ -1,8 +1,8 @@
 [package]
 name = "advisor-rs"
-version = "0.8.5"
+version = "0.8.7"
 edition = "2021"
-rust-version = "1.74"
+rust-version = "1.85"
 description = "Rust port of advisor — an Opus-led code-review-and-fix pipeline for Claude Code (in progress)."
 license = "MIT"
 repository = "https://github.com/vzwjustin/advisor"
@@ -30,6 +30,10 @@ sha1 = "0.10"                                        # sarif rule-id + baseline 
 clap = { version = "4", features = ["derive"] }     # argparse CLI
 ureq = "2.9"                                        # urllib.request (PyPI / GitHub HTTP requests)
 tiny_http = "0.12"                                  # http.server (lightweight web dashboard)
+fs2 = "0.4"                                         # advisory flock on JSONL append paths
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"                                        # poll(2) for non-blocking stdin probe
 
 [dev-dependencies]
 # Reserved for upcoming CLI integration + property parity tests

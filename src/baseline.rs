@@ -203,10 +203,21 @@ fn baseline_path_index(baseline: &[BaselineEntry]) -> HashMap<(String, String), 
     idx
 }
 
+/// Match absolute vs repo-relative spellings of the same path. Bare filenames
+/// (no `/`) never alias — `auth.py` must not suppress `src/auth.py`.
 fn suffix_alias_match(path_norm: &str, baseline_paths: &[String]) -> bool {
-    baseline_paths
-        .iter()
-        .any(|bp| bp.ends_with(&format!("/{path_norm}")) || path_norm.ends_with(&format!("/{bp}")))
+    baseline_paths.iter().any(|bp| {
+        if path_norm == bp {
+            return true;
+        }
+        if path_norm.contains('/') && bp.ends_with(&format!("/{path_norm}")) {
+            return true;
+        }
+        if bp.contains('/') && path_norm.ends_with(&format!("/{bp}")) {
+            return true;
+        }
+        false
+    })
 }
 
 /// Partition `findings` into `(new, suppressed_by_baseline)`. Mirrors
@@ -371,6 +382,32 @@ mod tests {
             g["roundtrip_count"].as_u64().unwrap()
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn bare_filename_does_not_alias_directory_path() {
+        let baseline = findings_to_entries(&[f("src/auth.py:42", "HIGH", "SQL injection", None)]);
+        let findings = vec![f("auth.py:42", "HIGH", "SQL injection", None)];
+        let (new, suppressed) = filter_against_baseline(&findings, &baseline);
+        assert_eq!(new.len(), 1);
+        assert!(suppressed.is_empty());
+        let diff = diff_against_baseline(&findings, &baseline);
+        assert_eq!(diff.new.len(), 1);
+        assert!(diff.persisting.is_empty());
+    }
+
+    #[test]
+    fn absolute_path_aliases_relative_baseline() {
+        let baseline = findings_to_entries(&[f("src/auth.py:10", "HIGH", "issue", None)]);
+        let findings = vec![f(
+            "/home/runner/work/repo/src/auth.py:10",
+            "HIGH",
+            "issue",
+            None,
+        )];
+        let (new, suppressed) = filter_against_baseline(&findings, &baseline);
+        assert!(new.is_empty());
+        assert_eq!(suppressed.len(), 1);
     }
 
     #[test]

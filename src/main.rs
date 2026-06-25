@@ -23,6 +23,7 @@ use advisor::fence::sanitize_inline;
 use advisor::focus::{
     self, create_focus_batches, create_focus_tasks, FocusBatch, FocusTask, DEFAULT_TASK_PROMPT,
 };
+use advisor::fs::normalize_path;
 use advisor::install::{
     codex_cli_available, get_installed_skill_version, get_status, install, install_skill,
     install_update_skill, load_changelog_sections, load_release_notes, uninstall_nudge,
@@ -35,9 +36,32 @@ use advisor::orchestrate::advisor_prompt::build_advisor_prompt;
 use advisor::orchestrate::runner_prompts::build_runner_pool_prompt;
 use advisor::orchestrate::verify_dispatch::build_verify_dispatch_prompt;
 use advisor::presets;
-use advisor::rank::{self, fnmatch_match, load_advisorignore, rank_files_with_base};
+use advisor::rank::{self, load_advisorignore, path_matches_file_types, rank_files_with_base};
+use advisor::style::{ignore_sigpipe, writeln_stdout, StdoutWrite};
 use advisor::verify::{parse_findings_from_text, INCOMPLETE_FILE_PATH};
 use advisor::Finding;
+
+/// Print to stdout; return exit 0 when the downstream pipe closed early (PR #1).
+macro_rules! outln {
+    () => {
+        outln!("")
+    };
+    ($($arg:tt)*) => {
+        if writeln_stdout(&format!($($arg)*)) == StdoutWrite::BrokenPipe {
+            return ExitCode::SUCCESS;
+        }
+    };
+}
+
+/// Like [`outln!`] but for helpers that do not return [`ExitCode`].
+macro_rules! outln_continue {
+    () => {
+        let _ = writeln_stdout("");
+    };
+    ($($arg:tt)*) => {
+        let _ = writeln_stdout(&format!($($arg)*));
+    };
+}
 
 /// Max bytes read from stdin / a findings file (`_STDIN_LIMIT`, 50 MiB).
 const STDIN_LIMIT: usize = 50 * 1024 * 1024;
@@ -275,6 +299,9 @@ enum Command {
         /// Glob pattern(s) for files.
         #[arg(long, default_value = "*.py")]
         file_types: String,
+        /// User goal / review focus (use `-` to read from stdin).
+        #[arg(long)]
+        context: Option<String>,
     },
     /// Install the /advisor skill AND append the CLAUDE.md nudge.
     Install {
@@ -507,6 +534,7 @@ enum BaselineAction {
 }
 
 fn main() -> ExitCode {
+    ignore_sigpipe();
     let cli = Cli::parse();
     match cli.command {
         Command::Presets { json } => cmd_presets(json),
@@ -655,6 +683,7 @@ fn main() -> ExitCode {
             no_history,
             preset,
             file_types,
+            context,
         } => cmd_prompt(PromptArgs {
             step,
             target,
@@ -669,6 +698,7 @@ fn main() -> ExitCode {
             no_history,
             preset,
             file_types,
+            context,
         }),
         Command::CodexPlanCsv {
             target,
@@ -751,6 +781,12 @@ fn coerce_finding_for_append(
         .unwrap_or("")
         .trim()
         .to_string();
+    let opt = |k: &str| {
+        map.get(k)
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
     Ok(advisor::history::HistoryEntry {
         timestamp,
         file_path: file_path.trim().to_string(),
@@ -763,6 +799,10 @@ fn coerce_finding_for_append(
             .and_then(|v| v.as_str())
             .unwrap_or("1.0")
             .to_string(),
+        evidence: opt("evidence"),
+        fix: opt("fix"),
+        rule_id: opt("rule_id"),
+        tool: opt("tool"),
     })
 }
 
@@ -849,7 +889,7 @@ fn cmd_history_append(
             .map(|e| {
                 (
                     e.run_id.clone(),
-                    e.file_path.clone(),
+                    normalize_path(&e.file_path),
                     e.severity.clone(),
                     e.description.clone(),
                 )
@@ -858,7 +898,7 @@ fn cmd_history_append(
         entries.retain(|e| {
             let key = (
                 e.run_id.clone(),
-                e.file_path.clone(),
+                normalize_path(&e.file_path),
                 e.severity.clone(),
                 e.description.clone(),
             );
@@ -867,12 +907,12 @@ fn cmd_history_append(
     }
     if entries.is_empty() {
         if json {
-            println!(
+            outln!(
                 "{{\"appended\": 0, \"run_id\": {}}}",
                 json_string(&default_run_id)
             );
         } else if !quiet {
-            println!("nothing to append (all entries deduped)");
+            outln!("nothing to append (all entries deduped)");
         }
         return ExitCode::SUCCESS;
     }
@@ -884,14 +924,14 @@ fn cmd_history_append(
         }
     };
     if json {
-        println!(
+        outln!(
             "{{\"schema_version\": \"1.0\", \"appended\": {}, \"run_id\": {}, \"history_path\": {}}}",
             entries.len(),
             json_string(&default_run_id),
             json_string(&path.to_string_lossy())
         );
     } else if !quiet {
-        println!(
+        outln!(
             "appended {} finding(s) to {}",
             entries.len(),
             path.display()
@@ -929,9 +969,9 @@ fn cmd_checkpoints(target_str: &str, rm: Option<String>, clear: bool, json: bool
                 eprintln!("✗ {e}");
                 return ExitCode::from(2);
             }
-            println!("✓ removed checkpoint {id}");
+            outln!("✓ removed checkpoint {id}");
         } else {
-            println!("no checkpoint {id} at {}", path.display());
+            outln!("no checkpoint {id} at {}", path.display());
         }
         return ExitCode::SUCCESS;
     }
@@ -954,7 +994,7 @@ fn cmd_checkpoints(target_str: &str, rm: Option<String>, clear: bool, json: bool
                 "removed": removed,
                 "failed": failed,
             });
-            println!(
+            outln!(
                 "{}",
                 ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
             );
@@ -968,9 +1008,9 @@ fn cmd_checkpoints(target_str: &str, rm: Option<String>, clear: bool, json: bool
             if failed > 0 {
                 msg.push_str(&format!(", failed {failed}"));
             }
-            println!("{msg}");
+            outln!("{msg}");
         } else {
-            println!("no checkpoints to remove");
+            outln!("no checkpoints to remove");
         }
         return ExitCode::from(if failed == 0 { 0 } else { 1 });
     }
@@ -982,19 +1022,19 @@ fn cmd_checkpoints(target_str: &str, rm: Option<String>, clear: bool, json: bool
             "count": ids.len(),
             "run_ids": ids,
         });
-        println!(
+        outln!(
             "{}",
             ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
         );
         return ExitCode::SUCCESS;
     }
     if ids.is_empty() {
-        println!("no checkpoints yet at {}/.advisor/", target.display());
+        outln!("no checkpoints yet at {}/.advisor/", target.display());
         return ExitCode::SUCCESS;
     }
-    println!("## Checkpoints ({})", ids.len());
+    outln!("## Checkpoints ({})", ids.len());
     for id in &ids {
-        println!("- `{id}`");
+        outln!("- `{id}`");
     }
     ExitCode::SUCCESS
 }
@@ -1016,14 +1056,14 @@ fn cmd_history(target_str: &str, limit: usize, stats: bool, json: bool) -> ExitC
                 "target": target_abs.to_string_lossy(),
                 "stats": summary,
             });
-            println!(
+            outln!(
                 "{}",
                 ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
             );
             return ExitCode::SUCCESS;
         }
         // Pretty stats output (colorized framing) is deferred; emit the JSON.
-        println!(
+        outln!(
             "{}",
             ensure_ascii(&serde_json::to_string_pretty(&summary).unwrap_or_default())
         );
@@ -1044,14 +1084,14 @@ fn cmd_history(target_str: &str, limit: usize, stats: bool, json: bool) -> ExitC
                 "run_id": e.run_id,
             })).collect::<Vec<_>>(),
         });
-        println!(
+        outln!(
             "{}",
             ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
         );
         return ExitCode::SUCCESS;
     }
     if entries.is_empty() {
-        println!(
+        outln!(
             "no history yet at {}/.advisor/history.jsonl",
             target.display()
         );
@@ -1068,7 +1108,7 @@ fn cmd_suppressions(target: &str, expired_only: bool, json: bool) -> ExitCode {
         .join(".advisor")
         .join("suppressions.jsonl");
     if !path.exists() {
-        println!("no suppressions file at {}", path.display());
+        outln!("no suppressions file at {}", path.display());
         return ExitCode::SUCCESS;
     }
     let mut entries = match advisor::suppressions::load_suppressions(&path) {
@@ -1094,7 +1134,7 @@ fn cmd_suppressions(target: &str, expired_only: bool, json: bool) -> ExitCode {
                 "expired": e.expired,
             })).collect::<Vec<_>>(),
         });
-        println!(
+        outln!(
             "{}",
             ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
         );
@@ -1106,7 +1146,7 @@ fn cmd_suppressions(target: &str, expired_only: bool, json: bool) -> ExitCode {
         } else {
             "suppressions"
         };
-        println!("no {label} in {}", path.display());
+        outln!("no {label} in {}", path.display());
         return ExitCode::SUCCESS;
     }
     let mut lines = vec![
@@ -1139,7 +1179,7 @@ fn cmd_suppressions(target: &str, expired_only: bool, json: bool) -> ExitCode {
 fn cmd_presets(json: bool) -> ExitCode {
     let packs = presets::list_presets();
     if json {
-        println!("{}", presets::presets_json(&packs));
+        outln!("{}", presets::presets_json(&packs));
     } else {
         // `presets_pretty` already includes the trailing newline structure.
         print!("{}", presets::presets_pretty(&packs));
@@ -1180,7 +1220,7 @@ fn dump_pricing_template() -> String {
 fn cmd_plan(args: PlanArgs) -> ExitCode {
     // `--dump-pricing-template` short-circuits all discovery.
     if args.dump_pricing_template {
-        println!("{}", dump_pricing_template());
+        outln!("{}", dump_pricing_template());
         return ExitCode::SUCCESS;
     }
 
@@ -1328,7 +1368,7 @@ fn cmd_plan(args: PlanArgs) -> ExitCode {
         } else {
             None
         };
-        println!(
+        outln!(
             "{}",
             plan_json(&target_abs, &tasks, batches.as_deref(), estimate)
         );
@@ -1396,7 +1436,12 @@ fn discover(target: &Path, file_types: &str) -> Result<Vec<String>, String> {
             } else if ft.is_file() {
                 let name = entry.file_name();
                 let name = name.to_string_lossy();
-                if pats.iter().any(|pat| fnmatch_match(&name, pat)) {
+                let rel = path
+                    .strip_prefix(&root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                if path_matches_file_types(&rel, &name, &pats) {
                     let s = path.to_string_lossy().to_string();
                     if seen.insert(s.clone()) {
                         out.push(s);
@@ -1422,17 +1467,25 @@ fn filter_git_scope(target: &Path, files: Vec<String>, file_types: &str) -> Vec<
         .into_iter()
         .filter(|p| {
             if apply_types {
-                let name = Path::new(p)
+                let path_obj = Path::new(p);
+                let name = path_obj
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
-                if !pats.iter().any(|pat| fnmatch_match(&name, pat)) {
+                let rel = match (&target_resolved, path_obj.canonicalize()) {
+                    (Some(tr), Ok(rp)) if rp.starts_with(tr) => rp
+                        .strip_prefix(tr)
+                        .map(|r| r.to_string_lossy().replace('\\', "/"))
+                        .unwrap_or_else(|_| name.clone()),
+                    _ => p.replace('\\', "/"),
+                };
+                if !path_matches_file_types(&rel, &name, &pats) {
                     return false;
                 }
             }
             match (&target_resolved, Path::new(p).canonicalize()) {
                 (Some(tr), Ok(rp)) => rp.starts_with(tr),
-                _ => true,
+                _ => false,
             }
         })
         .collect()
@@ -1644,7 +1697,7 @@ fn cmd_baseline(action: BaselineAction) -> ExitCode {
                 } else {
                     "findings"
                 };
-                println!(
+                outln!(
                     "✓ baseline saved: {} ({} {word})",
                     out.display(),
                     entries.len()
@@ -1698,7 +1751,7 @@ fn cmd_baseline(action: BaselineAction) -> ExitCode {
                         "file_path": e.file_path, "rule_id": e.rule_id, "description": e.description,
                     })).collect::<Vec<_>>(),
                 });
-                println!(
+                outln!(
                     "{}",
                     ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
                 );
@@ -1761,7 +1814,7 @@ fn fail_on_exit(threshold: &str, findings: &[Finding]) -> Option<u8> {
         "HIGH" => 3,
         "CRITICAL" => 4,
         "UNKNOWN" => 99,
-        _ => 0,
+        _ => 99,
     };
     if findings.iter().any(|f| rank(&f.severity) >= gate) {
         Some(4)
@@ -1890,7 +1943,7 @@ fn cmd_audit(args: AuditArgs) -> ExitCode {
     let exit = |rc: Option<u8>| ExitCode::from(rc.unwrap_or(0));
 
     if args.format == "pr-comment" {
-        println!(
+        outln!(
             "{}",
             advisor::pr_comment::format_pr_comment(&report.findings_in_batch)
         );
@@ -1908,7 +1961,7 @@ fn cmd_audit(args: AuditArgs) -> ExitCode {
             }
         }
         let payload = serde_json::Value::Object(map);
-        println!(
+        outln!(
             "{}",
             ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
         );
@@ -1916,7 +1969,7 @@ fn cmd_audit(args: AuditArgs) -> ExitCode {
     }
 
     // Pretty (color disabled in the Rust port — colorize_markdown is a no-op here).
-    println!("{}", advisor::audit::format_audit_report(&report));
+    outln!("{}", advisor::audit::format_audit_report(&report));
     exit(fail_rc)
 }
 
@@ -1936,7 +1989,7 @@ fn cmd_changelog(
                 "version": v,
                 "body": notes,
             });
-            println!(
+            outln!(
                 "{}",
                 ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
             );
@@ -1948,8 +2001,8 @@ fn cmd_changelog(
         }
         match notes {
             Some(body) => {
-                println!("## v{v}");
-                println!("{body}");
+                outln!("## v{v}");
+                outln!("{body}");
                 ExitCode::SUCCESS
             }
             None => {
@@ -1969,7 +2022,7 @@ fn cmd_changelog(
                 "since": since,
                 "sections": arr,
             });
-            println!(
+            outln!(
                 "{}",
                 ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
             );
@@ -1989,14 +2042,14 @@ fn cmd_changelog(
         }
         for (i, (v, _heading, body)) in sections.iter().enumerate() {
             if i > 0 {
-                println!();
+                outln!();
             }
-            println!("## v{v}");
-            println!("{body}");
+            outln!("## v{v}");
+            outln!("{body}");
         }
         if !quiet {
-            println!();
-            println!("Next: advisor update");
+            outln!();
+            outln!("Next: advisor update");
         }
         ExitCode::SUCCESS
     }
@@ -2156,7 +2209,7 @@ fn cmd_update(yes: bool, quiet: bool, json: bool) -> ExitCode {
     let (label, cmd) = method.unwrap();
 
     if !quiet && !json {
-        println!(
+        outln!(
             "  {}",
             paint(
                 &format!("checking PyPI for advisor-agent (current: v{current})..."),
@@ -2180,7 +2233,7 @@ fn cmd_update(yes: bool, quiet: bool, json: bool) -> ExitCode {
     let mut nothing_to_upgrade = false;
     if latest.is_none() && remote_changelog.is_none() {
         if !quiet && !json {
-            println!(
+            outln!(
                 "  {}",
                 paint(
                     "(offline — preview unavailable, will run upgrade anyway)",
@@ -2194,8 +2247,8 @@ fn cmd_update(yes: bool, quiet: bool, json: bool) -> ExitCode {
             let cur_newer = advisor::install::is_semver_newer(current, lat);
             if lat_newer {
                 if !quiet && !json {
-                    println!();
-                    println!("  {}", paint(&format!("(changelog preview unavailable — PyPI shows v{lat} newer than v{current})"), "2"));
+                    outln!();
+                    outln!("  {}", paint(&format!("(changelog preview unavailable — PyPI shows v{lat} newer than v{current})"), "2"));
                 }
             } else {
                 if !quiet && !json {
@@ -2208,16 +2261,16 @@ fn cmd_update(yes: bool, quiet: bool, json: bool) -> ExitCode {
                             ok(&check)
                         )
                     };
-                    println!();
-                    println!("{msg}");
+                    outln!();
+                    outln!("{msg}");
                 }
                 nothing_to_upgrade = true;
             }
         } else {
             if !quiet && !json {
                 let check = glyph("✓", "[OK]");
-                println!();
-                println!(
+                outln!();
+                outln!(
                     "  {} already on the latest version (v{})",
                     ok(&check),
                     current
@@ -2229,19 +2282,19 @@ fn cmd_update(yes: bool, quiet: bool, json: bool) -> ExitCode {
         let target_ver = latest.clone().unwrap_or_else(|| new_sections[0].0.clone());
         let arrow = glyph("→", "->");
         let title = format!("v{current}  {arrow}  v{target_ver}");
-        println!();
-        println!("{}", banner(&title, 60));
+        outln!();
+        outln!("{}", banner(&title, 60));
         let n = new_sections.len();
         let summary = if n == 1 {
             "1 release ahead — here's what's new:".to_string()
         } else {
             format!("{n} releases ahead — here's what's new:")
         };
-        println!("  {}", paint(&summary, "2"));
+        outln!("  {}", paint(&summary, "2"));
         for (version, _heading, body) in &new_sections {
-            println!();
-            println!("{}", banner(&format!("v{version}"), 50));
-            println!("{body}");
+            outln!();
+            outln!("{}", banner(&format!("v{version}"), 50));
+            outln!("{body}");
         }
     }
 
@@ -2253,7 +2306,7 @@ fn cmd_update(yes: bool, quiet: bool, json: bool) -> ExitCode {
                 "latest_version": latest.unwrap_or(current.to_string()),
                 "upgraded": false,
             });
-            println!(
+            outln!(
                 "{}",
                 ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
             );
@@ -2268,7 +2321,7 @@ fn cmd_update(yes: bool, quiet: bool, json: bool) -> ExitCode {
             "latest_version": latest.clone().unwrap_or(current.to_string()),
             "note": "advisor update with --json is not fully supported; run without --json to confirm interactive upgrade",
         });
-        println!(
+        outln!(
             "{}",
             ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
         );
@@ -2280,19 +2333,19 @@ fn cmd_update(yes: bool, quiet: bool, json: bool) -> ExitCode {
         let mut input = String::new();
         let _ = std::io::stdout().flush();
         if std::io::stdin().read_line(&mut input).is_err() {
-            println!("\n  aborted");
+            outln!("\n  aborted");
             return ExitCode::from(130);
         }
         let ans = input.trim().to_lowercase();
         if !ans.is_empty() && ans != "y" && ans != "yes" {
-            println!("  aborted");
+            outln!("  aborted");
             return ExitCode::SUCCESS;
         }
     }
 
     if !quiet {
-        println!();
-        println!("{}", cta(&label, &cmd.join(" ")));
+        outln!();
+        outln!("{}", cta(&label, &cmd.join(" ")));
     }
 
     let mut upgrade_cmd = std::process::Command::new(&cmd[0]);
@@ -2329,8 +2382,8 @@ fn cmd_update(yes: bool, quiet: bool, json: bool) -> ExitCode {
     if !quiet {
         if let Some(ref lat) = final_latest {
             if lat != current {
-                println!();
-                println!("{}", banner(&format!("Updated: v{current} → v{lat}"), 60));
+                outln!();
+                outln!("{}", banner(&format!("Updated: v{current} → v{lat}"), 60));
             }
         }
     }
@@ -2397,7 +2450,7 @@ fn cmd_ui(target: &str, port: u16, host: &str, json: bool, quiet: bool) -> ExitC
             "url": url,
             "server_running": false,
         });
-        println!(
+        outln!(
             "{}",
             ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
         );
@@ -2444,8 +2497,8 @@ fn maybe_print_update_indicator() {
             &format!("(current: v{current} — run `advisor update`)"),
             "2",
         );
-        println!();
-        println!("  {warn} {msg} {cur}");
+        outln_continue!();
+        outln_continue!("  {warn} {msg} {cur}");
     }
 }
 
@@ -2487,9 +2540,13 @@ fn print_status(
     let update_ok = s
         .update_skill
         .as_ref()
-        .map_or(true, |u| u.present && u.current);
-    let healthy =
-        s.nudge.present && s.nudge.current && s.skill.present && s.skill.current && update_ok;
+        .is_none_or(|u| u.present && u.current);
+    let healthy = s.nudge.present
+        && s.nudge.current
+        && s.skill.present
+        && s.skill.current
+        && update_ok
+        && s.harness_types.ok;
 
     if json {
         let mut payload = serde_json::json!({
@@ -2516,28 +2573,46 @@ fn print_status(
                 "path": u.path.display().to_string(),
             });
         }
-        println!(
+        let expected: serde_json::Map<String, serde_json::Value> = s
+            .harness_types
+            .expected
+            .iter()
+            .map(|(role, typ)| (role.to_string(), serde_json::json!(typ)))
+            .collect();
+        payload["harness_agent_types"] = serde_json::json!({
+            "ok": s.harness_types.ok,
+            "issues": s.harness_types.issues,
+            "expected": expected,
+        });
+        outln_continue!(
             "{}",
             ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
         );
     } else if !quiet {
-        println!("advisor {version}");
+        outln_continue!("advisor {version}");
         if let Some(v) = &installed_v {
-            println!("  installed skill version: {v}");
+            outln_continue!("  installed skill version: {v}");
         }
-        println!(
+        outln_continue!(
             "{}",
             format_component("nudge (CLAUDE.md)", s.nudge.present, s.nudge.current)
         );
-        println!(
+        outln_continue!(
             "{}",
             format_component("skill (SKILL.md)", s.skill.present, s.skill.current)
         );
         if let Some(u) = &s.update_skill {
-            println!("{}", format_component("update-skill", u.present, u.current));
+            outln_continue!("{}", format_component("update-skill", u.present, u.current));
         }
         if s.opt_out {
-            println!("  (ADVISOR_NO_NUDGE is set)");
+            outln_continue!("  (ADVISOR_NO_NUDGE is set)");
+        }
+        if s.harness_types.ok {
+            outln_continue!("  ✓ harness agent types: built-in only");
+        } else {
+            for issue in &s.harness_types.issues {
+                outln_continue!("  ~ harness: {issue}");
+            }
         }
         maybe_print_update_indicator();
     }
@@ -2556,8 +2631,8 @@ fn cmd_install(
     if check {
         let (healthy, _) = print_status(path, skill_path, json, quiet);
         if healthy && !quiet && !json {
-            println!();
-            println!("Next: /advisor <path>");
+            outln!();
+            outln!("Next: /advisor <path>");
         }
         return if strict && !healthy {
             ExitCode::from(STRICT_NOOP_EXIT)
@@ -2594,7 +2669,7 @@ fn cmd_install(
         |label: &str, res: &Result<advisor::install::InstallResult, std::io::Error>| match res {
             Ok(r) => {
                 if !quiet {
-                    println!("  {} {label}", r.action);
+                    outln_continue!("  {} {label}", r.action);
                 }
             }
             Err(e) => eprintln!("  error {label}: {e}"),
@@ -2612,8 +2687,8 @@ fn cmd_install(
             emit("codex-skill", r);
         }
         if !quiet {
-            println!();
-            println!("Next: /advisor <path>");
+            outln!();
+            outln!("Next: /advisor <path>");
         }
     } else {
         let to_json = |res: &Result<advisor::install::InstallResult, std::io::Error>| match res {
@@ -2633,7 +2708,7 @@ fn cmd_install(
         if let Some(ref r) = update_result {
             payload["update_skill"] = to_json(r);
         }
-        println!(
+        outln!(
             "{}",
             ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
         );
@@ -2650,9 +2725,9 @@ fn cmd_install(
     };
     let strict_noop = strict
         && is_unchanged(&nudge_result)
-        && skill_result.as_ref().map_or(true, is_unchanged)
-        && update_result.as_ref().map_or(true, is_unchanged)
-        && codex_result.as_ref().map_or(true, is_unchanged);
+        && skill_result.as_ref().is_none_or(is_unchanged)
+        && update_result.as_ref().is_none_or(is_unchanged)
+        && codex_result.as_ref().is_none_or(is_unchanged);
     if failed {
         ExitCode::FAILURE
     } else if strict_noop {
@@ -2691,7 +2766,7 @@ fn cmd_uninstall(
             "skill": to_json(&skill_result),
             "update_skill": to_json(&update_result),
         });
-        println!(
+        outln!(
             "{}",
             ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
         );
@@ -2706,7 +2781,7 @@ fn cmd_uninstall(
         |label: &str, res: &Result<advisor::install::InstallResult, std::io::Error>| match res {
             Ok(r) => {
                 if !quiet && r.action != InstallAction::Absent {
-                    println!("  {} {label}", r.action);
+                    outln_continue!("  {} {label}", r.action);
                 }
             }
             Err(e) => eprintln!("  error {label}: {e}"),
@@ -2730,8 +2805,8 @@ fn cmd_status(
 ) -> ExitCode {
     let (healthy, _) = print_status(path, skill_path, json, quiet);
     if healthy && !quiet && !json {
-        println!();
-        println!("Next: /advisor <path>");
+        outln!();
+        outln!("Next: /advisor <path>");
     }
     if strict && !healthy {
         ExitCode::from(STRICT_NOOP_EXIT)
@@ -2754,7 +2829,7 @@ fn cmd_doctor(
     if json {
         let mut payload = report.to_dict();
         payload["schema_version"] = serde_json::json!("1.0");
-        println!(
+        outln!(
             "{}",
             ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
         );
@@ -2766,12 +2841,12 @@ fn cmd_doctor(
     }
 
     if !quiet {
-        println!("{}", advisor::doctor::format_report(&report));
-        println!();
+        outln!("{}", advisor::doctor::format_report(&report));
+        outln!();
         if report.healthy {
-            println!("Next: advisor pipeline .");
+            outln!("Next: advisor pipeline .");
         } else {
-            println!("Next: advisor install");
+            outln!("Next: advisor install");
         }
         maybe_print_update_indicator();
     }
@@ -2812,16 +2887,16 @@ fn cmd_pipeline(
             "schema_version": "1.0",
             "text": text,
         });
-        println!(
+        outln!(
             "{}",
             ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
         );
         return ExitCode::SUCCESS;
     }
-    println!("{text}");
+    outln!("{text}");
     if !quiet {
-        println!();
-        println!("Run the live pipeline: /advisor {target}");
+        outln!();
+        outln!("Run the live pipeline: /advisor {target}");
     }
     ExitCode::SUCCESS
 }
@@ -2838,7 +2913,7 @@ const PROTOCOL_TEXT: &str = concat!(
     "   TeamCreate(name=\"review\")\n\n",
     "2. Spawn advisor FIRST (no runners yet):\n",
     "   Agent(name=\"advisor\", description=\"Investigate, rank, and dispatch runners\",\n",
-    "         subagent_type=\"advisor-executor\", team_name=\"review\",\n",
+    "         subagent_type=\"generalPurpose\", team_name=\"review\",\n",
     "         prompt=<build_advisor_prompt(config)>)\n\n",
     "3. Advisor does Glob+Grep discovery, ranks P1-P5, decides runner pool size,\n",
     "   THEN sends a dispatch plan with a per-runner prompt for each runner.\n\n",
@@ -2856,15 +2931,15 @@ fn cmd_protocol(json: bool, quiet: bool) -> ExitCode {
             "schema_version": "1.0",
             "text": PROTOCOL_TEXT,
         });
-        println!(
+        outln!(
             "{}",
             ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
         );
         return ExitCode::SUCCESS;
     }
-    println!("{PROTOCOL_TEXT}");
+    outln!("{PROTOCOL_TEXT}");
     if !quiet {
-        println!("Next: advisor pipeline .");
+        outln!("Next: advisor pipeline .");
     }
     ExitCode::SUCCESS
 }
@@ -2878,13 +2953,13 @@ fn cmd_version(json: bool) -> ExitCode {
             "schema_version": "1.0",
             "advisor_version": version,
         });
-        println!(
+        outln!(
             "{}",
             ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
         );
         return ExitCode::SUCCESS;
     }
-    println!("advisor {version}");
+    outln!("advisor {version}");
     ExitCode::SUCCESS
 }
 
@@ -2903,11 +2978,19 @@ fn cmd_live(action: LiveAction) -> ExitCode {
             let data_val: Option<serde_json::Value> = match data.as_deref() {
                 None => None,
                 Some("-") => {
-                    let mut buf = String::new();
-                    if let Err(e) = std::io::stdin().read_to_string(&mut buf) {
+                    let mut buf = Vec::new();
+                    if let Err(e) = std::io::stdin()
+                        .take((STDIN_LIMIT + 1) as u64)
+                        .read_to_end(&mut buf)
+                    {
                         eprintln!("error reading stdin: {e}");
                         return ExitCode::from(2);
                     }
+                    if buf.len() > STDIN_LIMIT {
+                        eprintln!("--data -: input exceeds {STDIN_LIMIT}-byte cap");
+                        return ExitCode::from(2);
+                    }
+                    let buf = String::from_utf8_lossy(&buf).into_owned();
                     if buf.trim().is_empty() {
                         eprintln!("--data -: stdin was empty; expected a JSON object");
                         return ExitCode::from(2);
@@ -2943,7 +3026,7 @@ fn cmd_live(action: LiveAction) -> ExitCode {
                             "seq": seq,
                             "kind": kind,
                         });
-                        println!(
+                        outln!(
                             "{}",
                             ensure_ascii(
                                 &serde_json::to_string_pretty(&payload).unwrap_or_default()
@@ -2978,7 +3061,7 @@ fn cmd_live(action: LiveAction) -> ExitCode {
                     "next_token": seq,
                     "events": events,
                 });
-                println!(
+                outln!(
                     "{}",
                     ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
                 );
@@ -3005,7 +3088,7 @@ fn cmd_live(action: LiveAction) -> ExitCode {
                     String::new()
                 };
                 let line = format!("{ts} {kind} {data_str}");
-                println!("{}", line.trim_end());
+                outln!("{}", line.trim_end());
             }
             ExitCode::SUCCESS
         }
@@ -3048,6 +3131,7 @@ struct PromptArgs {
     no_history: bool,
     preset: Option<String>,
     file_types: String,
+    context: Option<String>,
 }
 
 fn cmd_prompt(args: PromptArgs) -> ExitCode {
@@ -3064,6 +3148,7 @@ fn cmd_prompt(args: PromptArgs) -> ExitCode {
         inp.preset = Some(p.to_string());
     }
     inp.file_types = args.file_types.clone();
+    inp.context = advisor::config::resolve_cli_context(args.context.as_deref());
     let cfg = default_team_config(inp);
 
     let text = match args.step.as_str() {
@@ -3083,14 +3168,8 @@ fn cmd_prompt(args: PromptArgs) -> ExitCode {
         "verify" => {
             let file_count = args.file_count.unwrap_or(args.max_runners) as i64;
             let runner_count = args.max_runners as i64;
-            // read findings from stdin if available
-            let findings_text = if !std::io::stdin().is_terminal() {
-                let mut buf = String::new();
-                let _ = std::io::stdin().read_to_string(&mut buf);
-                buf
-            } else {
-                String::new()
-            };
+            let findings_text =
+                advisor::config::read_stdin_if_available("<paste findings here>", STDIN_LIMIT);
             build_verify_dispatch_prompt(&findings_text, file_count, runner_count)
         }
         other => {
@@ -3105,16 +3184,16 @@ fn cmd_prompt(args: PromptArgs) -> ExitCode {
             "step": args.step,
             "text": text,
         });
-        println!(
+        outln!(
             "{}",
             ensure_ascii(&serde_json::to_string_pretty(&payload).unwrap_or_default())
         );
         return ExitCode::SUCCESS;
     }
-    println!("{text}");
+    outln!("{text}");
     if !args.quiet && std::io::stdout().is_terminal() {
-        println!();
-        println!("Next: paste into Claude Code or Codex");
+        outln!();
+        outln!("Next: paste into Claude Code or Codex");
     }
     ExitCode::SUCCESS
 }
@@ -3308,7 +3387,7 @@ fn cmd_codex_plan_csv(args: CodexPlanCsvArgs) -> ExitCode {
         }
     }
 
-    println!("{}", out_path.display());
+    outln!("{}", out_path.display());
     ExitCode::SUCCESS
 }
 
@@ -3363,6 +3442,16 @@ mod tests {
 
         assert_eq!(first, ExitCode::SUCCESS);
         assert_eq!(second, ExitCode::from(STRICT_NOOP_EXIT));
+    }
+
+    #[test]
+    fn prompt_accepts_context_flag() {
+        let mut inp = TeamConfigInput::new(".");
+        inp.context = advisor::config::resolve_cli_context(Some("find security bugs"));
+        let cfg = default_team_config(inp);
+        let text = build_advisor_prompt(&cfg, "");
+        assert!(text.contains("find security bugs"));
+        assert!(text.contains("user's goal"));
     }
 
     #[test]

@@ -265,6 +265,22 @@ fn check_codex_skill_install() -> Option<Check> {
     }
 }
 
+fn check_harness_agent_types(status: &crate::install::Status) -> Vec<Check> {
+    if status.harness_types.ok {
+        vec![Check::ok(
+            "harness-agent-types",
+            "skill uses built-in subagent types (generalPurpose, explore)",
+        )]
+    } else {
+        status
+            .harness_types
+            .issues
+            .iter()
+            .map(|issue| Check::warn("harness-agent-types", issue))
+            .collect()
+    }
+}
+
 fn check_install(
     status: &crate::install::Status,
     installed_version: Option<&str>,
@@ -352,6 +368,7 @@ pub fn run_doctor(nudge_path: Option<&Path>, skill_path: Option<&Path>) -> Docto
         checks.push(check_codex_home());
     }
     checks.extend(check_install(&status, installed.as_deref(), version));
+    checks.extend(check_harness_agent_types(&status));
     if codex_present {
         if let Some(c) = check_codex_skill_install() {
             checks.push(c);

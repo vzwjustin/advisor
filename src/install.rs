@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 use once_cell::sync::Lazy;
 use regex::Regex;
 
+use crate::orchestrate::agent_types::{
+    ADVISOR_SUBAGENT_TYPE, DEPRECATED_SUBAGENT_TYPES, HARNESS_AGENT_TYPES, RUNNER_SUBAGENT_TYPE,
+};
 use crate::skill_asset::{skill_md, skill_md_update};
 
 // ── constants ──────────────────────────────────────────────────────────────
@@ -84,11 +87,51 @@ pub struct ComponentStatus {
 }
 
 #[derive(Debug)]
+pub struct HarnessTypesStatus {
+    pub ok: bool,
+    pub issues: Vec<String>,
+    pub expected: Vec<(&'static str, &'static str)>,
+}
+
+fn skill_uses_subagent_type(skill_text: &str, typ: &str) -> bool {
+    skill_text.contains(&format!("subagent_type: \"{typ}\""))
+        || skill_text.contains(&format!("subagent_type=\"{typ}\""))
+}
+
+/// Verify the installed skill references built-in harness subagent types only.
+pub fn check_harness_agent_types(skill_text: &str) -> HarnessTypesStatus {
+    let mut issues = Vec::new();
+    for dep in DEPRECATED_SUBAGENT_TYPES {
+        if skill_uses_subagent_type(skill_text, dep) {
+            issues.push(format!(
+                "deprecated subagent_type `{dep}` (use built-in types — run: advisor install)"
+            ));
+        }
+    }
+    if !skill_uses_subagent_type(skill_text, ADVISOR_SUBAGENT_TYPE) {
+        issues.push(format!(
+            "skill missing advisor subagent_type `{ADVISOR_SUBAGENT_TYPE}` (run: advisor install)"
+        ));
+    }
+    if !skill_uses_subagent_type(skill_text, RUNNER_SUBAGENT_TYPE) {
+        issues.push(format!(
+            "skill missing runner subagent_type `{RUNNER_SUBAGENT_TYPE}` (run: advisor install)"
+        ));
+    }
+    HarnessTypesStatus {
+        ok: issues.is_empty(),
+        issues,
+        expected: HARNESS_AGENT_TYPES.to_vec(),
+    }
+}
+
+#[derive(Debug)]
 pub struct Status {
     pub nudge: ComponentStatus,
     pub skill: ComponentStatus,
     pub opt_out: bool,
     pub update_skill: Option<ComponentStatus>,
+    pub harness_types: HarnessTypesStatus,
 }
 
 // ── badge / semver helpers ────────────────────────────────────────────────
@@ -161,12 +204,13 @@ fn reject_parent_file(target: &Path) -> Result<(), std::io::Error> {
 
 fn read_text_capped(path: &Path, max_bytes: usize) -> Result<String, std::io::Error> {
     let data = std::fs::read(path)?;
-    let data = if data.len() > max_bytes {
-        &data[..max_bytes]
-    } else {
-        &data
-    };
-    let s = String::from_utf8_lossy(data).into_owned();
+    if data.len() > max_bytes {
+        return Err(std::io::Error::other(format!(
+            "file {} exceeds {max_bytes} byte cap — refusing to load",
+            path.display()
+        )));
+    }
+    let s = String::from_utf8_lossy(&data).into_owned();
     Ok(s.replace("\r\n", "\n").replace('\r', "\n"))
 }
 
@@ -214,7 +258,22 @@ fn strip_all_blocks(text: &str) -> String {
 
 pub fn apply_nudge(existing: &str, body: &str) -> (String, InstallAction) {
     let block = render_block(body);
-    let has_block = existing.contains(START_MARKER) && existing.contains(END_MARKER);
+    let has_start = existing.contains(START_MARKER);
+    let has_end = existing.contains(END_MARKER);
+    if has_start && !has_end {
+        let stripped = existing
+            .split(START_MARKER)
+            .next()
+            .unwrap_or(existing)
+            .trim();
+        let updated = if stripped.is_empty() {
+            block.clone()
+        } else {
+            format!("{stripped}\n\n{block}")
+        };
+        return (updated, InstallAction::Updated);
+    }
+    let has_block = has_start && has_end;
     if has_block {
         let stripped = strip_all_blocks(existing).trim().to_string();
         let updated = if stripped.is_empty() {
@@ -551,6 +610,22 @@ pub fn get_status(
         .map(|v| !v.trim().is_empty())
         .unwrap_or(false);
 
+    let harness_types = if skill_target.exists() {
+        read_text_capped(&skill_target, SKILL_MD_MAX_BYTES)
+            .map(|text| check_harness_agent_types(&text))
+            .unwrap_or_else(|_| HarnessTypesStatus {
+                ok: false,
+                issues: vec!["could not read skill file for harness type check".to_string()],
+                expected: HARNESS_AGENT_TYPES.to_vec(),
+            })
+    } else {
+        HarnessTypesStatus {
+            ok: false,
+            issues: vec!["skill not installed — cannot verify harness agent types".to_string()],
+            expected: HARNESS_AGENT_TYPES.to_vec(),
+        }
+    };
+
     Status {
         nudge: ComponentStatus {
             name: "nudge".to_string(),
@@ -566,6 +641,40 @@ pub fn get_status(
         },
         opt_out,
         update_skill: update_status,
+        harness_types,
+    }
+}
+
+#[cfg(test)]
+mod harness_types_tests {
+    use super::*;
+
+    #[test]
+    fn bundled_skill_uses_builtin_types_only() {
+        let bundled = skill_md();
+        let check = check_harness_agent_types(&bundled);
+        assert!(check.ok, "issues: {:?}", check.issues);
+        assert!(skill_uses_subagent_type(&bundled, ADVISOR_SUBAGENT_TYPE));
+        assert!(skill_uses_subagent_type(&bundled, RUNNER_SUBAGENT_TYPE));
+        assert!(!skill_uses_subagent_type(&bundled, "advisor-executor"));
+        assert!(!skill_uses_subagent_type(&bundled, "code-review"));
+    }
+
+    #[test]
+    fn deprecated_spawn_types_flagged() {
+        let bad = r#"subagent_type: "advisor-executor""#;
+        let check = check_harness_agent_types(bad);
+        assert!(!check.ok);
+        assert!(check.issues.iter().any(|i| i.contains("advisor-executor")));
+    }
+
+    #[test]
+    fn prose_mention_of_deprecated_type_is_ok() {
+        let prose = r#"custom types like `advisor-executor` are not guaranteed
+subagent_type: "generalPurpose"
+subagent_type: "generalPurpose""#;
+        let check = check_harness_agent_types(prose);
+        assert!(check.ok, "issues: {:?}", check.issues);
     }
 }
 
@@ -843,6 +952,15 @@ mod tests {
     }
 
     #[test]
+    fn apply_nudge_repairs_partial_start_marker() {
+        let partial = format!("preamble\n{START_MARKER}\norphaned");
+        let (contents, action) = apply_nudge(&partial, NUDGE_BODY);
+        assert_eq!(action, InstallAction::Updated);
+        assert!(contents.contains(END_MARKER));
+        assert_eq!(contents.matches(START_MARKER).count(), 1);
+    }
+
+    #[test]
     fn apply_nudge_roundtrip() {
         let (contents, action) = apply_nudge("", NUDGE_BODY);
         assert_eq!(action, InstallAction::Installed);
@@ -954,15 +1072,15 @@ mod tests {
             .unwrap_or_default()
             .as_secs();
         let mock_cache = serde_json::json!({
-            "latest": "0.8.6",
+            "latest": "0.8.8",
             "checked_at": now
         });
         std::fs::write(&cache_file, serde_json::to_string(&mock_cache).unwrap()).unwrap();
 
-        let res = check_for_update_cached("0.8.5", 86400, Some(&cache_file));
-        assert_eq!(res, Some("0.8.6".to_string()));
+        let res = check_for_update_cached("0.8.7", 86400, Some(&cache_file));
+        assert_eq!(res, Some("0.8.8".to_string()));
 
-        let res = check_for_update_cached("0.8.6", 86400, Some(&cache_file));
+        let res = check_for_update_cached("0.8.8", 86400, Some(&cache_file));
         assert_eq!(res, None);
 
         invalidate_update_check_cache(Some(&cache_file));

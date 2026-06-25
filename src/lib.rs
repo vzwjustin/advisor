@@ -49,8 +49,8 @@ pub use baseline::{
 pub use checkpoint::{checkpoint_path, list_checkpoints, load_checkpoint, Checkpoint};
 pub use codex_skill::{build_codex_runner_prompt, render_codex_skill_md};
 pub use config::{
-    default_team_config, is_known_model, TeamConfig, TeamConfigInput, DEFAULT_ADVISOR_MODEL,
-    DEFAULT_RUNNER_MODEL, POOL_SIZE_CEILING,
+    default_team_config, is_known_model, normalize_model_id, TeamConfig, TeamConfigInput,
+    CLAUDE_CODE_MODEL_PREFIX, DEFAULT_ADVISOR_MODEL, DEFAULT_RUNNER_MODEL, POOL_SIZE_CEILING,
 };
 pub use cost::{estimate_cost, format_estimate, load_pricing, CostEstimate};
 pub use doctor::{format_report, run_doctor, Check, DoctorReport, HealthLevel};
@@ -71,13 +71,16 @@ pub use install::{
     uninstall_nudge, uninstall_skill, ComponentStatus, InstallAction, InstallResult, Status,
     NUDGE_BODY, OPT_OUT_ENV,
 };
+pub use install::{check_harness_agent_types, HarnessTypesStatus};
 pub use live::{
     append_event, latest_seq, live_events_path, load_recent_events, LIVE_DIR_NAME, LIVE_FILE_NAME,
     LIVE_SCHEMA_VERSION,
 };
 pub use models::{Finding, RankedFile, Severity};
 pub use orchestrate::{
-    build_coder_prompt, build_explorer_pool_agents, build_explorer_prompt, render_pipeline,
+    build_advisor_agent, build_coder_prompt, build_explorer_pool_agents, build_explorer_prompt,
+    build_runner_pool_agents, render_pipeline, ADVISOR_SUBAGENT_TYPE, EXPLORER_SUBAGENT_TYPE,
+    HARNESS_AGENT_TYPES, RUNNER_SUBAGENT_TYPE,
 };
 pub use pr_comment::format_pr_comment;
 pub use presets::{get_preset, list_presets, RulePack};

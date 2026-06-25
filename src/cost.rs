@@ -481,8 +481,8 @@ mod tests {
         let est = estimate_cost(
             &tasks,
             None,
-            "claude-opus-4-7",
-            "claude-sonnet-4-6",
+            "cc/claude-opus-4-8",
+            "cc/claude-sonnet-4-6",
             2,
             Some(5),
             "claude-haiku-4-5",

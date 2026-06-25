@@ -37,7 +37,7 @@ write it to a unique temp file, then Read it back and pass the content
 directly as the `prompt` parameter to Agent:
 
 ```bash
-TMPF=$(mktemp /tmp/advisor_prompt.XXXXXX.txt) && advisor prompt advisor TARGET --context 'CONTEXT' --quiet > "$TMPF" && echo "$TMPF"
+TMPF=$(mktemp) && advisor prompt advisor TARGET --context 'CONTEXT' --quiet > "$TMPF" && echo "$TMPF"
 ```
 
 If `advisor` is not on `python3`'s path (uv-tool installs), the command
@@ -46,21 +46,37 @@ above still works because `advisor` resolves via `$PATH`. If you get
 `head -1 $(which advisor)` and substitute it for `python3`:
 
 ```bash
-TMPF=$(mktemp /tmp/advisor_prompt.XXXXXX.txt) && /home/USER/.local/share/uv/tools/advisor-agent/bin/python3 -m advisor   prompt advisor TARGET --context 'CONTEXT' --quiet > "$TMPF" && echo "$TMPF"
+TMPF=$(mktemp) && /home/USER/.local/share/uv/tools/advisor-agent/bin/python3 -m advisor   prompt advisor TARGET --context 'CONTEXT' --quiet > "$TMPF" && echo "$TMPF"
 ```
 
 The Bash command prints the unique tmpfile path. Then `Read("<that path>")`
 and use its content as the Agent `prompt` parameter verbatim.
 
-**Step 5:** Spawn Agent with the prompt content from Step 4.
-
-**Step 6 (immediately after Step 5):** Send a begin trigger — agents in
-mailbox mode go idle until a message arrives. Without this, the advisor's
-first turn will never start:
+**Step 5 (ONE turn — spawn + begin together):** In a **single response**,
+issue **both** tool calls in parallel — never spawn in one turn and Begin
+in the next. Splitting them races the mailbox and often produces
+`ResponseAborted` (~6s disconnect, zero tool calls).
 
 ```
+Agent({
+  name: "advisor",
+  description: "Investigate, rank, and dispatch runners",
+  subagent_type: "generalPurpose",
+  model: "opus",
+  team_name: "review",
+  prompt: <content from Step 4>
+})
 SendMessage({ to: "advisor", summary: "Begin.", message: "Begin." })
 ```
+
+Use bare `opus` / `sonnet` / `haiku` on `Agent({ model: ... })` so the
+advisor inherits your `/model` session default (option 1 or `cc/claude-*`
+option 2). Pinning `claude-opus-4-8` without the `cc/` prefix your picker
+shows is a common spawn mismatch.
+
+**First idle after Step 5 is OK only when Begin was in the same turn.**
+If you see `idle_notification` with zero tool calls *and* no Begin in that
+same response, re-send Begin — do not re-spawn.
 
 **Keep ALL output minimal:**
 - NO file listings, NO ls, NO cat
@@ -83,8 +99,8 @@ default_team_config(
     max_runners: int | None = None,   # None → env ADVISOR_MAX_RUNNERS or 5
     min_priority: int = 3,
     context: str = "",          # ← user's request goes HERE (not 'user_request')
-    advisor_model: str = "claude-opus-4-7",
-    runner_model: str = "claude-sonnet-4-6",
+    advisor_model: str = "cc/claude-opus-4-8",
+    runner_model: str = "cc/claude-sonnet-4-6",
     # Common optional kwargs — see `advisor plan --help` for the full list
     preset: str | None = None,        # e.g. "python-web", "node-api"
     test_command: str = "",           # e.g. "pytest -q" — re-dispatch on failure
@@ -94,7 +110,7 @@ default_team_config(
 
 **Concrete example (use this pattern verbatim):**
 ```bash
-TMPF=$(mktemp /tmp/advisor_prompt.XXXXXX.txt) && advisor prompt advisor /Users/.../project   --context 'Audit codebase for UI enhancements'   --quiet > "$TMPF" && echo "$TMPF"
+TMPF=$(mktemp) && advisor prompt advisor /Users/.../project   --context 'Audit codebase for UI enhancements'   --quiet > "$TMPF" && echo "$TMPF"
 ```
 
 **NEVER do these:**
@@ -161,25 +177,38 @@ If error "Already leading team" → TeamDelete() then retry
 TeamCreate({ team_name: "review", description: "Code review of <target>" })
 ```
 
-### 2. Spawn the Opus advisor FIRST
+### 2. Spawn the Opus advisor FIRST (same turn as Begin)
+
+**One response — spawn and Begin together.** Issue both tool calls in
+parallel. Splitting across turns races the mailbox and often produces
+`ResponseAborted` (~6s stream disconnect, zero tool calls).
 
 ```
 Agent({
   name: "advisor",
   description: "Investigate, rank, and dispatch runners",
-  subagent_type: "advisor-executor",
-  model: "claude-opus-4-7",
+  subagent_type: "generalPurpose",
+  model: "opus",
   team_name: "review",
   prompt: <build_advisor_prompt(config)>
 })
-```
-
-**Immediately after spawning, send a begin trigger** — agents in mailbox
-mode go idle until a message arrives:
-
-```
 SendMessage({ to: "advisor", summary: "Begin.", message: "Begin." })
 ```
+
+Use built-in harness types only (`generalPurpose`, `explore`) — custom
+types like `advisor-executor` or `code-review` are not guaranteed to
+resolve and will wedge the run.
+
+**Model IDs from `/model`:** Prefer bare `opus` / `sonnet` / `haiku` so
+agents inherit your session default (option 1). To pin, copy the exact
+custom slug from your picker — e.g. `cc/claude-opus-4-8` (option 2),
+`cc/claude-sonnet-4-6`, `cc/claude-haiku-4-5-20251001`. Never use
+`claude-opus-4.8` (dot) or `opus-4-8` (mid-form). Bare `claude-opus-4-8`
+(without `cc/`) often fails spawn when your picker shows `cc/…` slugs.
+
+**First idle after spawn is OK only when Begin was in the same turn.**
+If you see `idle_notification` with zero tool calls and no Begin in that
+response, re-send Begin — do not re-spawn.
 
 Build the prompt silently via Bash (see IMPORTANT section above).
 The advisor prompt encodes the full six-step flow:
@@ -222,8 +251,8 @@ utilities.
 Agent({
   name: "runner-1",
   description: "Pool runner 1 — reads batch from initial prompt",
-  subagent_type: "code-review",
-  model: "claude-sonnet-4-6",
+  subagent_type: "generalPurpose",
+  model: "sonnet",
   team_name: "review",
   run_in_background: true,
   prompt: <verbatim text from Opus's "### runner-1 / #### Prompt" block>
@@ -264,6 +293,20 @@ SendMessage({
 
 Do not summarize, filter, or batch. Relay each report the moment it arrives. This is the fix for mailbox delivery failures — the advisor sees every finding through the relay even when direct delivery drops.
 
+**Team-lead drives verification (deadline nudge).** After relaying a runner
+report, if the advisor does not respond within one turn, nudge it:
+
+```
+SendMessage({
+  to: "advisor",
+  summary: "Verdict needed",
+  message: "Runner-N report relayed. Respond now: CONFIRM/NARROW/REDIRECT verdict for runner-N, or emit PROCESSING runner-N. Pending inbox = protocol violation."
+})
+```
+
+If the advisor verified runner-1 then idled without processing runner-2
+through runner-N, send the nudge naming the pending runners explicitly.
+
 Runners and Opus also talk continuously:
 
 - Runners SendMessage team-lead with **questions**, **progress pings**, **draft findings**, and **final reports** — team-lead relays each to advisor.
@@ -298,6 +341,43 @@ SendMessage({"to": "runner-1", "message": {"type": "shutdown_request"}})
 TeamDelete()
 ```
 
+### Hard-kill fallback (when shutdown wedges)
+
+If a teammate ignores `shutdown_request` (you sent it ≥2 times with no
+`shutdown_response` and they remain active), OR `TeamDelete()` refuses
+because active members remain:
+
+1. Log one line to the user: `HARD_KILL: <name> ignored N shutdown_requests`
+2. Retry `TeamDelete()` — some harness builds force-terminate wedged agents
+   when the team-lead retries after repeated shutdown failures
+3. If still blocked, tell the user to run `TeamDelete()` manually or restart
+   the Claude Code session — do not leave a zombie team blocking the next run
+
+Never refuse cleanup indefinitely. A wedged advisor with no escape hatch is
+worse than a force-deleted team.
+
+## Troubleshooting
+
+### `ResponseAborted` during advising (~6s, zero tool calls)
+
+Typical log line:
+
+```
+[STREAM] CLAUDE | claude-opus-4-8 | ~6000ms | disconnect: ResponseAborted
+```
+
+This is a **stream abort**, not a wrong-model error. Common causes:
+
+1. **Spawn/Begin split across turns** — fix: re-run Step 5 with `Agent` +
+   `SendMessage` Begin in the **same** response.
+2. **Advisor idle without Begin** — mailbox-mode agents wait for mail; if
+   Begin never arrived, the harness may tear down the pending stream.
+3. **Huge inherited context** — 200+ messages in the team-lead thread can
+   slow the first advisor turn; keep team-lead output minimal before spawn.
+
+If the advisor already started and later turns abort, relay pending runner
+reports and nudge with a verdict deadline (see §4).
+
 ## Live dashboard hooks (optional, best-effort)
 
 When the user has the web dashboard running (`advisor ui`) — which they
@@ -321,7 +401,7 @@ Three checkpoints, three event kinds:
    meaningful context.
 
    ```bash
-   advisor live record --kind run_start      --data '{"target":"<absolute path>","user_goal":"<short goal>","advisor_model":"claude-opus-4-7","runner_model":"claude-sonnet-4-6"}'      <target> || true
+   advisor live record --kind run_start      --data '{"target":"<absolute path>","user_goal":"<short goal>","advisor_model":"cc/claude-opus-4-8","runner_model":"cc/claude-sonnet-4-6"}'      <target> || true
    ```
 
 2. **`report_relay`** — every time a runner report arrives in your
@@ -361,7 +441,8 @@ Schema details and additional kinds: see `advisor live --help`.
 
 1. **TeamDelete first** — a leader can only manage one team at a time.
 2. **Opus goes first** — spawn Opus before any runners. The pool is
-   right-sized AFTER Opus's first pass, not before.
+   right-sized AFTER Opus's first pass, not before. Spawn + Begin in one
+   turn (never split).
 3. **No hardcoded pool size** — Opus decides N every time. Never default
    to 5 or any other number.
 4. **All runners spawn in ONE message** — put every Agent call in a single

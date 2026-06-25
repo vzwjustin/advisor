@@ -2,6 +2,8 @@
 //! plus the [`TeamConfig`] dataclass and the [`default_team_config`] assembler
 //! (env-var fallbacks, range clamping with stderr warnings, preset merge).
 
+use std::io::{IsTerminal, Read};
+
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -14,14 +16,17 @@ pub const KNOWN_MODEL_SHORTCUTS: [&str; 3] = ["opus", "sonnet", "haiku"];
 /// Hard ceiling on the runner pool size (`POOL_SIZE_CEILING`).
 pub const POOL_SIZE_CEILING: i64 = 20;
 
-/// Default advisor (Opus) model id.
-pub const DEFAULT_ADVISOR_MODEL: &str = "claude-opus-4-7";
+/// Claude Code custom-model prefix from `/model` (e.g. `cc/claude-opus-4-8`).
+pub const CLAUDE_CODE_MODEL_PREFIX: &str = "cc/";
 
-/// Default runner (Sonnet) model id.
-pub const DEFAULT_RUNNER_MODEL: &str = "claude-sonnet-4-6";
+/// Default advisor (Opus) model id for Claude Code spawn.
+pub const DEFAULT_ADVISOR_MODEL: &str = "cc/claude-opus-4-8";
 
-/// Default explorer (Haiku) model id.
-pub const DEFAULT_EXPLORER_MODEL: &str = "claude-haiku-4-5";
+/// Default runner (Sonnet) model id for Claude Code spawn.
+pub const DEFAULT_RUNNER_MODEL: &str = "cc/claude-sonnet-4-6";
+
+/// Default explorer (Haiku) model id for Claude Code spawn.
+pub const DEFAULT_EXPLORER_MODEL: &str = "cc/claude-haiku-4-5-20251001";
 
 /// Default per-explorer output character ceiling.
 pub const DEFAULT_EXPLORER_OUTPUT_CHAR_CEILING: i64 = 40_000;
@@ -29,11 +34,62 @@ pub const DEFAULT_EXPLORER_OUTPUT_CHAR_CEILING: i64 = 40_000;
 /// Default per-explorer distinct-file-read ceiling.
 pub const DEFAULT_EXPLORER_FILE_READ_CEILING: i64 = 40;
 
-// Long-form model id matcher, identical to `_LONG_FORM_MODEL_RE`.
+// Long-form model id matcher: API ids, Claude Code `cc/` custom models, Cursor
+// thinking suffixes, and `claude-fable-N`.
 static LONG_FORM_MODEL_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^(?:Codex|claude)-(opus|sonnet|haiku)-\d+(?:[.-]\d+){0,3}(?:-\d{8})?$")
-        .expect("model-id regex is a valid compile-time constant")
+    Regex::new(
+        r"^(?:cc/)?(?:Codex|claude)-(?:fable|opus|sonnet|haiku)-\d+(?:[.-]\d+){0,3}(?:-\d{8})?(?:-(?:thinking-(?:high|medium|low|xhigh)(?:-fast)?|fast))?$",
+    )
+    .expect("model-id regex is a valid compile-time constant")
 });
+
+static MID_FORM_MODEL_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^(opus|sonnet|haiku)-(\d+(?:[.-]\d+)*)$")
+        .expect("mid-form model regex is a valid compile-time constant")
+});
+
+/// Fix common model typos before spawn. Returns `(normalized, warning_if_changed)`.
+///
+/// Claude Code rejects mid-form strings like `opus-4-8` and API 404s on dotted
+/// ids like `claude-opus-4.8`. Harnesses may also use thinking suffixes.
+pub fn normalize_model_id(name: &str) -> (String, Option<String>) {
+    let trimmed = name.trim();
+    if let Some(caps) = MID_FORM_MODEL_RE.captures(trimmed) {
+        let family = caps.get(1).unwrap().as_str();
+        let ver = caps.get(2).unwrap().as_str().replace('.', "-");
+        let (normalized, _) = normalize_model_id(&format!("claude-{family}-{ver}"));
+        return (
+            normalized.clone(),
+            Some(format!(
+                "normalized {trimmed:?} → {normalized:?} (mid-form IDs are rejected by Agent)"
+            )),
+        );
+    }
+    if trimmed.contains("claude-") && trimmed.contains('.') {
+        let fixed = trimmed.replace('.', "-");
+        return normalize_model_id(&fixed);
+    }
+    if (trimmed.starts_with("claude-") || trimmed.starts_with("Codex-"))
+        && !trimmed.starts_with(CLAUDE_CODE_MODEL_PREFIX)
+    {
+        let fixed = format!("{CLAUDE_CODE_MODEL_PREFIX}{trimmed}");
+        return (
+            fixed.clone(),
+            Some(format!(
+                "normalized {trimmed:?} → {fixed:?} (Claude Code /model uses cc/ custom IDs)"
+            )),
+        );
+    }
+    (trimmed.to_string(), None)
+}
+
+fn apply_model_normalization(label: &str, model: &mut String) {
+    let (normalized, note) = normalize_model_id(model);
+    if let Some(msg) = note {
+        warn(&format!("{label}: {msg}"));
+    }
+    *model = normalized;
+}
 
 /// Return true if `name` looks like a valid Claude Code / Codex model string —
 /// either a bare alias or a long-form `claude-`/`Codex-` family id. Mirrors
@@ -162,6 +218,58 @@ fn warn(msg: &str) {
     eprintln!("⚠ {msg}");
 }
 
+/// Max bytes read from stdin (`_STDIN_LIMIT` in Python / `main.rs`).
+pub const STDIN_READ_LIMIT: usize = 50 * 1024 * 1024;
+
+/// Read stdin without blocking when nothing is piped.
+///
+/// In some non-interactive environments stdin is not a TTY but is also empty;
+/// a blocking read would hang forever. Mirrors Python `_read_stdin_if_available`.
+pub fn read_stdin_if_available(default: &str, cap: usize) -> String {
+    if std::io::stdin().is_terminal() {
+        return default.to_string();
+    }
+    if !stdin_has_data() {
+        return default.to_string();
+    }
+    let mut buf = Vec::new();
+    let _ = std::io::Read::read_to_end(
+        &mut std::io::stdin().take(cap.try_into().unwrap_or(u64::MAX)),
+        &mut buf,
+    );
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
+#[cfg(unix)]
+fn stdin_has_data() -> bool {
+    use std::os::unix::io::AsRawFd;
+
+    let fd = std::io::stdin().as_raw_fd();
+    let mut pfd = libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let ready = unsafe { libc::poll(&mut pfd, 1, 0) };
+    ready > 0 && (pfd.revents & libc::POLLIN) != 0
+}
+
+#[cfg(not(unix))]
+fn stdin_has_data() -> bool {
+    // Windows lacks a portable poll-on-stdin helper; assume piped stdin may hold data.
+    true
+}
+
+/// Resolve `--context` / `--context -` (stdin) to the context string stored on
+/// [`TeamConfig`]. Mirrors Python `_resolve_context`.
+pub fn resolve_cli_context(raw: Option<&str>) -> String {
+    match raw {
+        None | Some("") => String::new(),
+        Some("-") => read_stdin_if_available("", STDIN_READ_LIMIT),
+        Some(s) => s.to_string(),
+    }
+}
+
 /// Create a default team configuration with env-var fallbacks, range clamping
 /// (with stderr warnings), and optional preset merge. Mirrors
 /// `default_team_config`.
@@ -233,6 +341,21 @@ pub fn default_team_config(input: TeamConfigInput) -> TeamConfig {
 
     if file_types_is_default {
         file_types = env_or("ADVISOR_FILE_TYPES", &file_types);
+    }
+    // Preset file_types before manifest inference so e.g. --preset typescript-react
+    // is not clobbered by package.json → *.js,*.ts,*.tsx,*.jsx.
+    if file_types_is_default && file_types == "*.py" {
+        if let Some(name) = &preset {
+            if let Ok(pack) = get_preset(name) {
+                file_types = pack.file_types.to_string();
+            }
+        }
+    }
+    if file_types_is_default && file_types == "*.py" {
+        let root = std::path::Path::new(&target_dir);
+        if let Some(inferred) = crate::fs::infer_default_file_types(root) {
+            file_types = inferred;
+        }
     }
     if min_priority_is_default {
         min_priority = env_int_or("ADVISOR_MIN_PRIORITY", min_priority);
@@ -310,6 +433,10 @@ pub fn default_team_config(input: TeamConfigInput) -> TeamConfig {
         }
     }
 
+    apply_model_normalization("advisor_model", &mut advisor_model);
+    apply_model_normalization("runner_model", &mut runner_model);
+    apply_model_normalization("explorer_model", &mut explorer_model);
+
     if warn_unknown_model {
         for (label, model) in [
             ("advisor_model", &advisor_model),
@@ -362,9 +489,26 @@ mod tests {
 
     // Reference values captured from the Python implementation.
     #[test]
+    fn read_stdin_if_available_returns_default_on_tty() {
+        // Cannot reliably simulate piped stdin in unit tests; TTY path is deterministic.
+        if std::io::stdin().is_terminal() {
+            assert_eq!(
+                read_stdin_if_available("<placeholder>", 1024),
+                "<placeholder>"
+            );
+        }
+    }
+
+    #[test]
     fn known_model_matrix() {
         assert!(is_known_model("opus"));
         assert!(is_known_model("claude-opus-4-7"));
+        assert!(is_known_model("claude-opus-4-8"));
+        assert!(is_known_model("cc/claude-opus-4-8"));
+        assert!(is_known_model("cc/claude-fable-5"));
+        assert!(is_known_model("cc/claude-haiku-4-5-20251001"));
+        assert!(is_known_model("claude-opus-4-8-thinking-high"));
+        assert!(is_known_model("claude-opus-4-8-thinking-high-fast"));
         assert!(!is_known_model("opus-4-5"));
         assert!(is_known_model("claude-sonnet-4-6-20231015"));
         assert!(!is_known_model("gpt-4"));
@@ -372,9 +516,60 @@ mod tests {
     }
 
     #[test]
+    fn normalize_model_id_fixes_mid_form_and_dots() {
+        assert_eq!(normalize_model_id("opus-4-8").0, "cc/claude-opus-4-8");
+        assert_eq!(
+            normalize_model_id("claude-opus-4.8").0,
+            "cc/claude-opus-4-8"
+        );
+        assert_eq!(
+            normalize_model_id("claude-opus-4-8").0,
+            "cc/claude-opus-4-8"
+        );
+        assert_eq!(normalize_model_id("opus").0, "opus");
+        assert!(normalize_model_id("opus-4-8").1.is_some());
+    }
+
+    #[test]
+    fn default_team_config_normalizes_mid_form_advisor_model() {
+        let mut input = TeamConfigInput::new("/t");
+        input.advisor_model = "opus-4-8".to_string();
+        input.warn_unknown_model = false;
+        let cfg = default_team_config(input);
+        assert_eq!(cfg.advisor_model, "cc/claude-opus-4-8");
+    }
+
+    #[test]
     fn date_stamp_must_be_eight_digits() {
         // Bounded version segment must not swallow a bogus date stamp.
         assert!(!is_known_model("claude-opus-4-99999999-extra"));
+    }
+
+    #[test]
+    fn resolve_cli_context_reads_literal_and_empty() {
+        assert_eq!(resolve_cli_context(None), "");
+        assert_eq!(resolve_cli_context(Some("")), "");
+        assert_eq!(
+            resolve_cli_context(Some("find auth bugs")),
+            "find auth bugs"
+        );
+    }
+
+    #[test]
+    fn preset_file_types_apply_before_manifest_inference() {
+        let dir = std::env::temp_dir().join(format!("advisor_preset_infer_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("package.json"), "{}\n").unwrap();
+        std::fs::write(dir.join("App.tsx"), "export {}").unwrap();
+
+        let mut input = TeamConfigInput::new(dir.to_string_lossy().as_ref());
+        input.warn_unknown_model = false;
+        input.preset = Some("typescript-react".to_string());
+        let cfg = default_team_config(input);
+        assert_eq!(cfg.file_types, "*.ts,*.tsx");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

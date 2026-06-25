@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.7] - 2026-06-14
+
+Opus 4.8 / orchestration hardening, CLI robustness, and PR #1 parity fixes.
+
+### Changed
+
+- **Default advisor model** is now `claude-opus-4-8` (was `claude-opus-4-7`).
+
+### Fixed
+
+- **Broken-pipe stdout (PR #1)** — CLI output no longer panics or exits non-zero
+  when a downstream reader closes early (`advisor plan . | head -1`). Mirrors
+  Python `_print` / `BrokenPipeError` → exit 0.
+- **Non-blocking stdin for prompt verify** — `advisor prompt verify` no longer
+  blocks forever when stdin is non-interactive but empty; uses
+  `read_stdin_if_available` (PR #1). `--context -` is capped at 50 MiB.
+- **`ResponseAborted` during advising** — SKILL.md now requires spawning the
+  advisor and sending Begin in the **same turn** (parallel `Agent` +
+  `SendMessage`). Splitting across turns races the mailbox and often aborts the
+  stream (~6s, zero tool calls). Prefer bare `opus`/`sonnet` aliases; added
+  troubleshooting section for this log pattern.
+- **Opus 4.8 model ID mistakes** — `normalize_model_id` rewrites mid-form
+  (`opus-4-8`) and dotted (`claude-opus-4.8`) IDs before spawn, and adds
+  the Claude Code `cc/` prefix (`claude-opus-4-8` → `cc/claude-opus-4-8`).
+  Cursor thinking slugs are recognized by `is_known_model`.
+- **Opus orchestration stall** — advisor prompt now enforces a turn-terminal
+  contract: every relayed runner report must get a CONFIRM/NARROW/REDIRECT
+  verdict or a `PROCESSING runner-N` line; pending inbox + idle is a protocol
+  violation. Shutdown requests are highest priority.
+- **Team-lead verification driver** — SKILL.md instructs team-lead to nudge the
+  advisor when it idles after relaying a runner report.
+- **Hard-kill fallback** — SKILL.md documents escape hatch when
+  `shutdown_request` is ignored and `TeamDelete()` blocks on active members.
+- **First-turn idle** — SKILL.md documents that mailbox-mode spawn idle is
+  expected, not a spawn failure.
+- **Built-in subagent types** — drop custom `advisor-executor` /
+  `code-review` types; use `generalPurpose` (advisor + runners) and `explore`
+  (explorer tier). `advisor status` / `doctor` now verify harness agent types.
+
+## [0.8.6] - 2026-06-10
+
+CLI and file-type inference fixes from live `/advisor` pipeline feedback.
+
+### Added
+
+- **`advisor prompt --context`** — restore the `--context` flag (and
+  `--context -` stdin) on the `prompt` subcommand so generated advisor
+  prompts include the user's review goal.
+
+### Fixed
+
+- **macOS `mktemp` in skill template** — use bare `mktemp` instead of
+  `mktemp /tmp/advisor_prompt.XXXXXX.txt`, which fails on BSD/macOS.
+- **Default `file_types` inference** — detect primary language from
+  project manifests (`Cargo.toml`, `package.json`, `go.mod`,
+  `pyproject.toml`) instead of always defaulting to `*.py`; Node
+  manifests include `*.tsx`/`*.jsx`; presets apply before manifest
+  shortcuts.
+- **`infer_count_extensions` robustness** — skip symlinks (no loop
+  recursion), lowercase extension matching, fewer metadata syscalls via
+  `entry.file_type()`.
+- **Windows advisory file locks** — tolerate `Access denied` from `fs2`
+  on CI temp dirs; open append handles with `read(true)` for
+  `LockFileEx`.
+
 ## [0.8.5] - 2026-06-06
 
 Three-tier agent architecture (Advisor → Explorer → Coder) in the Rust

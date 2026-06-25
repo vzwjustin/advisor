@@ -2,6 +2,8 @@
 
 use crate::config::TeamConfig;
 
+use super::agent_types::{ADVISOR_SUBAGENT_TYPE, EXPLORER_SUBAGENT_TYPE, RUNNER_SUBAGENT_TYPE};
+
 const EXTRA_LINEBREAK_ESCAPES: &[(&str, &str)] = &[
     ("\x0b", "\\x0b"),
     ("\x0c", "\\x0c"),
@@ -50,7 +52,7 @@ Agent(
   name="advisor",
   description="Investigate, rank, and dispatch explorers + coders",
   model="{advisor_model}",
-  subagent_type="advisor-executor",
+  subagent_type="{advisor_type}",
   team_name="{team}",
   prompt=<build_advisor_prompt(config)>
 )
@@ -62,7 +64,7 @@ Agent(
   name="explorer-N",
   description="Pool explorer N — read-only file exploration",
   model="{explorer_model}",
-  subagent_type="explorer",
+  subagent_type="{explorer_type}",
   team_name="{team}",
   run_in_background=true,
   prompt=<build_explorer_prompt(config, target_files, guidance)>
@@ -77,7 +79,7 @@ Agent(
   name="runner-N",
   description="Pool coder N — fix implementation",
   model="{runner_model}",
-  subagent_type="code-review",
+  subagent_type="{runner_type}",
   team_name="{team}",
   run_in_background=true,
   prompt=<verbatim text from Opus's per-coder prompt block, or build_coder_prompt>
@@ -113,6 +115,9 @@ messages fails), then delete the team:
         max_explorers = config.max_explorers,
         max_runners = config.max_runners,
         min_priority = config.min_priority,
+        advisor_type = ADVISOR_SUBAGENT_TYPE,
+        explorer_type = EXPLORER_SUBAGENT_TYPE,
+        runner_type = RUNNER_SUBAGENT_TYPE,
     )
 }
 
@@ -145,7 +150,7 @@ Agent(
   name="advisor",
   description="Investigate, rank, and dispatch runners",
   model="{advisor_model}",
-  subagent_type="advisor-executor",
+  subagent_type="{advisor_type}",
   team_name="{team}",
   prompt=<build_advisor_prompt(config)>
 )
@@ -158,7 +163,7 @@ Agent(
   name="runner-N",
   description="Pool runner N — reads batch from initial prompt",
   model="{runner_model}",
-  subagent_type="code-review",
+  subagent_type="{runner_type}",
   team_name="{team}",
   run_in_background=true,
   prompt=<verbatim text from Opus dispatch plan per runner>
@@ -190,6 +195,8 @@ Shut down each teammate individually, then delete the team:
 "#,
         max_runners = config.max_runners,
         min_priority = config.min_priority,
+        advisor_type = ADVISOR_SUBAGENT_TYPE,
+        runner_type = RUNNER_SUBAGENT_TYPE,
     )
 }
 

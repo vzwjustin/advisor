@@ -389,7 +389,7 @@
   async function pollTick() {
     pollTimer = null;
     if (!liveEnabled) { setLiveState('paused', 'PAUSED'); return; }
-    if (document.hidden) return;
+    if (document.hidden) { schedulePoll(POLL_INTERVAL_MS); return; }
     const activeTab = document.querySelector('.tab.active')?.dataset.tab;
     if (activeTab !== 'findings') return;
 
@@ -433,7 +433,7 @@
 
   async function refetchFindings() {
     try {
-      const r = await fetch('/api/history', { cache: 'no-store' });
+      const r = await fetch('/api/history?limit=1000', { cache: 'no-store' });
       if (!r.ok) {
         showFindingsError('Error loading findings: ' + r.status);
         return false;
@@ -659,10 +659,9 @@
     let appended = 0;
     events.forEach((ev) => {
       const seq = typeof ev.seq === 'number' ? ev.seq : null;
-      if (seq !== null) {
-        if (liveFeedSeenSeqs.has(seq)) return;
-        liveFeedSeenSeqs.add(seq);
-      }
+      const dedupeKey = seq !== null ? ('seq:' + seq) : ('ev:' + (ev.ts || '') + ':' + (ev.kind || ''));
+      if (liveFeedSeenSeqs.has(dedupeKey)) return;
+      liveFeedSeenSeqs.add(dedupeKey);
       const li = document.createElement('li');
       li.className = 'feed-item feed-new';
       const ts = ev.ts || '';
@@ -712,6 +711,10 @@
         setLiveStreamState('active', 'LIVE');
       }
       if (typeof data.next_token === 'number' && data.next_token >= 0) {
+        if (liveStreamCursor > 0 && data.next_token < liveStreamCursor) {
+          liveStreamCursor = 0;
+          liveFeedSeenSeqs = new Set();
+        }
         liveStreamCursor = data.next_token;
       }
       liveStreamErrorStreak = 0;
@@ -729,8 +732,10 @@
     if (feed) feed.innerHTML = '';
     liveFeedCount = 0;
     liveFeedSeenSeqs = new Set();
+    liveStreamCursor = 0;
     $('#live-count').textContent = '';
     $('#live-empty').hidden = false;
+    scheduleLiveStreamPoll(0);
   }
   $('#live-clear').addEventListener('click', clearLiveFeed);
 

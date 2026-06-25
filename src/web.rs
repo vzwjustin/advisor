@@ -10,7 +10,7 @@ use tiny_http::{Header, Method, Response, Server};
 use crate::cost::estimate_cost;
 use crate::focus::{create_focus_tasks, FocusTask};
 use crate::fs::CONTENT_SCAN_LIMIT;
-use crate::history::{history_path, load_recent, HISTORY_SCHEMA_VERSION};
+use crate::history::{history_path, load_recent, HistoryEntry, HISTORY_SCHEMA_VERSION};
 use crate::live::{latest_seq, live_events_path, load_recent_events, LIVE_SCHEMA_VERSION};
 use crate::rank::{load_advisorignore, rank_files_with_base};
 
@@ -203,10 +203,12 @@ fn discover(target: &Path, file_types: &str) -> Result<Vec<String>, String> {
             } else if ft.is_file() {
                 let name = entry.file_name();
                 let name = name.to_string_lossy();
-                if pats
-                    .iter()
-                    .any(|pat| crate::rank::fnmatch_match(&name, pat))
-                {
+                let rel = path
+                    .strip_prefix(&root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                if crate::rank::path_matches_file_types(&rel, &name, &pats) {
                     let s = path.to_string_lossy().to_string();
                     if seen.insert(s.clone()) {
                         out.push(s);
@@ -216,6 +218,31 @@ fn discover(target: &Path, file_types: &str) -> Result<Vec<String>, String> {
         }
     }
     Ok(out)
+}
+
+type PlanCache = Option<(String, u8, Option<String>, Vec<FocusTask>)>;
+
+fn rank_target_cached(
+    state: &AppState,
+    file_types: &str,
+    min_priority: u8,
+    cache: &mut PlanCache,
+) -> Result<Vec<FocusTask>, String> {
+    let min_priority = min_priority.clamp(1, 5);
+    let (_, history_token, _) = get_file_mtime_info(&history_path(&state.target));
+    if let Some((ft, mp, ht, tasks)) = cache {
+        if ft == file_types && *mp == min_priority && *ht == history_token {
+            return Ok(tasks.clone());
+        }
+    }
+    let tasks = rank_target(state, file_types, min_priority)?;
+    *cache = Some((
+        file_types.to_string(),
+        min_priority,
+        history_token,
+        tasks.clone(),
+    ));
+    Ok(tasks)
 }
 
 fn rank_target(
@@ -303,7 +330,38 @@ fn host_header_allowed(host_header: &str, bound_port: u16) -> bool {
     !host_header.is_empty() && allowed_hosts.iter().any(|allowed| host_header == allowed)
 }
 
-fn handle_get(state: &AppState, request: tiny_http::Request, bound_port: u16) {
+fn history_entry_json(e: &HistoryEntry) -> serde_json::Value {
+    let mut obj = serde_json::json!({
+        "timestamp": e.timestamp,
+        "file_path": e.file_path,
+        "severity": e.severity,
+        "description": e.description,
+        "status": e.status,
+        "run_id": e.run_id,
+    });
+    if let Some(map) = obj.as_object_mut() {
+        if let Some(v) = &e.evidence {
+            map.insert("evidence".into(), serde_json::Value::String(v.clone()));
+        }
+        if let Some(v) = &e.fix {
+            map.insert("fix".into(), serde_json::Value::String(v.clone()));
+        }
+        if let Some(v) = &e.rule_id {
+            map.insert("rule_id".into(), serde_json::Value::String(v.clone()));
+        }
+        if let Some(v) = &e.tool {
+            map.insert("tool".into(), serde_json::Value::String(v.clone()));
+        }
+    }
+    obj
+}
+
+fn handle_get(
+    state: &AppState,
+    request: tiny_http::Request,
+    bound_port: u16,
+    plan_cache: &mut PlanCache,
+) {
     // DNS-rebinding defense: verify Host header against the server's local
     // listening port. The request remote port is the client's ephemeral port.
     let host_header = request
@@ -367,22 +425,11 @@ fn handle_get(state: &AppState, request: tiny_http::Request, bound_port: u16) {
             let limit = qs
                 .get("limit")
                 .and_then(|s| s.parse::<usize>().ok())
-                .unwrap_or(100)
+                .unwrap_or(1000)
                 .clamp(1, 1000);
             let entries = load_recent(&state.target, limit);
-            let entries_json: Vec<serde_json::Value> = entries
-                .into_iter()
-                .map(|e| {
-                    json!({
-                        "timestamp": e.timestamp,
-                        "file_path": e.file_path,
-                        "severity": e.severity,
-                        "description": e.description,
-                        "status": e.status,
-                        "run_id": e.run_id,
-                    })
-                })
-                .collect();
+            let entries_json: Vec<serde_json::Value> =
+                entries.iter().map(history_entry_json).collect();
             let payload = json!({
                 "schema_version": HISTORY_SCHEMA_VERSION,
                 "target": state.target.display().to_string(),
@@ -400,7 +447,7 @@ fn handle_get(state: &AppState, request: tiny_http::Request, bound_port: u16) {
                 .get("min_priority")
                 .and_then(|s| s.parse::<u8>().ok())
                 .unwrap_or(state.default_min_priority);
-            let tasks = match rank_target(state, file_types, min_priority) {
+            let tasks = match rank_target_cached(state, file_types, min_priority, plan_cache) {
                 Ok(tasks) => tasks,
                 Err(e) => {
                     send_json(request, 400, &json!({"error": e}));
@@ -452,7 +499,7 @@ fn handle_get(state: &AppState, request: tiny_http::Request, bound_port: u16) {
                 .get("min_priority")
                 .and_then(|s| s.parse::<u8>().ok())
                 .unwrap_or(state.default_min_priority);
-            let tasks = match rank_target(state, file_types, min_priority) {
+            let tasks = match rank_target_cached(state, file_types, min_priority, plan_cache) {
                 Ok(tasks) => tasks,
                 Err(e) => {
                     send_json(request, 400, &json!({"error": e}));
@@ -513,9 +560,17 @@ fn handle_get(state: &AppState, request: tiny_http::Request, bound_port: u16) {
             let events = load_recent_events(&state.target, since, limit);
             let file_latest = latest_seq(&state.target);
             let next_token = if file_latest > 0 {
-                file_latest
+                if let Some(s) = since {
+                    if s > file_latest {
+                        0
+                    } else {
+                        file_latest
+                    }
+                } else {
+                    file_latest
+                }
             } else {
-                since.unwrap_or(0)
+                0
             };
             let payload = json!({
                 "schema_version": LIVE_SCHEMA_VERSION,
@@ -579,6 +634,7 @@ pub fn run_server(
         println!("  ↻ open in browser: {}", url);
     }
 
+    let mut plan_cache: PlanCache = None;
     loop {
         let request = match server.recv() {
             Ok(rq) => rq,
@@ -599,7 +655,7 @@ pub fn run_server(
             continue;
         }
 
-        handle_get(&state, request, actual_port);
+        handle_get(&state, request, actual_port, &mut plan_cache);
     }
 
     Ok(())

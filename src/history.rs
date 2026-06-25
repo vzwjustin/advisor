@@ -50,6 +50,14 @@ pub struct HistoryEntry {
     pub status: String,
     pub run_id: String,
     pub schema_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fix: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
 }
 
 impl HistoryEntry {
@@ -59,16 +67,28 @@ impl HistoryEntry {
         // Value::String(..).to_string() yields a properly-escaped JSON string
         // with non-ASCII left raw (matching ensure_ascii=False).
         let q = |s: &str| Value::String(s.to_string()).to_string();
-        format!(
-            "{{\"timestamp\": {}, \"file_path\": {}, \"severity\": {}, \"description\": {}, \"status\": {}, \"run_id\": {}, \"schema_version\": {}}}",
-            q(&self.timestamp),
-            q(&self.file_path),
-            q(&self.severity),
-            q(&self.description),
-            q(&self.status),
-            q(&self.run_id),
-            q(&self.schema_version),
-        )
+        let mut parts = vec![
+            format!("\"timestamp\": {}", q(&self.timestamp)),
+            format!("\"file_path\": {}", q(&self.file_path)),
+            format!("\"severity\": {}", q(&self.severity)),
+            format!("\"description\": {}", q(&self.description)),
+            format!("\"status\": {}", q(&self.status)),
+            format!("\"run_id\": {}", q(&self.run_id)),
+            format!("\"schema_version\": {}", q(&self.schema_version)),
+        ];
+        if let Some(v) = &self.evidence {
+            parts.push(format!("\"evidence\": {}", q(v)));
+        }
+        if let Some(v) = &self.fix {
+            parts.push(format!("\"fix\": {}", q(v)));
+        }
+        if let Some(v) = &self.rule_id {
+            parts.push(format!("\"rule_id\": {}", q(v)));
+        }
+        if let Some(v) = &self.tool {
+            parts.push(format!("\"tool\": {}", q(v)));
+        }
+        format!("{{{}}}", parts.join(", "))
     }
 }
 
@@ -95,8 +115,12 @@ pub fn append_entries(target: &Path, entries: &[HistoryEntry]) -> std::io::Resul
     let mut f = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
+        .read(true) // Windows LockFileEx needs read or write access on the handle
         .open(&path)?;
-    f.write_all(payload.as_bytes())?;
+    crate::fs::lock_exclusive(&f)?;
+    let write_result = f.write_all(payload.as_bytes());
+    let _ = crate::fs::unlock(&f);
+    write_result?;
     Ok(path)
 }
 
@@ -107,13 +131,30 @@ pub fn load_recent_findings(history_file: &Path, limit: usize) -> Vec<HistoryEnt
     if limit == 0 || !history_file.exists() {
         return Vec::new();
     }
-    let text = match std::fs::read(history_file) {
-        Ok(b) => String::from_utf8_lossy(&b).into_owned(),
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+    let text = match crate::fs::read_tail_bytes(history_file, crate::fs::MAX_ADVISOR_FILE_BYTES) {
+        Ok(b) if b.is_empty() => return Vec::new(),
+        Ok(b) => {
+            let s = String::from_utf8_lossy(&b);
+            let was_tail_chunk = history_file
+                .metadata()
+                .map(|m| m.len() > crate::fs::MAX_ADVISOR_FILE_BYTES)
+                .unwrap_or(false);
+            // Drop a partial first line only when reading a truncated tail chunk.
+            if was_tail_chunk {
+                if let Some(idx) = s.find('\n') {
+                    s[idx + 1..].to_string()
+                } else {
+                    s.into_owned()
+                }
+            } else {
+                s.into_owned()
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(e) => {
             eprintln!("warning: history unreadable: {e}");
             return Vec::new();
         }
-        Err(_) => return Vec::new(),
     };
     let mut entries: Vec<(HistoryEntry, usize)> = Vec::new();
     for (append_idx, line) in text.lines().enumerate() {
@@ -170,6 +211,22 @@ pub fn load_recent_findings(history_file: &Path, limit: usize) -> Vec<HistoryEnt
                     .and_then(|v| v.as_str())
                     .unwrap_or(HISTORY_SCHEMA_VERSION)
                     .to_string(),
+                evidence: map
+                    .get("evidence")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                fix: map
+                    .get("fix")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                rule_id: map
+                    .get("rule_id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                tool: map
+                    .get("tool")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
             },
             append_idx,
         ));
@@ -223,6 +280,10 @@ fn parse_iso_epoch(ts: &str) -> Option<i64> {
         if op.len() == 2 {
             let oh: i64 = op[0].parse().ok()?;
             let om: i64 = op[1].parse().ok()?;
+            (t, sign * (oh * 3600 + om * 60))
+        } else if off.len() == 4 && off.bytes().all(|b| b.is_ascii_digit()) {
+            let oh: i64 = off[..2].parse().ok()?;
+            let om: i64 = off[2..].parse().ok()?;
             (t, sign * (oh * 3600 + om * 60))
         } else {
             (rest, 0)
@@ -426,14 +487,20 @@ pub fn new_run_id() -> String {
     let h = tod / 3600;
     let mi = (tod % 3600) / 60;
     let s = tod % 60;
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|x| x.subsec_nanos())
-        .unwrap_or(0);
-    let rand = (nanos as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    SystemTime::now().hash(&mut hasher);
+    std::process::id().hash(&mut hasher);
+    hasher.write_u64(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|x| x.subsec_nanos() as u64)
+            .unwrap_or(0),
+    );
     format!(
         "{y:04}{mo:02}{d:02}T{h:02}{mi:02}{s:02}Z-{:08x}",
-        (rand >> 32) as u32
+        (hasher.finish() >> 32) as u32
     )
 }
 
@@ -476,6 +543,10 @@ pub fn entry_now(
         status: status.to_string(),
         run_id: run_id.to_string(),
         schema_version: HISTORY_SCHEMA_VERSION.to_string(),
+        evidence: None,
+        fix: None,
+        rule_id: None,
+        tool: None,
     }
 }
 
@@ -501,6 +572,10 @@ mod tests {
                 status: o["status"].as_str().unwrap().into(),
                 run_id: o["run_id"].as_str().unwrap().into(),
                 schema_version: o["schema_version"].as_str().unwrap_or("1.0").into(),
+                evidence: None,
+                fix: None,
+                rule_id: None,
+                tool: None,
             })
             .collect()
     }
@@ -555,6 +630,10 @@ mod tests {
             status: "CONFIRMED".into(),
             run_id: "run".into(),
             schema_version: HISTORY_SCHEMA_VERSION.into(),
+            evidence: None,
+            fix: None,
+            rule_id: None,
+            tool: None,
         };
         let rows = [
             mk("2026-01-01T10:00:00+02:00", "same-epoch older append"),
@@ -581,6 +660,13 @@ mod tests {
                 "same-epoch older append"
             ]
         );
+    }
+
+    #[test]
+    fn parse_iso_compact_offset() {
+        let utc = parse_iso_epoch("2026-01-15T17:00:00Z").unwrap();
+        let est = parse_iso_epoch("2026-01-15T12:00:00-0500").unwrap();
+        assert_eq!(utc, est);
     }
 
     #[test]

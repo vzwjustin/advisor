@@ -41,4 +41,24 @@ mod tests {
         let g = golden();
         assert_eq!(version_badge(), g["version_badge"].as_str().unwrap());
     }
+
+    /// `ADVISOR_UPDATE_SNAPSHOTS=1 cargo test write_skill_strings -- --ignored`
+    #[test]
+    #[ignore]
+    fn write_skill_strings() {
+        if std::env::var("ADVISOR_UPDATE_SNAPSHOTS").ok().as_deref() != Some("1") {
+            return;
+        }
+        let mut g = golden();
+        g["SKILL_MD"] = serde_json::Value::String(skill_md());
+        g["SKILL_MD_UPDATE"] = serde_json::Value::String(skill_md_update());
+        g["version_badge"] = serde_json::Value::String(version_badge());
+        g["SKILL_MD_CODEX_RENDERED"] =
+            serde_json::Value::String(crate::codex_skill::render_codex_skill_md());
+        std::fs::write(
+            "tests/parity/skill_strings.json",
+            serde_json::to_string(&g).unwrap(),
+        )
+        .unwrap();
+    }
 }
