@@ -115,8 +115,8 @@ pub fn load_recent_findings(history_file: &Path, limit: usize) -> Vec<HistoryEnt
         }
         Err(_) => return Vec::new(),
     };
-    let mut entries: Vec<HistoryEntry> = Vec::new();
-    for line in text.lines() {
+    let mut entries: Vec<(HistoryEntry, usize)> = Vec::new();
+    for (append_idx, line) in text.lines().enumerate() {
         let stripped = line.trim();
         if stripped.is_empty() || stripped.len() > 65536 {
             continue;
@@ -157,26 +157,33 @@ pub fn load_recent_findings(history_file: &Path, limit: usize) -> Vec<HistoryEnt
         } else {
             "UNKNOWN".to_string()
         };
-        entries.push(HistoryEntry {
-            timestamp: timestamp.to_string(),
-            file_path: file_path.to_string(),
-            severity: sev,
-            description: description.to_string(),
-            status: st,
-            run_id: run_id.to_string(),
-            schema_version: map
-                .get("schema_version")
-                .and_then(|v| v.as_str())
-                .unwrap_or(HISTORY_SCHEMA_VERSION)
-                .to_string(),
-        });
+        entries.push((
+            HistoryEntry {
+                timestamp: timestamp.to_string(),
+                file_path: file_path.to_string(),
+                severity: sev,
+                description: description.to_string(),
+                status: st,
+                run_id: run_id.to_string(),
+                schema_version: map
+                    .get("schema_version")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(HISTORY_SCHEMA_VERSION)
+                    .to_string(),
+            },
+            append_idx,
+        ));
     }
-    // Newest-first: reverse (to make appended-last first on ties) then stable
-    // sort by timestamp descending.
-    entries.reverse();
-    entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    entries.sort_by(|(a, ai), (b, bi)| {
+        match (parse_iso_epoch(&a.timestamp), parse_iso_epoch(&b.timestamp)) {
+            (Some(ae), Some(be)) => be.cmp(&ae).then_with(|| bi.cmp(ai)),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => b.timestamp.cmp(&a.timestamp).then_with(|| bi.cmp(ai)),
+        }
+    });
     entries.truncate(limit);
-    entries
+    entries.into_iter().map(|(e, _)| e).collect()
 }
 
 /// Thin wrapper resolving `<target>/.advisor/history.jsonl`. Mirrors `load_recent`.
@@ -533,6 +540,46 @@ mod tests {
         assert_eq!(
             format_history_block(&entries()[..3]),
             golden()["format_block"].as_str().unwrap()
+        );
+    }
+
+    #[test]
+    fn load_recent_sorts_by_epoch_with_append_tie_breaker() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("history.jsonl");
+        let mk = |timestamp: &str, description: &str| HistoryEntry {
+            timestamp: timestamp.into(),
+            file_path: "a.rs".into(),
+            severity: "HIGH".into(),
+            description: description.into(),
+            status: "CONFIRMED".into(),
+            run_id: "run".into(),
+            schema_version: HISTORY_SCHEMA_VERSION.into(),
+        };
+        let rows = [
+            mk("2026-01-01T10:00:00+02:00", "same-epoch older append"),
+            mk("2026-01-01T08:00:00Z", "same-epoch newer append"),
+            mk("2026-01-01T08:00:00.999-01:00", "newest by epoch"),
+        ];
+        std::fs::write(
+            &path,
+            rows.iter()
+                .map(|e| format!("{}\n", e.to_json_line()))
+                .collect::<String>(),
+        )
+        .unwrap();
+
+        let got: Vec<String> = load_recent_findings(&path, 3)
+            .into_iter()
+            .map(|e| e.description)
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                "newest by epoch",
+                "same-epoch newer append",
+                "same-epoch older append"
+            ]
         );
     }
 

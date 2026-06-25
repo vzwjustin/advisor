@@ -12,6 +12,7 @@
 //! (e.g. `wp_`) which are unanchored on the right.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use crate::models::RankedFile;
 
@@ -686,7 +687,57 @@ pub fn rank_files(
     history_counts: Option<&HashMap<String, i64>>,
     history_window_days: i64,
 ) -> Vec<RankedFile> {
+    rank_files_inner(
+        file_paths,
+        read_fn,
+        ignore_patterns,
+        extra_keywords,
+        history_scores,
+        history_counts,
+        history_window_days,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+/// Rank files while applying `.advisorignore` slash-bearing rules against paths
+/// relative to `target_base`. Discovered files are often absolute; ignore files
+/// are project-relative, so callers that know the scan root should use this.
+pub fn rank_files_with_base(
+    file_paths: &[String],
+    read_fn: Option<&ReadFn<'_>>,
+    ignore_patterns: &[String],
+    extra_keywords: Option<&[(i64, Vec<String>)]>,
+    history_scores: Option<&HashMap<String, f64>>,
+    history_counts: Option<&HashMap<String, i64>>,
+    history_window_days: i64,
+    target_base: &Path,
+) -> Vec<RankedFile> {
+    rank_files_inner(
+        file_paths,
+        read_fn,
+        ignore_patterns,
+        extra_keywords,
+        history_scores,
+        history_counts,
+        history_window_days,
+        Some(target_base),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn rank_files_inner(
+    file_paths: &[String],
+    read_fn: Option<&ReadFn<'_>>,
+    ignore_patterns: &[String],
+    extra_keywords: Option<&[(i64, Vec<String>)]>,
+    history_scores: Option<&HashMap<String, f64>>,
+    history_counts: Option<&HashMap<String, i64>>,
+    history_window_days: i64,
+    target_base: Option<&Path>,
+) -> Vec<RankedFile> {
     let matchers = compile_ignore_patterns(ignore_patterns);
+    let target_base = target_base.map(normalize_base_for_ignore);
 
     let mut kept: Vec<&String> = Vec::new();
     for fp in file_paths {
@@ -702,7 +753,12 @@ pub fn rank_files(
         {
             continue;
         }
-        if matches_compiled(fp, &matchers) {
+        if matches_compiled(fp, &matchers)
+            || target_base
+                .as_ref()
+                .and_then(|base| relative_to_base_for_ignore(fp, base))
+                .is_some_and(|rel| matches_compiled(&rel, &matchers))
+        {
             continue;
         }
         kept.push(fp);
@@ -766,6 +822,21 @@ pub fn rank_files(
             .then_with(|| a.path.cmp(&b.path))
     });
     ranked
+}
+
+fn normalize_base_for_ignore(base: &Path) -> PathBuf {
+    base.canonicalize().unwrap_or_else(|_| base.to_path_buf())
+}
+
+fn relative_to_base_for_ignore(file_path: &str, base: &Path) -> Option<String> {
+    let path = Path::new(file_path);
+    let rel = path.strip_prefix(base).ok()?;
+    let rel = rel.to_string_lossy().replace('\\', "/");
+    if rel.is_empty() {
+        None
+    } else {
+        Some(rel)
+    }
 }
 
 /// Format ranked files into a prompt-ready priority list. Mirrors `rank_to_prompt`.
@@ -1383,5 +1454,35 @@ mod tests {
                 "case={case}"
             );
         }
+    }
+
+    #[test]
+    fn slash_advisorignore_matches_absolute_paths_relative_to_target() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let src = tmp.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let secret = src.join("secret.py");
+        let public = src.join("public.py");
+        std::fs::write(&secret, "password = 'x'").unwrap();
+        std::fs::write(&public, "password = 'x'").unwrap();
+
+        let paths = vec![
+            secret.to_string_lossy().to_string(),
+            public.to_string_lossy().to_string(),
+        ];
+        let read = |p: &str| std::fs::read_to_string(p).ok();
+        let ranked = rank_files_with_base(
+            &paths,
+            Some(&read),
+            &["src/secret.py".to_string()],
+            None,
+            None,
+            None,
+            90,
+            tmp.path(),
+        );
+
+        assert!(ranked.iter().any(|r| r.path.ends_with("src/public.py")));
+        assert!(!ranked.iter().any(|r| r.path.ends_with("src/secret.py")));
     }
 }

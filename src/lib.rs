@@ -81,7 +81,9 @@ pub use orchestrate::{
 };
 pub use pr_comment::format_pr_comment;
 pub use presets::{get_preset, list_presets, RulePack};
-pub use rank::{language_for_path, load_advisorignore, rank_files, rank_to_prompt};
+pub use rank::{
+    language_for_path, load_advisorignore, rank_files, rank_files_with_base, rank_to_prompt,
+};
 pub use runner_budget::{new_budget, update_budget, BudgetStatus, RunnerBudget, ScopeAnchor};
 pub use sarif::{
     findings_to_sarif, level_for, synthesize_rule_id, SARIF_SCHEMA_URI, SARIF_VERSION,

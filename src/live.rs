@@ -86,13 +86,50 @@ fn next_seq(path: &Path) -> i64 {
     last_seq_from_tail(&tail) + 1
 }
 
-/// Append a single event. Returns the path written. Simplified lock (no flock, matches history.rs).
+struct SidecarLock {
+    path: PathBuf,
+}
+
+impl Drop for SidecarLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+fn acquire_sidecar_lock(path: &Path) -> Result<SidecarLock, String> {
+    let lock_path = path.with_extension("jsonl.lock");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+        {
+            Ok(mut f) => {
+                let _ = writeln!(f, "{}", std::process::id());
+                return Ok(SidecarLock { path: lock_path });
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(format!(
+                        "timed out waiting for live event lock {}",
+                        lock_path.display()
+                    ));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(e) => return Err(format!("create live event lock: {e}")),
+        }
+    }
+}
+
+/// Append a single event. Returns the path written and assigned seq.
 pub fn append_event(
     target: &Path,
     kind: &str,
     data: Option<Value>,
     ts: Option<&str>,
-) -> Result<PathBuf, String> {
+) -> Result<(PathBuf, i64), String> {
     if kind.is_empty() {
         return Err(format!("kind must be a non-empty string, got {:?}", kind));
     }
@@ -121,8 +158,9 @@ pub fn append_event(
         }
     };
 
-    // Read tail to get last seq, then append atomically enough for our use case
-    // (append_event called at most a few times per run, not per-token).
+    let _lock = acquire_sidecar_lock(&path)?;
+
+    // Lock covers reading last seq and appending so concurrent CLIs do not reuse seqs.
     let tail = read_final_tail(&path);
     let seq = if tail.is_empty() && !path.exists() {
         1
@@ -138,7 +176,8 @@ pub fn append_event(
         "data": data,
     });
     // Python uses separators=(",", ":") — compact, no spaces
-    let line = serde_json::to_string(&record).map_err(|e| e.to_string())?;
+    let mut line = serde_json::to_string(&record).map_err(|e| e.to_string())?;
+    line.push('\n');
     let encoded = line.as_bytes();
     if encoded.len() > MAX_LINE {
         return Err(format!(
@@ -153,9 +192,8 @@ pub fn append_event(
         .open(&path)
         .map_err(|e| e.to_string())?;
     f.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
-    f.write_all(b"\n").map_err(|e| e.to_string())?;
     f.flush().map_err(|e| e.to_string())?;
-    Ok(path)
+    Ok((path, seq))
 }
 
 /// Return events with seq > since, up to limit. Chronological order.
@@ -357,7 +395,7 @@ mod tests {
         let target = tmp.path().join("proj");
         fs::create_dir_all(&target).unwrap();
 
-        let p = append_event(
+        let (p, seq) = append_event(
             &target,
             "run_start",
             Some(json!({"runner_count": 2})),
@@ -368,6 +406,7 @@ mod tests {
             p.file_name().unwrap().to_str().unwrap(),
             g["append_returns_events_jsonl"].as_str().unwrap()
         );
+        assert_eq!(seq, 1);
 
         append_event(
             &target,

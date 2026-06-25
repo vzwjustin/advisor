@@ -35,6 +35,19 @@ fn run_git(cwd: &Path, args: &[&str]) -> Result<Vec<String>, String> {
         Err(e) => return Err(format!("failed to invoke git: {e}")),
     };
 
+    fn drain<R: std::io::Read + Send + 'static>(
+        mut r: R,
+    ) -> std::thread::JoinHandle<std::io::Result<Vec<u8>>> {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            r.read_to_end(&mut buf)?;
+            Ok(buf)
+        })
+    }
+
+    let stdout = child.stdout.take().map(drain);
+    let stderr = child.stderr.take().map(drain);
+
     // Poll for completion up to the timeout, then kill (hang protection).
     let deadline = Instant::now() + Duration::from_secs(GIT_TIMEOUT_SECS);
     loop {
@@ -54,19 +67,35 @@ fn run_git(cwd: &Path, args: &[&str]) -> Result<Vec<String>, String> {
             Err(e) => return Err(format!("failed to invoke git: {e}")),
         }
     }
-    let output = child
-        .wait_with_output()
+    let status = child
+        .wait()
         .map_err(|e| format!("failed to invoke git: {e}"))?;
+    let stdout = stdout
+        .map(|h| {
+            h.join()
+                .unwrap_or_else(|_| Err(std::io::Error::other("stdout reader panicked")))
+        })
+        .transpose()
+        .map_err(|e| format!("failed to invoke git: {e}"))?
+        .unwrap_or_default();
+    let stderr = stderr
+        .map(|h| {
+            h.join()
+                .unwrap_or_else(|_| Err(std::io::Error::other("stderr reader panicked")))
+        })
+        .transpose()
+        .map_err(|e| format!("failed to invoke git: {e}"))?
+        .unwrap_or_default();
 
-    if output.stderr.len() > GIT_MAX_STDERR_BYTES {
+    if stderr.len() > GIT_MAX_STDERR_BYTES {
         return Err(format!(
             "git {} produced more than {} MiB of stderr — refusing to load",
             args.join(" "),
             GIT_MAX_STDERR_BYTES / (1024 * 1024)
         ));
     }
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+    if !status.success() {
+        let stderr = String::from_utf8_lossy(&stderr);
         let stderr = stderr.trim();
         let stderr = if stderr.is_empty() {
             "(no stderr)"
@@ -75,14 +104,14 @@ fn run_git(cwd: &Path, args: &[&str]) -> Result<Vec<String>, String> {
         };
         return Err(format!("git {} failed: {stderr}", args.join(" ")));
     }
-    if output.stdout.len() > GIT_MAX_STDOUT_BYTES {
+    if stdout.len() > GIT_MAX_STDOUT_BYTES {
         return Err(format!(
             "git {} produced more than {} MiB of stdout — refusing to load",
             args.join(" "),
             GIT_MAX_STDOUT_BYTES / (1024 * 1024)
         ));
     }
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = String::from_utf8_lossy(&stdout);
     Ok(stdout
         .lines()
         .filter(|l| !l.trim().is_empty())
