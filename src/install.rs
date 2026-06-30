@@ -203,7 +203,22 @@ fn reject_parent_file(target: &Path) -> Result<(), std::io::Error> {
 }
 
 fn read_text_capped(path: &Path, max_bytes: usize) -> Result<String, std::io::Error> {
-    let data = std::fs::read(path)?;
+    use std::io::Read;
+    let file = std::fs::File::open(path)?;
+
+    if let Ok(meta) = file.metadata() {
+        if meta.len() > max_bytes as u64 {
+            return Err(std::io::Error::other(format!(
+                "file {} exceeds {max_bytes} byte cap — refusing to load",
+                path.display()
+            )));
+        }
+    }
+
+    let mut data = Vec::new();
+    (&file)
+        .take(max_bytes.saturating_add(1) as u64)
+        .read_to_end(&mut data)?;
     if data.len() > max_bytes {
         return Err(std::io::Error::other(format!(
             "file {} exceeds {max_bytes} byte cap — refusing to load",
