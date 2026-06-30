@@ -392,9 +392,7 @@ fn infer_count_extensions(
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;
     };
-    let mut entries: Vec<_> = rd.flatten().collect();
-    entries.sort_by_key(|e| e.file_name());
-    for entry in entries {
+    for entry in rd.flatten() {
         let Ok(ft) = entry.file_type() else {
             continue;
         };
