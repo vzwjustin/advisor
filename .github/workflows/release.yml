@@ -68,7 +68,7 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "Resolved tag $tag (ref $tag_ref)"
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Check out the tag explicitly so the pyproject cross-check
           # below reads the file at the released commit, not at HEAD
@@ -92,7 +92,7 @@ jobs:
     needs: verify
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Same tag everyone else uses. Without this, a
           # workflow_dispatch run would test main's content while
@@ -116,7 +116,7 @@ jobs:
     needs: [verify, test]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.verify.outputs.tag_ref }}
 
