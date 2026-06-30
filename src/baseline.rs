@@ -193,10 +193,10 @@ pub fn read_baseline(path: &Path) -> Vec<BaselineEntry> {
 
 /// `(rule_id, description_hash)` → normalized baseline paths, for abs/rel suffix
 /// aliasing. Mirrors `_baseline_path_index`.
-fn baseline_path_index(baseline: &[BaselineEntry]) -> HashMap<(String, String), Vec<String>> {
-    let mut idx: HashMap<(String, String), Vec<String>> = HashMap::new();
+fn baseline_path_index(baseline: &[BaselineEntry]) -> HashMap<(&str, &str), Vec<String>> {
+    let mut idx: HashMap<(&str, &str), Vec<String>> = HashMap::new();
     for e in baseline {
-        idx.entry((e.rule_id.clone(), e.description_hash.clone()))
+        idx.entry((e.rule_id.as_str(), e.description_hash.as_str()))
             .or_default()
             .push(normalize_identity_path(&e.file_path));
     }
@@ -235,7 +235,7 @@ pub fn filter_against_baseline(
         let key = finding_key(f);
         let empty = Vec::new();
         let candidates = path_idx
-            .get(&(key.1.clone(), key.2.clone()))
+            .get(&(key.1.as_str(), key.2.as_str()))
             .unwrap_or(&empty);
         if baseline_keys.contains(&key) || suffix_alias_match(&key.0, candidates) {
             suppressed.push(f.clone());
@@ -272,7 +272,7 @@ pub fn diff_against_baseline(findings: &[Finding], baseline: &[BaselineEntry]) -
         } else {
             let empty = Vec::new();
             let candidates = path_idx
-                .get(&(key.1.clone(), key.2.clone()))
+                .get(&(key.1.as_str(), key.2.as_str()))
                 .unwrap_or(&empty);
             if suffix_alias_match(&key.0, candidates) {
                 for e in baseline {
