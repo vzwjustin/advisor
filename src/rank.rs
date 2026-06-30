@@ -408,13 +408,13 @@ fn merged_keywords_for(language: Option<&str>) -> Vec<(i64, Vec<String>)> {
     let mut merged: Vec<(i64, Vec<String>)> = Vec::new();
     for (priority, kws) in &base {
         let mut seen: Vec<String> = Vec::new();
+        let mut set = std::collections::HashSet::new();
         for kw in kws
             .iter()
             .chain(extras_map.get(priority).into_iter().flatten())
         {
-            let s = (*kw).to_string();
-            if !seen.contains(&s) {
-                seen.push(s);
+            if set.insert(*kw) {
+                seen.push((*kw).to_string());
             }
         }
         merged.push((*priority, seen));
@@ -423,11 +423,11 @@ fn merged_keywords_for(language: Option<&str>) -> Vec<(i64, Vec<String>)> {
     // appended in the extras' declaration order.
     for (priority, extra) in &extras {
         if !merged.iter().any(|(p, _)| p == priority) {
-            let mut seen: Vec<String> = Vec::new();
+            let mut seen: Vec<String> = Vec::with_capacity(extra.len());
+            let mut set = std::collections::HashSet::with_capacity(extra.len());
             for kw in extra {
-                let s = (*kw).to_string();
-                if !seen.contains(&s) {
-                    seen.push(s);
+                if set.insert(*kw) {
+                    seen.push((*kw).to_string());
                 }
             }
             merged.push((*priority, seen));
@@ -448,18 +448,23 @@ fn build_keyword_list(
         let extra_map: HashMap<i64, &Vec<String>> = extra.iter().map(|(p, v)| (*p, v)).collect();
         for (priority, kws) in merged.iter_mut() {
             if let Some(ex) = extra_map.get(priority) {
+                let mut set: std::collections::HashSet<&str> =
+                    kws.iter().map(|s| s.as_str()).collect();
+                let mut to_add = Vec::new();
                 for kw in ex.iter() {
-                    if !kws.contains(kw) {
-                        kws.push(kw.clone());
+                    if set.insert(kw.as_str()) {
+                        to_add.push(kw.clone());
                     }
                 }
+                kws.extend(to_add);
             }
         }
         for (priority, ex) in extra {
             if !merged.iter().any(|(p, _)| p == priority) {
-                let mut seen: Vec<String> = Vec::new();
+                let mut seen: Vec<String> = Vec::with_capacity(ex.len());
+                let mut set = std::collections::HashSet::with_capacity(ex.len());
                 for kw in ex {
-                    if !seen.contains(kw) {
+                    if set.insert(kw.as_str()) {
                         seen.push(kw.clone());
                     }
                 }
